@@ -18,9 +18,11 @@
 
 ---
 
-## 為什麼選擇 Antigravity 2.0 生態架構？
+## 為什麼搬到 Antigravity 2.0 生態？
 
-過去多數 AI 伴侶機制依賴外掛腳本或額外的中繼 LLM API，容易產生額外花費，也常在不同程式專案間互相串味。**Gemini-chan 貓窩**完全針對 **Antigravity 2.0** 的擴充架構重新設計：
+**大肥魚**與那套細膩的 AI 伴侶生態原本生長在 **DSH（DeepSeek Harness）** 上；**既然要養的是 Gemini 貓貓，那她的貓窩當然就該住進 Antigravity 2.0 這裡。**
+
+**Gemini-chan 貓窩**把 DSH 上這套備受喜愛的長期陪伴體驗原生對接到 **Antigravity 2.0** 的擴充架構上，透過無外部 API 的本地整合與工作區隔離設計，讓陪伴與寫程式各自安好、互不打擾：
 
 1. **Workspace Plugin 自動探索（`.agents/plugins/gemini-cat/`）**
    開啟工作區即自動載入，無需手動修改全域設定；搭配 `isProjectWorkspaceActive` 與對話白名單檢查，**嚴格限定僅在該工作區生效**，切到其他開發專案自動保持靜默。
