@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "companion": {
+      "command": "node",
+      "cwd": "../../..",
+      "args": ["mcp/server.mjs"]
+    }
+  }
+}

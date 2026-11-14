@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Gemini-chan 貓窩</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <!-- Top Identity & Connection Bar -->
+    <header class="top-bar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+          </svg>
+        </span>
+        <h1>Gemini-chan 貓窩</h1>
+      </div>
+      <div class="top-badges">
+        <span id="hdr-persona-pill" class="chip chip-quiet" title="目前專案生效人設">人設待選</span>
+        <span id="scope-pill" class="scope-pill active">就緒</span>
+      </div>
+    </header>
+
+    <!-- Strict Project Boundary Warning -->
+    <div id="standby-banner" class="standby-banner hidden" role="status" aria-live="polite">
+      <span class="standby-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </span>
+      <p>目前工作區並非 <code>gemini_cat</code> 專案。貓窩與記憶／人設保持專案隔離待機，不會對外部工作區送出對話或變更。</p>
+    </div>
+
+    <!-- Hero: Studio Cat Nest Stage -->
+    <section id="nest-stage" class="stage-shell" aria-label="Gemini-chan 貓窩互動舞台">
+      <canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+      <!-- Stage Top Row: Live Speech Capsule + Primary Mood Figure -->
+      <div class="stage-head">
+        <div class="speech-capsule" id="speech-bubble" aria-live="polite">
+          <span class="activity-dot" id="activity-badge" aria-hidden="true"></span>
+          <span id="activity-text" class="activity-text">在貓窩裡安靜等你回來…</span>
+        </div>
+        <div class="mood-hero-badge" title="目前大心情分數（由對話互動自然累積與衰減）">
+          <span id="hdr-emoji" class="sr-only" aria-hidden="true">✨</span>
+          <strong id="val-mood" class="hero-num">70</strong>
+          <span id="hdr-mood-text" class="hero-tier">開心 70</span>
+        </div>
+      </div>
+
+      <!-- Centered Sprite Pedestal -->
+      <div class="sprite-stage-area">
+        <div class="character-wrap" id="character-wrap">
+          <canvas id="sprite-canvas" width="210" height="210" aria-label="Gemini-chan Q版立繪"></canvas>
+          <div id="particle-layer" aria-hidden="true"></div>
+        </div>
+      </div>
+
+      <!-- Compact Vitals Readout Strip -->
+      <div class="vitals-strip" aria-label="貓窩日常狀態">
+        <div class="vital-cell">
+          <div class="vital-meta">
+            <span>心情</span>
+            <strong id="val-mood-mirror" class="tabular">70</strong>
+          </div>
+          <div class="vital-track"><div id="bar-mood" class="vital-fill fill-mood"></div></div>
+        </div>
+        <div class="vital-cell">
+          <div class="vital-meta">
+            <span>飽食</span>
+            <strong id="val-satiety" class="tabular">76</strong>
+          </div>
+          <div class="vital-track"><div id="bar-satiety" class="vital-fill fill-satiety"></div></div>
+        </div>
+        <div class="vital-cell">
+          <div class="vital-meta">
+            <span>精力</span>
+            <strong id="val-energy" class="tabular">84</strong>
+          </div>
+          <div class="vital-track"><div id="bar-energy" class="vital-fill fill-energy"></div></div>
+        </div>
+        <div class="vital-bond">
+          <span>羈絆</span>
+          <strong id="val-bond" class="tabular">Lv.1</strong>
+        </div>
+      </div>
+
+      <!-- Unified 5-Action Care Dock (Single-stroke SVG icons, zero emoji clutter) -->
+      <div class="care-dock" role="group" aria-label="日常照護互動">
+        <button type="button" class="care-btn" data-action="pet">
+          <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.9-2.5L3.3 16a2 2 0 0 1 2.8-2.8L8 15"/></svg>
+          <span class="btn-label">摸頭</span>
+          <span class="care-badge" data-badge="pet">0/6</span>
+        </button>
+        <button type="button" class="care-btn" data-action="feed">
+          <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 12c.9-3.5 4.8-6 9.5-6 3 0 5 1.5 6 3-1 1.5-3 3-6 3-4.7 0-8.6-2.5-9.5-6z" opacity=".01"/><path d="M2 12c3.5-4 8.5-5 13-2.5L20 7v10l-5-2.5C10.5 17 5.5 16 2 12z"/><circle cx="7" cy="11.5" r=".8" fill="currentColor"/></svg>
+          <span class="btn-label">小魚乾</span>
+          <span class="care-badge" data-badge="feed">0/4</span>
+        </button>
+        <button type="button" class="care-btn" data-action="play">
+          <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20L15 9"/><path d="M15 9l4-4"/><path d="M17 4l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
+          <span class="btn-label">逗貓棒</span>
+          <span class="care-badge" data-badge="play">0/5</span>
+        </button>
+        <button type="button" class="care-btn" data-action="comfort">
+          <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12.572l-7.5 7.428-7.5-7.428A5 5 0 1 1 12 6.006a5 5 0 1 1 7.5 6.572z"/></svg>
+          <span class="btn-label">貼貼</span>
+          <span class="care-badge" data-badge="comfort">0/5</span>
+        </button>
+        <button type="button" class="care-btn" id="btn-nap" data-action="nap">
+          <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
+          <span class="btn-label">打盹</span>
+          <span class="care-badge" data-badge="nap">0/4</span>
+        </button>
+      </div>
+
+      <!-- Whisper Note & Chat Sync Bar -->
+      <div class="whisper-block">
+        <div class="whisper-row">
+          <label for="whisper-input" class="sr-only">傳遞給 Gemini-chan 的小紙條</label>
+          <input id="whisper-input" type="text" maxlength="200" placeholder="遞張小紙條給貓貓（可先暫存或直接推進對話）" />
+          <button id="btn-whisper-queue" type="button" class="btn-secondary">暫存</button>
+          <button id="btn-whisper-send" type="button" class="btn-primary">傳對話</button>
+        </div>
+        <div class="sync-strip">
+          <label class="check-row" for="nest-sync-chat" title="開啟後，點摸頭/餵食等互動會直接把互動事件推進當前 gemini_cat 對話">
+            <input type="checkbox" id="nest-sync-chat" />
+            <span>照護互動即時推入對話</span>
+          </label>
+          <div class="sync-pending">
+            <span id="nest-pending-text" class="muted-meta">待帶入：0 則</span>
+            <button id="btn-nest-clear" type="button" class="link-btn hidden">清空</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Single-Row Accessible Module Tabs -->
+    <nav class="tab-bar" role="tablist" aria-label="伴侶模組設定">
+      <button type="button" role="tab" id="tabbtn-mood" class="tab-btn active" data-tab="mood" aria-selected="true">心情</button>
+      <button type="button" role="tab" id="tabbtn-memory" class="tab-btn" data-tab="memory" aria-selected="false" tabindex="-1">記憶</button>
+      <button type="button" role="tab" id="tabbtn-xingxi" class="tab-btn" data-tab="xingxi" aria-selected="false" tabindex="-1">星汐</button>
+      <button type="button" role="tab" id="tabbtn-speakup" class="tab-btn" data-tab="speakup" aria-selected="false" tabindex="-1">搭話</button>
+      <button type="button" role="tab" id="tabbtn-persona" class="tab-btn" data-tab="persona" aria-selected="false" tabindex="-1">人設</button>
+    </nav>
+
+    <main class="panels-wrap">
+      <!-- ==================== TAB 1: MOOD ==================== -->
+      <section id="tab-mood" role="tabpanel" aria-labelledby="tabbtn-mood" class="tab-panel">
+        <div class="sec-head">
+          <div>
+            <h2>此刻情緒與 7 維感知</h2>
+            <p class="sec-sub">隨對話自然變動，不依賴外部 API 裁判。</p>
+          </div>
+          <span id="mood-engine-badge" class="chip">對話內 AI ＋ 本地兜底</span>
+        </div>
+
+        <div id="mood-dims-grid" class="dims-grid" aria-label="7維情緒數值"></div>
+
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>下輪對話語氣注入預覽</h3>
+            <div class="inline-meta">
+              <span id="mood-inject-state" class="chip">待命</span>
+              <span id="mood-quota-text" class="muted-meta tabular">今日 0 / 6</span>
+            </div>
+          </div>
+          <pre id="mood-inject-preview" class="preview-box"></pre>
+        </div>
+
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>最近情緒時間線</h3>
+            <div class="btn-group-compact">
+              <button id="btn-mood-nudge-up" type="button" class="btn-mini" title="微幅調高心情 (+3)">+3</button>
+              <button id="btn-mood-nudge-down" type="button" class="btn-mini" title="微幅調低心情 (-3)">-3</button>
+              <button id="btn-mood-reset" type="button" class="btn-mini">歸零回穩</button>
+            </div>
+          </div>
+          <div id="mood-timeline" class="item-list scroll-list"></div>
+        </div>
+
+        <details class="drawer" id="drawer-mood-cfg">
+          <summary>稱呼、裁判開關與數值參數（原 <code>dsh-feiyu-mood</code> 完整設定）</summary>
+          <div class="drawer-body">
+            <div id="mood-dirty-bar" class="dirty-bar hidden" role="status">有尚未儲存的設定修改</div>
+
+            <div class="sub-group">
+              <h4>開關與裁判模式</h4>
+              <label class="check-row" for="cfg-mood-enabled">
+                <input type="checkbox" id="cfg-mood-enabled" />
+                <span>啟用心情引擎</span>
+              </label>
+              <label class="check-row" for="cfg-mood-autoJudge">
+                <input type="checkbox" id="cfg-mood-autoJudge" />
+                <span>每輪自動判斷心情（關閉後不再更新或扣點）</span>
+              </label>
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="cfg-mood-judgeMode">判斷模式</label>
+                  <select id="cfg-mood-judgeMode">
+                    <option value="hybrid">對話內 AI ＋ 輪末本地兜底</option>
+                    <option value="in_chat_only">僅對話內 AI 判斷</option>
+                    <option value="local">純本地語意規則</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-injectMode">語氣注入方式</label>
+                  <select id="cfg-mood-injectMode">
+                    <option value="event">心情底色 ＋ 發生事件（推薦）</option>
+                    <option value="label">只說此刻心情底色</option>
+                    <option value="off">僅面板記錄、不注入對話</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="sub-group">
+              <h4>雙向稱呼與別名辨識</h4>
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="cfg-mood-ownerName">對你的稱呼（ownerName）</label>
+                  <input id="cfg-mood-ownerName" type="text" maxlength="24" placeholder="主人" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-selfName">貓貓名字（selfName）</label>
+                  <input id="cfg-mood-selfName" type="text" maxlength="24" placeholder="Gemini-chan" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-selfPronoun">理由自稱（selfPronoun）</label>
+                  <input id="cfg-mood-selfPronoun" type="text" maxlength="8" placeholder="我" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-selfAliases">她平時怎麼叫你（逗號分隔）</label>
+                  <input id="cfg-mood-selfAliases" type="text" maxlength="120" placeholder="小貓,Gemini-chan" />
+                </div>
+              </div>
+              <div class="field">
+                <label for="cfg-mood-ownerAliases">主人別名／其他常用暱稱（逗號分隔）</label>
+                <input id="cfg-mood-ownerAliases" type="text" maxlength="120" placeholder="主人,你" />
+              </div>
+            </div>
+
+            <div class="sub-group">
+              <h4>心情曲線與顯著門檻</h4>
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="cfg-mood-base">基線心情 (30–100)</label>
+                  <input id="cfg-mood-base" type="number" min="30" max="100" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-floor">心情下限 (0–100)</label>
+                  <input id="cfg-mood-floor" type="number" min="0" max="100" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-halfHours">情緒平復半衰期 (小時)</label>
+                  <input id="cfg-mood-halfHours" type="number" min="1" max="168" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-conf">注入可信度門檻 (0–100)</label>
+                  <input id="cfg-mood-conf" type="number" min="0" max="100" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-sigMood">顯著大心情變化 (1–30)</label>
+                  <input id="cfg-mood-sigMood" type="number" min="1" max="30" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-sigDim">顯著單維情緒變化 (1–100)</label>
+                  <input id="cfg-mood-sigDim" type="number" min="1" max="100" />
+                </div>
+                <div class="field">
+                  <label for="cfg-mood-perDay">每日最多主動提醒次數</label>
+                  <input id="cfg-mood-perDay" type="number" min="0" max="50" />
+                </div>
+              </div>
+            </div>
+
+            <div class="action-row-end">
+              <span id="mood-save-msg" class="muted-meta" role="status"></span>
+              <button id="btn-mood-save" type="button" class="btn-primary">儲存心情設定</button>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <!-- ==================== TAB 2: MEMORY ==================== -->
+      <section id="tab-memory" role="tabpanel" aria-labelledby="tabbtn-memory" class="tab-panel" hidden>
+        <div class="sec-head">
+          <div>
+            <h2>長期記憶庫</h2>
+            <p class="sec-sub">依艾賓浩斯鮮活度、稀有度證據與事實鍵收斂檢索。</p>
+          </div>
+          <span id="mem-counts-badge" class="chip tabular">0 活躍 / 0 收起</span>
+        </div>
+
+        <!-- Quick Remember Form -->
+        <div class="surface-block">
+          <h3>新增長期記憶</h3>
+          <div class="field">
+            <label for="mem-add-text" class="sr-only">記憶內容</label>
+            <textarea id="mem-add-text" rows="2" placeholder="寫下值得長期記住的事實、習慣或約定（例如：主人每天早上只喝無糖熱美式）"></textarea>
+          </div>
+          <div class="field-grid-3">
+            <div class="field">
+              <label for="mem-add-key">事實鍵（選填）</label>
+              <input id="mem-add-key" type="text" placeholder="主人.咖啡" />
+            </div>
+            <div class="field">
+              <label for="mem-add-imp">重要度</label>
+              <select id="mem-add-imp">
+                <option value="0.3">0.3 一般</option>
+                <option value="0.5" selected>0.5 常用</option>
+                <option value="0.75">0.75 重要</option>
+                <option value="0.9">0.9 核心</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="mem-add-cat">類型</label>
+              <select id="mem-add-cat">
+                <option value="event">生活事件</option>
+                <option value="stable_profile">常駐檔案</option>
+              </select>
+            </div>
+          </div>
+          <div class="action-row-end">
+            <button id="btn-mem-add" type="button" class="btn-primary">寫入記憶</button>
+          </div>
+        </div>
+
+        <!-- Recall Simulator -->
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>測試召回命中</h3>
+            <span id="mem-ruler-badge" class="muted-meta tabular">說話尺樣本 0</span>
+          </div>
+          <div class="inline-search">
+            <label for="mem-test-query" class="sr-only">測試問句</label>
+            <input id="mem-test-query" type="text" placeholder="輸入測試問句（例如：我早上有什麼飲食偏好？）" />
+            <button id="btn-mem-test" type="button" class="btn-secondary">模擬召回</button>
+          </div>
+          <div id="mem-test-result" class="item-list"></div>
+        </div>
+
+        <!-- Memory Browser (Search, Edit, Reinforce, Supersede/Restore, Delete) -->
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>記憶條目檢索</h3>
+            <div class="btn-group-compact">
+              <button id="btn-mem-export" type="button" class="btn-mini">匯出 JSON</button>
+              <label class="btn-mini file-btn" for="mem-import-file">匯入文字
+                <input id="mem-import-file" type="file" accept=".md,.txt,.json" class="sr-only" />
+              </label>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <label for="mem-search" class="sr-only">搜尋記憶</label>
+            <input id="mem-search" type="search" placeholder="搜尋正文或事實鍵…" />
+            <label class="check-row check-inline" for="mem-show-archived">
+              <input type="checkbox" id="mem-show-archived" />
+              <span>含已收起</span>
+            </label>
+          </div>
+          <div id="mem-list" class="item-list scroll-list-tall"></div>
+        </div>
+
+        <!-- Recent Recall Traces + Policy Drawer -->
+        <details class="drawer">
+          <summary>最近召回追溯紀錄（Traces）</summary>
+          <div class="drawer-body">
+            <div id="mem-traces-list" class="item-list scroll-list"></div>
+          </div>
+        </details>
+
+        <details class="drawer" id="drawer-mem-policy">
+          <summary>評分權重、人稱與遺忘策略（原 <code>dsh-fish-memory</code> 完整參數）</summary>
+          <div class="drawer-body">
+            <label class="check-row" for="pol-enabled">
+              <input type="checkbox" id="pol-enabled" />
+              <span>啟用長期記憶自動記憶與召回</span>
+            </label>
+
+            <div class="sub-group">
+              <h4>人稱代詞設定</h4>
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="pol-ownerPronoun">稱呼對方人稱（ownerPronoun）</label>
+                  <input id="pol-ownerPronoun" type="text" maxlength="12" placeholder="ta / 她 / 他" />
+                </div>
+                <div class="field">
+                  <label for="pol-selfPronoun">自稱代詞（selfPronoun）</label>
+                  <input id="pol-selfPronoun" type="text" maxlength="12" placeholder="我" />
+                </div>
+              </div>
+            </div>
+
+            <div class="sub-group">
+              <div class="block-head">
+                <h4>綜合排序權重（合計自動平衡為 100%）</h4>
+                <span id="pol-w-sum" class="chip tabular">100%</span>
+              </div>
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="pol-w-baseline">基礎文字契合 (%)</label>
+                  <input id="pol-w-baseline" type="number" step="1" min="0" max="100" />
+                </div>
+                <div class="field">
+                  <label for="pol-w-activation">時間鮮活度 (%)</label>
+                  <input id="pol-w-activation" type="number" step="1" min="0" max="100" />
+                </div>
+                <div class="field">
+                  <label for="pol-w-importance">主觀重要度 (%)</label>
+                  <input id="pol-w-importance" type="number" step="1" min="0" max="100" />
+                </div>
+                <div class="field">
+                  <label for="pol-w-emotion">情緒印記 (%)</label>
+                  <input id="pol-w-emotion" type="number" step="1" min="0" max="100" />
+                </div>
+              </div>
+            </div>
+
+            <div class="sub-group">
+              <h4>檢索門檻、遺忘半衰期與額度</h4>
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="pol-threshold">關聯門檻 C (0.05–0.95)</label>
+                  <input id="pol-threshold" type="number" step="0.05" min="0.05" max="0.95" />
+                </div>
+                <div class="field">
+                  <label for="pol-rarityK">詞頻平抑 K (0.1–5)</label>
+                  <input id="pol-rarityK" type="number" step="0.1" min="0.1" max="5" />
+                </div>
+                <div class="field">
+                  <label for="pol-maxItems">單輪最多召回條數</label>
+                  <input id="pol-maxItems" type="number" min="1" max="12" />
+                </div>
+                <div class="field">
+                  <label for="pol-maxChars">單輪注入字數上限</label>
+                  <input id="pol-maxChars" type="number" min="150" max="4000" step="50" />
+                </div>
+                <div class="field">
+                  <label for="pol-queryGate">問句資訊量門 (0–3)</label>
+                  <input id="pol-queryGate" type="number" step="0.1" min="0" max="3" />
+                </div>
+                <div class="field">
+                  <label for="pol-unknownAct">未知日期預設鮮活 (0–1)</label>
+                  <input id="pol-unknownAct" type="number" step="0.05" min="0" max="1" />
+                </div>
+                <div class="field">
+                  <label for="pol-halfLife">基礎鮮活半衰期 (天)</label>
+                  <input id="pol-halfLife" type="number" min="3" max="365" />
+                </div>
+                <div class="field">
+                  <label for="pol-emotionHalfLife">情緒衰減半衰期 (天)</label>
+                  <input id="pol-emotionHalfLife" type="number" min="1" max="90" />
+                </div>
+                <div class="field">
+                  <label for="pol-dailyQuota">每日寫入條數配額</label>
+                  <input id="pol-dailyQuota" type="number" min="1" max="100" />
+                </div>
+              </div>
+            </div>
+
+            <div class="action-row-between">
+              <button id="btn-pol-reset" type="button" class="btn-secondary">恢復預設參數</button>
+              <div class="action-row-end">
+                <span id="pol-save-msg" class="muted-meta" role="status"></span>
+                <button id="btn-pol-save" type="button" class="btn-primary">儲存策略</button>
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <!-- ==================== TAB 3: XINGXI ==================== -->
+      <section id="tab-xingxi" role="tabpanel" aria-labelledby="tabbtn-xingxi" class="tab-panel" hidden>
+        <div class="sec-head">
+          <div>
+            <h2>星汐記憶卡與日記星圖</h2>
+            <p class="sec-sub">開新對話時自動注入八章核心與近 3 天日記，永遠不遺忘。</p>
+          </div>
+          <span id="xingxi-stats-badge" class="chip tabular">0 顆星</span>
+        </div>
+
+        <!-- Constellation Canvas + DSH Controls -->
+        <div class="starmap-frame">
+          <div class="starmap-toolbar">
+            <div class="map-search-wrap">
+              <label for="xx-map-search" class="sr-only">搜尋星圖節點</label>
+              <input id="xx-map-search" type="search" placeholder="篩選星點關鍵詞…" />
+              <span id="xx-map-hits" class="muted-meta tabular"></span>
+            </div>
+            <div class="btn-group-compact">
+              <button id="xx-toggle-links" type="button" class="btn-mini active" aria-pressed="true">連線開</button>
+              <button id="xx-zoom-out" type="button" class="btn-mini" aria-label="縮小星圖">−</button>
+              <button id="xx-zoom-in" type="button" class="btn-mini" aria-label="放大星圖">+</button>
+              <button id="xx-zoom-reset" type="button" class="btn-mini">重置</button>
+            </div>
+          </div>
+          <canvas id="starmap-canvas" width="520" height="260" aria-label="星汐記憶星座圖（支援滾輪縮放、拖曳平移與點擊星點）"></canvas>
+          <div class="starmap-legend" aria-hidden="true">
+            <span class="leg"><i style="background:#f59e0b"></i>日記</span>
+            <span class="leg"><i style="background:#0ea5e9"></i>八章記憶卡</span>
+            <span class="muted-meta">可拖曳平移 · 滾輪縮放 · 點星點看全文</span>
+          </div>
+          <div id="star-detail" class="star-detail">點擊上方任一星點，即可閱讀該章條目或當日日記正文。</div>
+        </div>
+
+        <!-- Manual Write / Append -->
+        <div class="surface-block">
+          <h3>新增至記憶卡或當日日記</h3>
+          <div class="field-grid-split">
+            <div class="field">
+              <label for="xingxi-chapter">目標位置</label>
+              <select id="xingxi-chapter">
+                <option value="diary">今日日記（YYYY-MM-DD.md）</option>
+                <option value="1">一｜我是誰</option>
+                <option value="2">二｜我是怎麼說話的</option>
+                <option value="3">三｜對方是誰</option>
+                <option value="4">四｜我們怎麼走到今天的</option>
+                <option value="5" selected>五｜我們的約定</option>
+                <option value="6">六｜難忘的時刻</option>
+                <option value="7">七｜怎麼跟對方相處</option>
+                <option value="8">八｜我們一起做的那些東西</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="xingxi-entry" class="sr-only">條目內容</label>
+            <textarea id="xingxi-entry" rows="2" placeholder="輸入想長期保存的約定、習慣或今日互動記錄…"></textarea>
+          </div>
+          <div class="action-row-end">
+            <button id="btn-xingxi-save" type="button" class="btn-primary">寫入星汐</button>
+          </div>
+        </div>
+
+        <!-- Pickup Schedule & Manual Execution -->
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>每日自動拾星與日記整理</h3>
+            <span id="xingxi-sched-badge" class="chip">每日 23:30</span>
+          </div>
+          <p id="xingxi-sched-summary" class="muted-meta">正在讀取今日切存狀態…</p>
+          <label class="check-row" for="xingxi-sched-enabled">
+            <input type="checkbox" id="xingxi-sched-enabled" />
+            <span>啟用每日定時自動拾星</span>
+          </label>
+          <div class="field-grid-2">
+            <div class="field">
+              <label for="xingxi-sched-time">執行時間</label>
+              <input id="xingxi-sched-time" type="time" value="23:30" />
+            </div>
+            <div class="field">
+              <label for="xingxi-sched-mode">整理範圍</label>
+              <select id="xingxi-sched-mode">
+                <option value="both">記憶卡 ＋ 日記</option>
+                <option value="card_only">僅記憶卡</option>
+                <option value="diary_only">僅寫日記</option>
+              </select>
+            </div>
+          </div>
+          <div class="action-row-between">
+            <button id="btn-xingxi-sched-save" type="button" class="btn-secondary">儲存定時設定</button>
+            <button id="btn-xingxi-pickup" type="button" class="btn-primary">立即手動拾星</button>
+          </div>
+          <div id="xingxi-sched-logs" class="item-list compact-top"></div>
+        </div>
+
+        <!-- Diary Browser & Card Archive -->
+        <details class="drawer" open>
+          <summary>星曆日記瀏覽（點擊條目可展開全文）</summary>
+          <div class="drawer-body">
+            <div id="xingxi-diary-list" class="item-list scroll-list"></div>
+          </div>
+        </details>
+
+        <details class="drawer">
+          <summary>八章記憶卡全文檢視（<code>記憶卡.md</code>）</summary>
+          <div class="drawer-body">
+            <pre id="xingxi-card-raw" class="preview-box preview-tall"></pre>
+          </div>
+        </details>
+
+        <details class="drawer">
+          <summary>原料紀錄與安全備份還原 <span id="xingxi-backup-badge" class="chip">0 份</span></summary>
+          <div class="drawer-body">
+            <div class="field-row-inline">
+              <label for="xx-raw-select">查看切存原始對話</label>
+              <select id="xx-raw-select"></select>
+              <button id="btn-xx-raw-view" type="button" class="btn-mini">讀取</button>
+            </div>
+            <pre id="xx-raw-viewer" class="preview-box hidden"></pre>
+            <h4>備份時間點（最多保留 20 份）</h4>
+            <div id="xingxi-backups-list" class="item-list scroll-list"></div>
+          </div>
+        </details>
+      </section>
+
+      <!-- ==================== TAB 4: SPEAK-UP ==================== -->
+      <section id="tab-speakup" role="tabpanel" aria-labelledby="tabbtn-speakup" class="tab-panel" hidden>
+        <div class="sec-head">
+          <div>
+            <h2>主動搭話排程與峰谷時段</h2>
+            <p class="sec-sub">定時擲骰決定是否主動冒泡，安全鎖定僅限 <code>gemini_cat</code> 對話。</p>
+          </div>
+          <span id="sp-line-badge" class="chip tabular">命中線 20%</span>
+        </div>
+
+        <div id="sp-dirty-bar" class="dirty-bar hidden" role="status">
+          上有尚未儲存的設定修改（勾選目標對話外，其餘數字與時段改完請按「儲存搭話設定」）
+        </div>
+
+        <div class="surface-block">
+          <p id="sp-preview-text" class="formula-line">計算中…</p>
+          <div class="action-row-between compact-top">
+            <div class="btn-group-compact">
+              <button id="btn-sp-dry" type="button" class="btn-secondary">演練一次</button>
+              <button id="btn-sp-reset-streak" type="button" class="btn-mini">歸零加成</button>
+            </div>
+            <button id="btn-sp-send" type="button" class="btn-primary">立刻真實搭話</button>
+          </div>
+        </div>
+
+        <!-- Master & Routing (DSH followActive + targetConversations) -->
+        <div class="surface-block">
+          <h3>開關與目標對話</h3>
+          <div class="check-stack">
+            <label class="check-row" for="sp-enabled">
+              <input type="checkbox" id="sp-enabled" />
+              <span>啟用定時主動搭話排程</span>
+            </label>
+            <label class="check-row" for="sp-dryRun">
+              <input type="checkbox" id="sp-dryRun" />
+              <span>試運行模式（推薦新手開啟：擲中只記日誌，不實際發送）</span>
+            </label>
+            <label class="check-row" for="sp-followActive">
+              <input type="checkbox" id="sp-followActive" />
+              <span>跟隨最近活躍對話（自動挑選當前最新的 <code>gemini_cat</code> 對話）</span>
+            </label>
+          </div>
+
+          <div id="sp-targets-wrap" class="targets-wrap hidden">
+            <h4>指定目標對話（已取消跟隨模式時生效）</h4>
+            <div id="sp-targets-list" class="item-list compact-top"></div>
+            <div class="field compact-top">
+              <label for="sp-manual-targets">手動指定對話 ID（逗號分隔，僅限已登記專案對話）</label>
+              <input id="sp-manual-targets" type="text" placeholder="conv-id-1, conv-id-2" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Peak/Valley & Trigger Config -->
+        <div class="surface-block">
+          <h3>自訂峰谷分時與命中線</h3>
+          <label class="check-row" for="sp-usePeakValley">
+            <input type="checkbox" id="sp-usePeakValley" />
+            <span>啟用峰谷分時差異命中率（取消勾選則全天統一使用谷時數值）</span>
+          </label>
+          <div class="field">
+            <label>峰時星期（忙碌／少打擾）</label>
+            <div id="sp-peakDays" class="day-pills" role="group" aria-label="峰時星期">
+              <label class="day-pill"><input type="checkbox" data-day="1" /><span>一</span></label>
+              <label class="day-pill"><input type="checkbox" data-day="2" /><span>二</span></label>
+              <label class="day-pill"><input type="checkbox" data-day="3" /><span>三</span></label>
+              <label class="day-pill"><input type="checkbox" data-day="4" /><span>四</span></label>
+              <label class="day-pill"><input type="checkbox" data-day="5" /><span>五</span></label>
+              <label class="day-pill"><input type="checkbox" data-day="6" /><span>六</span></label>
+              <label class="day-pill"><input type="checkbox" data-day="0" /><span>日</span></label>
+            </div>
+          </div>
+          <div class="field">
+            <label for="sp-peakWindows">峰時時間區段（24 小時制，逗號分隔，支援跨午夜）</label>
+            <input id="sp-peakWindows" type="text" placeholder="09:00-12:00, 14:00-18:00" />
+          </div>
+          <div class="field-grid-3">
+            <div class="field">
+              <label for="sp-peak">峰時命中 (%)</label>
+              <input id="sp-peak" type="number" min="0" max="100" />
+            </div>
+            <div class="field">
+              <label for="sp-valley">谷時命中 (%)</label>
+              <input id="sp-valley" type="number" min="0" max="100" />
+            </div>
+            <div class="field">
+              <label for="sp-timezone">計算時區 (選填)</label>
+              <input id="sp-timezone" type="text" placeholder="Asia/Taipei" />
+            </div>
+          </div>
+        </div>
+
+        <details class="drawer" id="drawer-sp-adv">
+          <summary>擲骰間隔、時機因子、安靜時段與內心念頭文案（原 <code>dsh-speak-up</code> 完整參數）</summary>
+          <div class="drawer-body">
+            <div class="field-grid-2">
+              <div class="field">
+                <label for="sp-interval">擲骰間隔 (分鐘)</label>
+                <input id="sp-interval" type="number" min="1" max="1440" />
+              </div>
+              <div class="field">
+                <label for="sp-cooldown">搭話後冷卻 (分鐘)</label>
+                <input id="sp-cooldown" type="number" min="0" max="1440" />
+              </div>
+              <div class="field">
+                <label for="sp-bonus">連沒中加成 (%/次)</label>
+                <input id="sp-bonus" type="number" min="0" max="100" />
+              </div>
+              <div class="field">
+                <label for="sp-cap">連沒中加成上限 (%)</label>
+                <input id="sp-cap" type="number" min="0" max="100" />
+              </div>
+              <div class="field">
+                <label for="sp-qStart">安靜時段起 (點 0–23)</label>
+                <input id="sp-qStart" type="number" min="0" max="23" />
+              </div>
+              <div class="field">
+                <label for="sp-qEnd">安靜時段止 (點 0–23)</label>
+                <input id="sp-qEnd" type="number" min="0" max="23" />
+              </div>
+              <div class="field">
+                <label for="sp-nearMin">近：剛聊完門檻 (分)</label>
+                <input id="sp-nearMin" type="number" min="0" max="100000" />
+              </div>
+              <div class="field">
+                <label for="sp-nearFactor">近：降權因子 (×)</label>
+                <input id="sp-nearFactor" type="number" step="0.05" min="0" max="100" />
+              </div>
+              <div class="field">
+                <label for="sp-farMin">遠：冷卻久門檻 (分)</label>
+                <input id="sp-farMin" type="number" min="0" max="100000" />
+              </div>
+              <div class="field">
+                <label for="sp-farFactor">遠：加權因子 (×)</label>
+                <input id="sp-farFactor" type="number" step="0.1" min="0" max="100" />
+              </div>
+            </div>
+            <p id="sp-quiet-warn" class="warn-line hidden">注意：起止小時填成相同數字時，會關閉安靜時段保護，全天皆可能擲骰。</p>
+            <div class="field compact-top">
+              <label for="sp-prompt">觸發時注入給她的內心念頭</label>
+              <textarea id="sp-prompt" rows="2"></textarea>
+            </div>
+          </div>
+        </details>
+
+        <div class="action-row-end">
+          <span id="sp-save-msg" class="muted-meta" role="status"></span>
+          <button id="btn-sp-save" type="button" class="btn-primary">儲存搭話設定</button>
+        </div>
+
+        <div class="surface-block">
+          <h3>擲骰與排程紀錄</h3>
+          <div id="sp-logs" class="item-list scroll-list"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 5: PERSONA ==================== -->
+      <section id="tab-persona" role="tabpanel" aria-labelledby="tabbtn-persona" class="tab-panel" hidden>
+        <div class="sec-head">
+          <div>
+            <h2>專案限定人設庫</h2>
+            <p id="per-scope-notice" class="sec-sub">僅在 gemini_cat 專案內生效，決不外溢至任何其他工作區。</p>
+          </div>
+          <span id="per-source-badge" class="chip">讀取中</span>
+        </div>
+
+        <div class="surface-block">
+          <div class="check-stack">
+            <label class="check-row" for="per-project-enabled">
+              <input type="checkbox" id="per-project-enabled" />
+              <span>在本專案（<code>gemini_cat</code>）啟用人設系統</span>
+            </label>
+            <label class="check-row" for="per-session-disabled">
+              <input type="checkbox" id="per-session-disabled" />
+              <span>僅針對目前這個對話暫停人設（純開發除錯時使用）</span>
+            </label>
+          </div>
+
+          <div class="field-grid-2 compact-top">
+            <div class="field">
+              <label for="per-select-project">本專案共用人設（未單獨覆寫時預設）</label>
+              <select id="per-select-project"></select>
+            </div>
+            <div class="field">
+              <label for="per-select-session">僅此對話覆寫（覆蓋本專案設定）</label>
+              <select id="per-select-session"></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>人設庫（檢視／切換／匯出）</h3>
+            <label class="btn-mini file-btn" for="per-import-file">從 .md / .txt 匯入
+              <input id="per-import-file" type="file" accept=".md,.txt" class="sr-only" />
+            </label>
+          </div>
+          <div id="per-catalog" class="item-list"></div>
+        </div>
+
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>新增或編修人設</h3>
+            <span id="per-edit-badge" class="chip hidden">編輯現有人設</span>
+          </div>
+          <div class="field">
+            <label for="per-new-name">人設名稱</label>
+            <input id="per-new-name" type="text" maxlength="60" placeholder="例如：Gemini-chan（貓娘陪伴版）" />
+          </div>
+          <div class="field">
+            <label for="per-new-text">完整系統人設提示詞</label>
+            <textarea id="per-new-text" rows="6" placeholder="輸入角色設定、語氣禁忌與說話範例…"></textarea>
+          </div>
+          <div class="action-row-end">
+            <button id="btn-per-cancel-edit" type="button" class="btn-secondary hidden">取消編輯</button>
+            <button id="btn-per-create" type="button" class="btn-primary">新增並套用到本專案</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

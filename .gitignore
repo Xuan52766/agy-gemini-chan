@@ -1,0 +1,14 @@
+# Personal & runtime companion data (memories, mood states, imported personas, diaries, session logs)
+data/*
+!data/dict/
+
+# Dependencies, logs & temporary atomic-write files
+node_modules/
+*.log
+*.tmp
+*.tmp-*
+
+# Operating system files
+Thumbs.db
+Desktop.ini
+.DS_Store
