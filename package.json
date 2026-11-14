@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
-  "description": "Project-scoped Antigravity companion system derived from Yuuyuko-uu's DSH plugins (dsh-fish-memory, dsh-feiyu-mood, dsh-xingxi, dsh-speak-up, dsh-persona-dafeiyu), paired with Gemini-chan Cat Nest Sidecar UI.",
+  "description": "Project-scoped Antigravity 2.0 companion system derived from Yuuyuko-uu's DSH plugins (dsh-fish-memory, dsh-feiyu-mood, dsh-xingxi, dsh-speak-up) and huaizhuanghub's dsh-persona-dafeiyu, paired with Gemini-chan Cat Nest Sidecar UI.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Xuan52766/gemini-cat.git"
