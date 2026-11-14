@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
 import { applyMoodDelta, getMoodSnapshot } from '../core/mood.mjs';
 import { getNestSnapshot, loadNestState, performNestAction } from '../core/nest.mjs';
 import { appendDiary, appendToChapter } from '../core/xingxi.mjs';
+import { buildSidecarConfig, setupSidecar } from '../scripts/setup-sidecar.mjs';
 import { registerSidecarRoutes } from '../sidecar/routes.mjs';
 
 const REPO_ROOT = resolve('.');
@@ -58,6 +59,11 @@ test('hooks.json follows Antigravity plugin schema contract', () => {
     true,
     'companion MCP target must resolve cleanly from plugin dir',
   );
+
+  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8'));
+  const pluginMeta = JSON.parse(readFileSync(join(pluginDir, 'plugin.json'), 'utf-8'));
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(pluginMeta.version, pkg.version);
 });
 
 test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip Stop fallback when AI updated mood', () => {
@@ -248,8 +254,10 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
   });
 
   try {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8'));
     const init = await rpc(1, 'initialize', {});
     assert.equal(init.result.serverInfo.name, 'gemini-cat-mcp');
+    assert.equal(init.result.serverInfo.version, pkg.version);
 
     const list = await rpc(2, 'tools/list');
     const names = list.result.tools.map((t) => t.name);
@@ -604,4 +612,44 @@ test('sidecar polling renders persona full-text previews without resetting scrol
   preEl.scrollTop = 120;
   assert.equal(setTextStable(preEl, 'card v1'), false);
   assert.equal(preEl.scrollTop, 120);
+});
+
+test('setup-sidecar script writes portable forward-slash config safely without clobbering existing files', () => {
+  const cfgDir = mkdtempSync(join(tmpdir(), 'gemini-cat-sidecar-setup-'));
+  try {
+    const dry = setupSidecar({ repoRoot: REPO_ROOT, configDir: cfgDir, dryRun: true });
+    assert.equal(dry.ok, true);
+    assert.equal(dry.status, 'dry-run-create');
+    assert.equal(existsSync(dry.targetPath), false);
+    assert.equal(buildSidecarConfig(REPO_ROOT).args[0].includes('\\'), false);
+
+    const created = setupSidecar({ repoRoot: REPO_ROOT, configDir: cfgDir });
+    assert.equal(created.ok, true);
+    assert.equal(created.status, 'created');
+    const written = JSON.parse(readFileSync(created.targetPath, 'utf-8'));
+    assert.equal(written.command, 'node');
+    assert.equal(written.has_web_ui, true);
+    assert.match(written.args[0], /\/sidecar\/main\.mjs$/);
+
+    const second = setupSidecar({ repoRoot: REPO_ROOT, configDir: cfgDir });
+    assert.equal(second.ok, true);
+    assert.equal(second.status, 'unchanged');
+
+    // Simulate user-modified sidecar.json pointing somewhere else: refuse overwrite without --force
+    writeFileSync(created.targetPath, JSON.stringify({ command: 'node', args: ['C:/other/main.mjs'] }), 'utf-8');
+    const conflict = setupSidecar({ repoRoot: REPO_ROOT, configDir: cfgDir });
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.status, 'exists-conflict');
+    assert.match(readFileSync(created.targetPath, 'utf-8'), /C:\/other\/main\.mjs/);
+
+    // With --force: creates timestamped .bak-* backup before updating
+    const forced = setupSidecar({ repoRoot: REPO_ROOT, configDir: cfgDir, force: true });
+    assert.equal(forced.ok, true);
+    assert.equal(forced.status, 'updated');
+    assert.ok(forced.backupPath && existsSync(forced.backupPath));
+    const siblings = readdirSync(dirname(created.targetPath));
+    assert.ok(siblings.some((name) => name.startsWith('sidecar.json.bak-')));
+  } finally {
+    rmSync(cfgDir, { recursive: true, force: true });
+  }
 });

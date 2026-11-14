@@ -1,14 +1,15 @@
 {
-  "name": "gemini-cat",
+  "name": "agy-gemini-chan",
   "version": "1.0.0",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "description": "Project-scoped Antigravity 2.0 companion system derived from Yuuyuko-uu's DSH plugins (dsh-fish-memory, dsh-feiyu-mood, dsh-xingxi, dsh-speak-up) and huaizhuanghub's dsh-persona-dafeiyu, paired with Gemini-chan Cat Nest Sidecar UI.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Xuan52766/gemini-cat.git"
+    "url": "git+https://github.com/Xuan52766/agy-gemini-chan.git"
   },
   "scripts": {
+    "setup": "node scripts/setup-sidecar.mjs",
     "test": "node --test tests/*.test.mjs",
     "mcp": "node mcp/server.mjs",
     "sidecar": "node sidecar/main.mjs"

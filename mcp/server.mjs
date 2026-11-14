@@ -5,8 +5,9 @@
  * Uses newline-delimited JSON-RPC 2.0 per standard MCP stdio transport specification.
  */
 
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { getProjectRoot } from '../core/storage.mjs';
+import { getProjectRoot, readJsonSafe } from '../core/storage.mjs';
 import { recallMemories, rememberMemory, mutateMemory } from '../core/memory.mjs';
 import { applyMoodDelta, getMoodSnapshot } from '../core/mood.mjs';
 import { getNestSnapshot, performNestAction } from '../core/nest.mjs';
@@ -21,6 +22,7 @@ import {
 } from '../core/xingxi.mjs';
 
 const ROOT = getProjectRoot();
+const APP_VERSION = String(readJsonSafe(join(ROOT, 'package.json'), {})?.version || '1.0.0');
 
 const TOOLS = [
   {
@@ -313,7 +315,7 @@ rl.on('line', async (line) => {
         sendResponse(id, {
           protocolVersion: params?.protocolVersion || '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'gemini-cat-mcp', version: '1.0.0' },
+          serverInfo: { name: 'gemini-cat-mcp', version: APP_VERSION },
         });
         break;
       case 'ping':
