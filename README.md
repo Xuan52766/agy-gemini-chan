@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>目前版本：<code>v1.0.0</code></strong> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a>
+  <strong>目前版本：<code>v1.1.0</code></strong> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a>
 </p>
 
 **專為 Antigravity 2.0 生態打造的專案限定 AI 伴侶與互動貓窩系統**——透過 Antigravity 原生 **Plugin Lifecycle Hooks**、**Stdio MCP Server**、**Skills** 與 **Sidecar Aux Pane Web UI** 深度整合，不需要額外外部 AI API Key，就能在單一工作區裡為你的 Agent 帶來會淡忘的長期記憶、可感知的即時心情、八章星汐記憶卡、視覺化星座星圖，以及隨時陪伴在側邊欄的 Q 版 Gemini-chan 貓窩。
@@ -49,9 +49,9 @@
 | 模組 | 能力亮點 | 實作核心 |
 | :--- | :--- | :--- |
 | **Q 版互動貓窩** | 對應心情與睡眠狀態切換立繪（含 `mood_great`、`chibi_base`、`mood_ok`、`mood_worry`、`mood_sad`、`mood_sleep`）；支援摸頭、餵小魚乾、逗貓棒、蓋被子／叫醒、貼貼與傳紙條；內建冷卻時間、每日次數保護與「僅在對話或互動時擺動」節奏 | [core/nest.mjs](core/nest.mjs)、[sidecar/](sidecar/) |
-| **會淡忘的長期記憶** | 內建中文詞典最長匹配切詞＋說話尺 IDF、`queryGate` 過濾無意義寒暄、鮮活度指數半衰期 $H = 30 \times (1 + 2I)$、召回強化、高相似度去重與 `factKey`／`supersedes` 事實覆寫 | [core/memory.mjs](core/memory.mjs)、[core/tokenizer.mjs](core/tokenizer.mjs) |
-| **零外部 API 心情引擎** | 預設 `hybrid` 混成模式：對話內 AI 主動評估（`mood_update`）為主、回合結束本地語意分析兜底；支援大心情（`0–100`）、7 維細分情緒、兩端飽和抑制與半衰期自然回穩 | [core/mood.mjs](core/mood.mjs) |
-| **星汐記憶卡與星座星圖** | 嚴格八章結構 `記憶卡.md`＋`日記/YYYY-MM-DD.md`＋系統標籤清潔後的 `原始對話/`；每日 `23:30` 定時與手動「拾星」、自動 `.bak-*` 備份一鍵還原，以及五種關聯連線的互動式星圖 | [core/xingxi.mjs](core/xingxi.mjs) |
+| **會淡忘的長期記憶** | 內建中文詞典最長匹配切詞＋說話尺 IDF、`queryGate` 過濾無意義寒暄與單字噪音、鮮活度指數半衰期 $H = 30 \times (1 + 2I)$、自訂檢索詞 `keywords`、召回強化、高相似度去重與 `factKey`／`supersedes` 事實覆寫 | [core/memory.mjs](core/memory.mjs)、[core/tokenizer.mjs](core/tokenizer.mjs) |
+| **零外部 API 心情引擎** | 預設 `hybrid` 混成模式：對話內 AI 主動評估（`mood_update`）為主、回合結束本地語意分析兜底；支援大心情（`0–100`）、8 維細分情緒（含 45 分鐘快消氣的「生氣」維度）、兩端飽和抑制與半衰期自然回穩 | [core/mood.mjs](core/mood.mjs) |
+| **星汐記憶卡與 3D 記憶宇宙** | 嚴格八章結構 `記憶卡.md`＋`日記/YYYY-MM-DD.md`＋系統標籤清潔後的 `原始對話/`；每日 `23:30` 定時與手動「拾星」、自動 `.bak-*` 備份一鍵還原，以及支援 3D 球體旋轉、核心星、共詞橋與「年輪」時間軸播放的記憶宇宙星圖 | [core/xingxi.mjs](core/xingxi.mjs) |
 | **可自訂主動搭話** | 支援週幾、跨午夜峰谷時段、指定時區、安靜時段、冷卻時間與連沒中保底加成；預設開啟 `dryRun: true` 試運行保護，確認節奏後再一鍵啟用真實冒泡 | [core/speak-up.mjs](core/speak-up.mjs) |
 | **嚴格隔離雙層人設庫** | **單一對話覆寫 ＞ 本專案共用 ＞ 內建安全中性陪伴範本**；支援側邊欄即時編輯、改名、單筆啟停、`.md`/`.txt` 匯入與 `.md` 匯出（本倉庫不附帶原作者私人人設，`data/*` 由 `.gitignore` 排除） | [core/persona.mjs](core/persona.mjs) |
 

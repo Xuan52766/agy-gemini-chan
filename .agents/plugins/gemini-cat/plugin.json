@@ -1,7 +1,7 @@
 {
   "name": "gemini-cat",
   "displayName": "Gemini-chan 貓窩伴侶",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Antigravity 2.0 專案限定伴侶系統：整合自 Yuuyuko-uu 的 DSH 系列插件（fish-memory、feiyu-mood、xingxi、speak-up）與 huaizhuanghub 的 dsh-persona-dafeiyu，搭配 Q 版 Gemini-chan 貓窩側邊欄與 Hooks / MCP 連動。",
   "repository": "https://github.com/Xuan52766/agy-gemini-chan",
   "suggestedPrompts": [

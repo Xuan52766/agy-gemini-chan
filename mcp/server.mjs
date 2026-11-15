@@ -22,7 +22,7 @@ import {
 } from '../core/xingxi.mjs';
 
 const ROOT = getProjectRoot();
-const APP_VERSION = String(readJsonSafe(join(ROOT, 'package.json'), {})?.version || '1.0.0');
+const APP_VERSION = String(readJsonSafe(join(ROOT, 'package.json'), {})?.version || '1.1.0');
 
 const TOOLS = [
   {
