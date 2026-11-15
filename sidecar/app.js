@@ -13,18 +13,28 @@
     currentSpriteUrl: '',
     starsLayout: [],
     selectedStarId: '',
-    // Xingxi Star Map view state
+    hoveredStarId: '',
+    // Xingxi 3D Star Universe view & timeline state
     mapLinksOn: true,
     mapZoom: 1,
-    mapPanX: 0,
-    mapPanY: 0,
+    mapRotY: 0.42,
+    mapRotX: -0.18,
     mapSearch: '',
-    isPanningMap: false,
-    panMoved: false,
-    panStartX: 0,
-    panStartY: 0,
-    panOriginX: 0,
-    panOriginY: 0,
+    isDraggingMap: false,
+    dragMoved: false,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragOriginRotY: 0,
+    dragOriginRotX: 0,
+    tlPos: 1.0,
+    tlPlaying: false,
+    tlCutTs: Infinity,
+    tlTsList: [],
+    starGraphSig: '',
+    stars3D: [],
+    starLinks3D: [],
+    neighborsById: new Map(),
+    lastStarFrameMs: 0,
     // Interactive UI states preserved across 1.5s polls
     expandedDiaries: new Set(),
     expandedPersonas: new Set(),
@@ -276,29 +286,348 @@
     }
   }
 
-  // ---------- 3. Interactive Xingxi Star Map Renderer (Search, Pan, Zoom, Toggle Links) ----------
-  const CHAPTER_COLORS = [
-    '#f59e0b', // 0: Diary
-    '#f472b6', // 1
-    '#c084fc', // 2
-    '#38bdf8', // 3
-    '#34d399', // 4
-    '#fb7185', // 5
-    '#facc15', // 6
-    '#2dd4bf', // 7
-    '#a78bfa', // 8
+  // ---------- 3. Interactive Xingxi 3D Star Universe & Timeline (年輪) Renderer ----------
+  const STAR_PALETTE = [
+    [255, 140, 176], [255, 168, 142], [255, 196, 120], [255, 222, 128],
+    [244, 236, 142], [198, 238, 150], [150, 236, 178], [126, 232, 210],
+    [122, 222, 242], [134, 202, 255], [154, 180, 255], [178, 162, 255],
+    [204, 152, 255], [232, 148, 242], [250, 146, 214], [255, 156, 192],
+    [255, 182, 212], [186, 226, 255], [176, 244, 226], [255, 214, 168],
+    [218, 188, 255], [255, 168, 168], [168, 236, 255], [236, 214, 255],
+  ];
+  const CHAPTER_RGB = [
+    null,
+    [255, 152, 188], [255, 204, 132], [132, 226, 212], [148, 196, 255],
+    [198, 168, 255], [255, 176, 148], [162, 232, 172], [242, 164, 228],
+  ];
+  const MONTH_RGB = [
+    [142, 202, 255], [176, 184, 255], [156, 234, 196], [194, 238, 156],
+    [242, 232, 142], [255, 210, 132], [255, 176, 142], [255, 152, 176],
+    [238, 158, 226], [202, 166, 255], [164, 186, 255], [142, 222, 242],
   ];
 
-  function drawStarMap(xingxi) {
+  function makeStarSprite(rgb) {
+    const [r, g, b] = rgb;
+    const size = 64;
+    const half = size / 2;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const gCtx = c.getContext('2d');
+    const mix = (a, d, k) => Math.round(a * (1 - k) + d * k);
+    const grad = gCtx.createRadialGradient(half, half, 0, half, half, half);
+    grad.addColorStop(0.0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.1, `rgba(${mix(255, r, 0.45)},${mix(255, g, 0.45)},${mix(255, b, 0.45)},0.96)`);
+    grad.addColorStop(0.24, `rgba(${r},${g},${b},0.55)`);
+    grad.addColorStop(0.52, `rgba(${r},${g},${b},0.16)`);
+    grad.addColorStop(1.0, `rgba(${r},${g},${b},0)`);
+    gCtx.fillStyle = grad;
+    gCtx.fillRect(0, 0, size, size);
+    return c;
+  }
+
+  const paletteSprites = STAR_PALETTE.map(makeStarSprite);
+  const chapterSprites = CHAPTER_RGB.map((c) => (c ? makeStarSprite(c) : null));
+  const monthSprites = MONTH_RGB.map(makeStarSprite);
+  const coreSprite = makeStarSprite([255, 244, 214]);
+
+  function hashStr(str) {
+    let h = 2166136261 >>> 0;
+    const s = String(str || '');
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function randomSphereVec(seedStr) {
+    const h = hashStr(seedStr);
+    const u = ((h & 0xffff) / 0xffff) * 2 - 1;
+    const theta = (((h >>> 16) & 0xffff) / 0xffff) * Math.PI * 2;
+    const r = Math.sqrt(Math.max(0, 1 - u * u));
+    return [r * Math.cos(theta), u * 0.86, r * Math.sin(theta)];
+  }
+
+  const universeDust = (() => {
+    let seed = 20260417;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const tints = [
+      [220, 232, 255], [255, 228, 214], [210, 244, 255],
+      [238, 218, 255], [255, 244, 222], [198, 222, 255],
+    ];
+    const dust = [];
+    for (let i = 0; i < 360; i++) {
+      const k = rand();
+      dust.push({
+        u: rand(),
+        v: rand(),
+        r: k < 0.78 ? 0.45 + rand() * 0.65 : k < 0.96 ? 1.0 + rand() * 0.75 : 1.7 + rand() * 0.9,
+        alpha: 0.16 + rand() * 0.66,
+        freq: 0.35 + rand() * 1.4,
+        phase: rand() * Math.PI * 2,
+        tint: tints[Math.floor(rand() * tints.length)],
+        parallax: 0.1 + rand() * 0.45,
+      });
+    }
+    return dust;
+  })();
+
+  const nebulaBands = [
+    { u: 0.34, v: 0.42, rx: 0.44, ry: 0.2, rot: -0.32, c1: [86, 118, 214, 0.085], c2: [148, 98, 198, 0.038], phase: 0.4 },
+    { u: 0.68, v: 0.58, rx: 0.4, ry: 0.18, rot: 0.28, c1: [72, 156, 196, 0.068], c2: [188, 118, 168, 0.03], phase: 2.1 },
+  ];
+
+  function pickStarColorAndSprite(s) {
+    if (s.isCore) return { rgb: [255, 244, 214], sprite: coreSprite };
+    const idx = hashStr(`${s.id}|c`) % STAR_PALETTE.length;
+    if (s.kind === 'diary' && s.date) {
+      const m = Math.max(0, Math.min(11, (parseInt(s.date.slice(5, 7), 10) || 1) - 1));
+      if ((hashStr(s.id) & 3) === 0) return { rgb: MONTH_RGB[m], sprite: monthSprites[m] };
+    } else if (s.chapter && CHAPTER_RGB[s.chapter]) {
+      if ((hashStr(s.id) & 3) === 0) return { rgb: CHAPTER_RGB[s.chapter], sprite: chapterSprites[s.chapter] };
+    }
+    return { rgb: STAR_PALETTE[idx], sprite: paletteSprites[idx] };
+  }
+
+  function fmtDateTs(ts) {
+    if (!ts || !Number.isFinite(ts)) return '--';
+    const d = new Date(ts);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  function rebuildUniverse3D(xingxi) {
+    const rawStars = Array.isArray(xingxi?.stars) ? xingxi.stars : [];
+    const rawLinks = Array.isArray(xingxi?.links) ? xingxi.links : [];
+    const R = 210;
+
+    const cloned = rawStars.map((s, idx) => ({
+      ...s,
+      ts: Number(s.ts) || (1704067200000 + idx * 86400000),
+      isCore: false,
+    }));
+
+    const core = cloned.find((s) => Number(s.chapter) === 1) || cloned[0];
+    if (core) {
+      core.isCore = true;
+      core.x = 0;
+      core.y = 0;
+      core.z = 0;
+    }
+
+    const outer = cloned
+      .filter((s) => !s.isCore && (s.kind === 'diary' || s.eventDate))
+      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    const outerLen = outer.length || 1;
+    outer.forEach((s, i) => {
+      const rank = outerLen === 1 ? 0.5 : i / (outerLen - 1);
+      const [vx, vy, vz] = randomSphereVec(`${s.id}|d`);
+      const h = hashStr(`${s.id}|dr`);
+      const jitter = (((h % 200) - 100) / 1000) * 0.08;
+      const dist = R * Math.max(0.54, Math.min(1.14, 0.56 + rank * 0.54 + jitter));
+      s.x = vx * dist;
+      s.y = vy * dist;
+      s.z = vz * dist;
+      s.ringRank = rank;
+    });
+
+    const inner = cloned.filter((s) => !s.isCore && s.kind === 'card' && !s.eventDate);
+    for (const s of inner) {
+      const [vx, vy, vz] = randomSphereVec(`${s.id}|c`);
+      const h = hashStr(`${s.id}|r`);
+      const dist = R * (0.16 + ((h % 1000) / 1000) * 0.44);
+      s.x = vx * dist;
+      s.y = vy * dist;
+      s.z = vz * dist;
+    }
+
+    for (const s of cloned) {
+      const { rgb, sprite } = pickStarColorAndSprite(s);
+      s.rgb = rgb;
+      s.sprite = sprite;
+      s.baseSize = s.isCore
+        ? 4.6
+        : (s.kind === 'diary' ? 2.1 : 1.55) + (s.energy || 0.5) * (s.kind === 'diary' ? 2.1 : 1.65);
+    }
+
+    const byId = new Map(cloned.map((s) => [s.id, s]));
+    const neighbors = new Map();
+    const resolvedLinks = [];
+    for (const l of rawLinks) {
+      const a = byId.get(l.source);
+      const b = byId.get(l.target);
+      if (!a || !b) continue;
+      resolvedLinks.push({ ...l, a, b });
+      if (!neighbors.has(a.id)) neighbors.set(a.id, new Set());
+      if (!neighbors.has(b.id)) neighbors.set(b.id, new Set());
+      neighbors.get(a.id).add(b.id);
+      neighbors.get(b.id).add(a.id);
+    }
+
+    const tsList = [...new Set(cloned.map((s) => s.ts).filter((t) => t > 0))].sort((a, b) => a - b);
+    state.stars3D = cloned;
+    state.starLinks3D = resolvedLinks;
+    state.neighborsById = neighbors;
+    state.tlTsList = tsList;
+
+    const firstEl = $('xx-tl-first');
+    const lastEl = $('xx-tl-last');
+    if (firstEl) firstEl.textContent = tsList.length ? fmtDateTs(tsList[0]).slice(5) : '--';
+    if (lastEl) lastEl.textContent = tsList.length ? fmtDateTs(tsList[tsList.length - 1]).slice(5) : '--';
+    syncTimelineCut();
+  }
+
+  function syncTimelineCut() {
+    const tsList = state.tlTsList;
+    const curEl = $('xx-tl-cur');
+    const rangeEl = $('xx-tl-range');
+    if (rangeEl && document.activeElement !== rangeEl) {
+      rangeEl.value = String(Math.round(state.tlPos * 1000));
+    }
+    if (!tsList.length || (state.tlPos >= 0.999 && !state.tlPlaying)) {
+      state.tlCutTs = Infinity;
+      if (curEl) curEl.textContent = '全部記憶';
+      return;
+    }
+    const idx = Math.min(tsList.length - 1, Math.max(0, Math.floor(state.tlPos * tsList.length)));
+    state.tlCutTs = tsList[idx];
+    if (curEl) {
+      curEl.textContent = `${fmtDateTs(state.tlCutTs)} · ${Math.round(state.tlPos * 100)}%`;
+    }
+  }
+
+  function isStarInTimeline(s) {
+    if (s.isCore) return true;
+    if (state.tlCutTs === Infinity) return true;
+    return (s.ts || 0) <= state.tlCutTs;
+  }
+
+  function projectStar3D(x, y, z, w, h) {
+    const cosY = Math.cos(state.mapRotY);
+    const sinY = Math.sin(state.mapRotY);
+    const cosX = Math.cos(state.mapRotX);
+    const sinX = Math.sin(state.mapRotX);
+    const x1 = x * cosY + z * sinY;
+    const z1 = -x * sinY + z * cosY;
+    const y2 = y * cosX - z1 * sinX;
+    const z2 = y * sinX + z1 * cosX;
+    const focal = 680;
+    const dist = z2 + focal;
+    if (dist < 80) return null;
+    const k = (focal / dist) * state.mapZoom;
+    return {
+      sx: w / 2 + x1 * k,
+      sy: h / 2 + y2 * k,
+      z: z2,
+      k,
+    };
+  }
+
+  function renderSelectedStarDetail(star) {
+    const detail = $('star-detail');
+    if (!detail) return;
+    if (!star) {
+      detail.textContent = '點擊上方任一星點，即可高亮關聯星座並閱讀該章條目或當日日記正文。';
+      return;
+    }
+    const bridgeLabels = [];
+    for (const l of state.starLinks3D) {
+      if (l.kind === 'bridge' && l.label && (l.a.id === star.id || l.b.id === star.id)) {
+        const other = l.a.id === star.id ? l.b : l.a;
+        bridgeLabels.push(`「${l.label}」→ ${other.title}`);
+      }
+    }
+    const kindTag = star.isCore
+      ? '核心星｜第一章・我是誰'
+      : star.kind === 'diary'
+        ? `星曆日記｜${star.date || star.doc}`
+        : `八章記憶卡｜${star.chapterName || star.doc}${star.eventDate ? `（事件日 ${star.eventDate}）` : ''}`;
+    const bridgeLine = bridgeLabels.length
+      ? `\n✦ 共詞橋連線：${bridgeLabels.slice(0, 6).join('、')}`
+      : '';
+    detail.textContent = `【${kindTag}】${star.title}${bridgeLine}\n\n${star.text || '（暫無條目正文）'}`;
+  }
+
+  function drawStarMap(xingxi, nowMs = performance.now()) {
     const canvas = $('starmap-canvas');
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    if (xingxi) {
+      const stars = xingxi.stars || [];
+      const links = xingxi.links || [];
+      const sig = `${stars.length}:${links.length}:${stars.map((s) => `${s.id}:${s.title}:${s.ts || 0}`).join('|')}`;
+      if (sig !== state.starGraphSig) {
+        state.starGraphSig = sig;
+        rebuildUniverse3D(xingxi);
+      }
+      const hudStats = $('xx-hud-stats');
+      if (hudStats) {
+        const diariesCount = xingxi.stats?.diaries ?? stars.filter((s) => s.kind === 'diary').length;
+        const bridgesCount = xingxi.bridges?.length ?? links.filter((l) => l.kind === 'bridge').length;
+        hudStats.textContent = `${stars.length} 顆星 · ${diariesCount} 篇日記 · ${bridgesCount} 座共詞橋`;
+      }
+    }
 
-    const stars = xingxi?.stars || [];
-    const links = xingxi?.links || [];
+    const rect = canvas.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(300, Math.round(rect.width || 520));
+    const h = Math.max(220, Math.round(rect.height || 320));
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+
+    const ctx = canvas.getContext('2d');
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // 1. Deep space gradient + breathing nebula + 360 parallax star-dust
+    const bgGrad = ctx.createRadialGradient(w * 0.5, h * 0.45, 10, w * 0.5, h * 0.5, Math.max(w, h) * 0.78);
+    bgGrad.addColorStop(0, '#0b132c');
+    bgGrad.addColorStop(0.55, '#050816');
+    bgGrad.addColorStop(1, '#02030a');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    const tSec = nowMs * 0.001;
+    const span = Math.max(w, h);
+    for (const nb of nebulaBands) {
+      const cx = (nb.u + Math.sin(tSec * 0.05 + nb.phase) * 0.02) * w;
+      const cy = (nb.v + Math.cos(tSec * 0.04 + nb.phase) * 0.02) * h;
+      const r = span * nb.rx;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(nb.rot);
+      ctx.scale(1, nb.ry / nb.rx);
+      const ng = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      const [r1, g1, b1, a1] = nb.c1;
+      const [r2, g2, b2, a2] = nb.c2;
+      ng.addColorStop(0, `rgba(${r1},${g1},${b1},${a1})`);
+      ng.addColorStop(0.5, `rgba(${r2},${g2},${b2},${a2})`);
+      ng.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = ng;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    for (const p of universeDust) {
+      const ox = ((p.u * w + state.mapRotY * 55 * p.parallax) % w + w) % w;
+      const oy = ((p.v * h + state.mapRotX * 38 * p.parallax) % h + h) % h;
+      const breath = 0.58 + 0.42 * Math.sin(tSec * p.freq + p.phase);
+      const a = p.alpha * breath;
+      const [r, g, b] = p.tint;
+      ctx.fillStyle = `rgba(${r},${g},${b},${a.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(ox, oy, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const stars = state.stars3D;
     if (!stars.length) {
       ctx.fillStyle = '#94a3b8';
       ctx.font = '12px sans-serif';
@@ -306,155 +635,319 @@
       ctx.fillText('尚無星汐檔案，寫入記憶卡條目或日記即會亮起第一顆星', w / 2, h / 2);
       state.starsLayout = [];
       $('xx-map-hits').textContent = '';
+      ctx.restore();
       return;
     }
 
+    // 2. Search filter & 3D projection
     const q = state.mapSearch.trim().toLowerCase();
-    const cx = w / 2 + state.mapPanX;
-    const cy = h / 2 + state.mapPanY;
-    const zoom = state.mapZoom;
-    const posById = new Map();
-    const layout = [];
     let hitsCount = 0;
-
-    stars.forEach((star, idx) => {
-      const ch = Number(star.chapter) || 0;
-      const baseAngle = ch === 0 ? Math.PI * 0.5 : ((ch - 1) / 8) * Math.PI * 2 - Math.PI / 2;
-      const jitterAngle = (((idx * 37) % 13) - 6) * 0.08;
-      const radius = ch === 0
-        ? 26 + ((idx * 17) % 30)
-        : 54 + ((idx * 29) % 36);
-      const sx = cx + Math.cos(baseAngle + jitterAngle) * radius * 1.45 * zoom;
-      const sy = cy + Math.sin(baseAngle + jitterAngle) * radius * 0.85 * zoom;
+    const projected = [];
+    for (const s of stars) {
+      if (!isStarInTimeline(s)) {
+        s._proj = null;
+        continue;
+      }
       const matched = q
-        ? [star.title, star.text, star.chapterName, star.date].some((v) => String(v || '').toLowerCase().includes(q))
+        ? [s.title, s.text, s.chapterName, s.date, s.eventDate].some((v) => String(v || '').toLowerCase().includes(q))
         : true;
+      s.matched = matched;
       if (q && matched) hitsCount++;
-      const node = {
-        ...star,
-        x: sx,
-        y: sy,
-        r: (3.4 + (star.energy || 0.5) * 3.8) * Math.min(1.5, Math.max(0.75, zoom * 0.9)),
-        color: CHAPTER_COLORS[ch] || '#e2e8f0',
-        matched,
-      };
-      posById.set(star.id, node);
-      layout.push(node);
-    });
-    state.starsLayout = layout;
+      const pr = projectStar3D(s.x, s.y, s.z, w, h);
+      s._proj = pr;
+      if (pr) projected.push({ s, pr });
+    }
+    projected.sort((a, b) => a.pr.z - b.pr.z);
+    state.starsLayout = projected.map(({ s, pr }) => ({
+      ...s,
+      x: pr.sx,
+      y: pr.sy,
+      r: Math.max(4, s.baseSize * pr.k * 2.1),
+    }));
     $('xx-map-hits').textContent = q ? `${hitsCount} 顆` : '';
 
+    const focusId = state.hoveredStarId || state.selectedStarId;
+    const focusNeighbors = focusId ? state.neighborsById.get(focusId) : null;
+
+    // 3. Constellation lines & Shared-word Bridges
     if (state.mapLinksOn) {
-      const EDGE_COLORS = {
-        chapter: 'rgba(167, 139, 250, 0.34)',
-        day: 'rgba(251, 191, 36, 0.36)',
-        ref: 'rgba(244, 114, 182, 0.36)',
-        bridge: 'rgba(45, 212, 191, 0.36)',
-        similar: 'rgba(148, 163, 184, 0.25)',
-      };
-      ctx.lineWidth = 1;
-      for (const l of links) {
-        const a = posById.get(l.source);
-        const b = posById.get(l.target);
-        if (!a || !b) continue;
-        const dim = q && !a.matched && !b.matched;
-        ctx.save();
-        ctx.globalAlpha = dim ? 0.14 : 1;
-        ctx.strokeStyle = EDGE_COLORS[l.kind] || 'rgba(167, 139, 250, 0.24)';
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const bridgeMidpoints = [];
+      for (const l of state.starLinks3D) {
+        const pa = l.a._proj;
+        const pb = l.b._proj;
+        if (!pa || !pb) continue;
+        if (q && !l.a.matched && !l.b.matched) continue;
+        const isFocusEdge = Boolean(focusId && (l.a.id === focusId || l.b.id === focusId));
+        if (focusId && !isFocusEdge) continue;
+
+        if (l.kind === 'bridge') {
+          if (!isFocusEdge && (l.weight || 0) < 0.56) continue;
+          const alpha = isFocusEdge ? 0.62 : 0.13 * (l.weight || 0.5);
+          ctx.strokeStyle = `rgba(255, 214, 150, ${alpha})`;
+          ctx.lineWidth = isFocusEdge ? 1.35 : 0.75;
+          ctx.beginPath();
+          ctx.moveTo(pa.sx, pa.sy);
+          ctx.lineTo(pb.sx, pb.sy);
+          ctx.stroke();
+          if (isFocusEdge && l.label) {
+            bridgeMidpoints.push({
+              x: (pa.sx + pb.sx) * 0.5,
+              y: (pa.sy + pb.sy) * 0.5,
+              text: l.label,
+            });
+          }
+          continue;
+        }
+
+        const [r, g, b] = l.a.rgb || [180, 200, 255];
+        const alpha = isFocusEdge ? 0.55 : 0.14 * (l.weight || 0.5);
+        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+        ctx.lineWidth = isFocusEdge ? 1.3 : 0.75;
         ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
+        ctx.moveTo(pa.sx, pa.sy);
+        ctx.lineTo(pb.sx, pb.sy);
         ctx.stroke();
+      }
+      ctx.restore();
+
+      if (bridgeMidpoints.length) {
+        ctx.save();
+        ctx.font = '10.5px "Microsoft JhengHei UI", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        for (const m of bridgeMidpoints.slice(0, 10)) {
+          const tw = ctx.measureText(m.text).width;
+          const pw = tw + 10;
+          const ph = 15;
+          ctx.fillStyle = 'rgba(10, 14, 28, 0.82)';
+          ctx.strokeStyle = 'rgba(255, 214, 150, 0.42)';
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          ctx.roundRect(m.x - pw / 2, m.y - ph / 2, pw, ph, 7);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(255, 228, 176, 0.96)';
+          ctx.fillText(m.text, m.x, m.y + 0.5);
+        }
         ctx.restore();
       }
     }
 
-    for (const node of layout) {
-      const selected = node.id === state.selectedStarId;
-      ctx.save();
-      ctx.globalAlpha = q && !node.matched ? 0.18 : (0.45 + 0.55 * (node.energy || 0.7));
-      ctx.shadowColor = node.color;
-      ctx.shadowBlur = selected ? 14 : (q && node.matched ? 10 : 6);
-      ctx.fillStyle = node.color;
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, selected ? node.r + 2.2 : node.r, 0, Math.PI * 2);
-      ctx.fill();
-      if (selected) {
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.6;
-        ctx.stroke();
+    // 4. Render 3D Pearl Stars & Core Star ("我是誰")
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const { s, pr } of projected) {
+      if (q && !s.matched) continue;
+      if (s.isCore) {
+        const pulse = 0.92 + 0.14 * Math.sin(tSec * 1.6);
+        const coreR = Math.max(4.5, 9.5 * pr.k * pulse);
+        const [cr, cg, cb] = s.rgb;
+        for (const [mult, al] of [[6.8, 0.07], [4.0, 0.16], [2.3, 0.34]]) {
+          const rad = coreR * mult;
+          const g = ctx.createRadialGradient(pr.sx, pr.sy, 0, pr.sx, pr.sy, rad);
+          g.addColorStop(0, `rgba(255,252,240,${al * 1.4})`);
+          g.addColorStop(0.45, `rgba(${cr},${cg},${cb},${al})`);
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(pr.sx, pr.sy, rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.98)';
+        ctx.beginPath();
+        ctx.arc(pr.sx, pr.sy, coreR * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
       }
-      ctx.restore();
+
+      const isFocused = s.id === focusId;
+      const isNeighbor = Boolean(focusNeighbors && focusNeighbors.has(s.id));
+      const twinkle = 0.84 + 0.16 * Math.sin(tSec * 1.8 + (hashStr(s.id) % 100) * 0.06);
+      let alpha = Math.min(1, (0.38 + (s.energy || 0.5) * 0.62) * twinkle);
+      if (focusId && !isFocused && !isNeighbor) alpha *= 0.28;
+      if (isFocused || isNeighbor) alpha = 1;
+
+      const rad = Math.max(0.9, s.baseSize * pr.k * (isFocused ? 1.55 : isNeighbor ? 1.25 : 1));
+      const drawW = Math.max(6, rad * 6.4);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(s.sprite, pr.sx - drawW / 2, pr.sy - drawW / 2, drawW, drawW);
+      if (rad > 1.5 || isFocused) {
+        ctx.globalAlpha = Math.min(1, alpha * 1.12);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(pr.sx, pr.sy, Math.max(0.7, rad * 0.36), 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
+    ctx.restore();
+
+    // 5. Labels for Core Star, Focused Star, and Selected Star
+    ctx.save();
+    ctx.textBaseline = 'middle';
+    const coreStar = stars.find((s) => s.isCore);
+    if (coreStar && coreStar._proj && (!q || coreStar.matched)) {
+      const cp = coreStar._proj;
+      ctx.font = '600 11.5px "Microsoft JhengHei UI", system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255, 248, 228, 0.94)';
+      ctx.fillText('我是誰', cp.sx + 12, cp.sy);
+    }
+
+    for (const targetId of new Set([state.selectedStarId, state.hoveredStarId].filter(Boolean))) {
+      const st = stars.find((x) => x.id === targetId);
+      if (!st || !st._proj) continue;
+      const { sx, sy } = st._proj;
+      ctx.strokeStyle = targetId === state.selectedStarId
+        ? 'rgba(255, 232, 178, 0.92)'
+        : 'rgba(255, 255, 255, 0.72)';
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+      ctx.stroke();
+      if (!st.isCore) {
+        ctx.font = '500 11px "Microsoft JhengHei UI", system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(245, 247, 255, 0.95)';
+        ctx.fillText((st.title || '').slice(0, 18), sx + 13, sy);
+      }
+    }
+    ctx.restore();
+    ctx.restore();
   }
 
-  // Pan, Wheel Zoom & Click Hit-Test on Star Map
+  function animateStarMapLoop(nowMs = performance.now()) {
+    const dt = state.lastStarFrameMs ? Math.min(0.08, (nowMs - state.lastStarFrameMs) / 1000) : 0.016;
+    state.lastStarFrameMs = nowMs;
+    const xingxiPanel = $('tab-xingxi');
+    if (xingxiPanel && !xingxiPanel.hidden && !document.hidden) {
+      if (!state.isDraggingMap && !state.hoveredStarId) {
+        state.mapRotY += dt * 0.018;
+      }
+      if (state.tlPlaying) {
+        state.tlPos += dt / 9.0;
+        if (state.tlPos >= 1) {
+          state.tlPos = 1;
+          state.tlPlaying = false;
+          const playBtn = $('xx-tl-play');
+          if (playBtn) playBtn.textContent = '▶';
+        }
+        syncTimelineCut();
+      }
+      drawStarMap(null, nowMs);
+    }
+    requestAnimationFrame(animateStarMapLoop);
+  }
+  requestAnimationFrame(animateStarMapLoop);
+
+  // Orbit Drag, Hover Tooltip, Wheel Zoom & Click Hit-Test on 3D Star Map
   const starmapCanvas = $('starmap-canvas');
+  const starTip = $('xx-star-tip');
+
+  function findHitStarAtClientPos(clientX, clientY) {
+    const rect = starmapCanvas.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    const my = clientY - rect.top;
+    let best = null;
+    let bestDist = 18;
+    for (const s of state.stars3D) {
+      if (!s._proj) continue;
+      if (state.mapSearch && !s.matched) continue;
+      const d = Math.hypot(s._proj.sx - mx, s._proj.sy - my);
+      if (d < bestDist) {
+        bestDist = d;
+        best = s;
+      }
+    }
+    return { hit: best, mx, my, rect };
+  }
+
+  function updateHoverTooltip(hit, mx, my, rect) {
+    if (!starTip) return;
+    if (!hit || state.isDraggingMap) {
+      starTip.classList.add('hidden');
+      return;
+    }
+    const meta = hit.isCore
+      ? '核心星 · 第一章｜我是誰'
+      : hit.kind === 'diary'
+        ? `日記 · ${hit.date || hit.doc}`
+        : `記憶卡 · ${hit.chapterName || hit.doc}${hit.eventDate ? ` · ${hit.eventDate}` : ''}`;
+    const snippet = String(hit.text || '').replace(/\s+/g, ' ').slice(0, 72);
+    starTip.innerHTML =
+      `<div class="tip-meta">${esc(meta)}</div>` +
+      `<div class="tip-title">${esc(hit.title || '')}</div>` +
+      (snippet ? `<div class="tip-body">${esc(snippet)}${hit.text && hit.text.length > 72 ? '…' : ''}</div>` : '');
+    starTip.classList.remove('hidden');
+    const left = Math.min(Math.max(8, mx + 14), Math.max(8, (rect.width || 520) - 248));
+    const top = Math.min(Math.max(8, my - 10), Math.max(8, (rect.height || 320) - 96));
+    starTip.style.left = `${left}px`;
+    starTip.style.top = `${top}px`;
+  }
+
   starmapCanvas.addEventListener('pointerdown', (e) => {
-    state.isPanningMap = true;
-    state.panMoved = false;
-    state.panStartX = e.clientX;
-    state.panStartY = e.clientY;
-    state.panOriginX = state.mapPanX;
-    state.panOriginY = state.mapPanY;
+    state.isDraggingMap = true;
+    state.dragMoved = false;
+    state.dragStartX = e.clientX;
+    state.dragStartY = e.clientY;
+    state.dragOriginRotY = state.mapRotY;
+    state.dragOriginRotX = state.mapRotX;
+    if (starTip) starTip.classList.add('hidden');
     starmapCanvas.setPointerCapture?.(e.pointerId);
   });
 
   starmapCanvas.addEventListener('pointermove', (e) => {
-    if (!state.isPanningMap) return;
-    const dx = e.clientX - state.panStartX;
-    const dy = e.clientY - state.panStartY;
-    if (Math.hypot(dx, dy) > 4) state.panMoved = true;
-    const rect = starmapCanvas.getBoundingClientRect();
-    const scaleX = starmapCanvas.width / (rect.width || 1);
-    const scaleY = starmapCanvas.height / (rect.height || 1);
-    state.mapPanX = state.panOriginX + dx * scaleX;
-    state.mapPanY = state.panOriginY + dy * scaleY;
-    drawStarMap(state.snap?.xingxi);
+    if (state.isDraggingMap) {
+      const dx = e.clientX - state.dragStartX;
+      const dy = e.clientY - state.dragStartY;
+      if (Math.hypot(dx, dy) > 4) state.dragMoved = true;
+      state.mapRotY = state.dragOriginRotY + dx * 0.0065;
+      state.mapRotX = Math.max(-1.25, Math.min(1.25, state.dragOriginRotX + dy * 0.0065));
+      drawStarMap(null);
+      return;
+    }
+    const { hit, mx, my, rect } = findHitStarAtClientPos(e.clientX, e.clientY);
+    state.hoveredStarId = hit ? hit.id : '';
+    starmapCanvas.style.cursor = hit ? 'pointer' : 'grab';
+    updateHoverTooltip(hit, mx, my, rect);
+  });
+
+  starmapCanvas.addEventListener('pointerleave', () => {
+    state.hoveredStarId = '';
+    if (starTip) starTip.classList.add('hidden');
   });
 
   starmapCanvas.addEventListener('pointerup', (e) => {
-    const moved = state.panMoved;
-    state.isPanningMap = false;
+    const moved = state.dragMoved;
+    state.isDraggingMap = false;
     starmapCanvas.releasePointerCapture?.(e.pointerId);
     if (moved) return;
 
-    const rect = starmapCanvas.getBoundingClientRect();
-    const scaleX = starmapCanvas.width / (rect.width || 1);
-    const scaleY = starmapCanvas.height / (rect.height || 1);
-    const mx = (e.clientX - rect.left) * scaleX;
-    const my = (e.clientY - rect.top) * scaleY;
-
-    let hit = null;
-    let bestDist = 20;
-    for (const node of state.starsLayout) {
-      const d = Math.hypot(node.x - mx, node.y - my);
-      if (d < bestDist) {
-        bestDist = d;
-        hit = node;
-      }
+    const { hit } = findHitStarAtClientPos(e.clientX, e.clientY);
+    if (!hit) {
+      state.selectedStarId = '';
+      renderSelectedStarDetail(null);
+      drawStarMap(null);
+      return;
     }
-    if (!hit) return;
     state.selectedStarId = hit.id;
-    $('star-detail').textContent =
-      `【${hit.chapterName || hit.doc}】${hit.title}${hit.date ? `（${hit.date}）` : ''}\n\n${hit.text || '（暫無條目正文）'}`;
-    drawStarMap(state.snap?.xingxi);
+    renderSelectedStarDetail(hit);
+    drawStarMap(null);
   });
 
   starmapCanvas.addEventListener('pointercancel', () => {
-    state.isPanningMap = false;
+    state.isDraggingMap = false;
   });
 
   starmapCanvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.14 : 0.88;
-    state.mapZoom = Math.min(2.6, Math.max(0.5, state.mapZoom * factor));
-    drawStarMap(state.snap?.xingxi);
+    const factor = Math.exp(-e.deltaY * 0.0012);
+    state.mapZoom = Math.min(3.4, Math.max(0.25, state.mapZoom * factor));
+    drawStarMap(null);
   }, { passive: false });
 
   $('xx-map-search').addEventListener('input', (e) => {
     state.mapSearch = e.target.value;
-    drawStarMap(state.snap?.xingxi);
+    drawStarMap(null);
   });
 
   $('xx-toggle-links').addEventListener('click', () => {
@@ -463,26 +956,59 @@
     btn.classList.toggle('active', state.mapLinksOn);
     btn.setAttribute('aria-pressed', String(state.mapLinksOn));
     btn.textContent = state.mapLinksOn ? '連線開' : '連線關';
-    drawStarMap(state.snap?.xingxi);
+    drawStarMap(null);
   });
 
   $('xx-zoom-in').addEventListener('click', () => {
-    state.mapZoom = Math.min(2.6, state.mapZoom * 1.2);
-    drawStarMap(state.snap?.xingxi);
+    state.mapZoom = Math.min(3.4, state.mapZoom * 1.22);
+    drawStarMap(null);
   });
 
   $('xx-zoom-out').addEventListener('click', () => {
-    state.mapZoom = Math.max(0.5, state.mapZoom * 0.82);
-    drawStarMap(state.snap?.xingxi);
+    state.mapZoom = Math.max(0.25, state.mapZoom * 0.82);
+    drawStarMap(null);
   });
 
   $('xx-zoom-reset').addEventListener('click', () => {
     state.mapZoom = 1;
-    state.mapPanX = 0;
-    state.mapPanY = 0;
+    state.mapRotY = 0.42;
+    state.mapRotX = -0.18;
     state.mapSearch = '';
+    state.selectedStarId = '';
+    state.tlPlaying = false;
+    state.tlPos = 1;
+    if ($('xx-tl-play')) $('xx-tl-play').textContent = '▶';
     $('xx-map-search').value = '';
-    drawStarMap(state.snap?.xingxi);
+    syncTimelineCut();
+    renderSelectedStarDetail(null);
+    drawStarMap(null);
+  });
+
+  // Timeline (年輪) Scrubber & Playback Controls
+  $('xx-tl-range')?.addEventListener('input', (e) => {
+    state.tlPlaying = false;
+    if ($('xx-tl-play')) $('xx-tl-play').textContent = '▶';
+    state.tlPos = Math.max(0, Math.min(1, Number(e.target.value) / 1000));
+    syncTimelineCut();
+    drawStarMap(null);
+  });
+
+  $('xx-tl-play')?.addEventListener('click', () => {
+    state.tlPlaying = !state.tlPlaying;
+    if (state.tlPlaying && state.tlPos >= 0.995) {
+      state.tlPos = 0;
+    }
+    if ($('xx-tl-play')) $('xx-tl-play').textContent = state.tlPlaying ? 'Ⅱ' : '▶';
+    syncTimelineCut();
+    drawStarMap(null);
+  });
+
+  $('xx-tl-reset')?.addEventListener('click', () => {
+    state.tlPlaying = false;
+    state.tlPos = 1;
+    if ($('xx-tl-play')) $('xx-tl-play').textContent = '▶';
+    syncTimelineCut();
+    drawStarMap(null);
   });
 
   // ---------- 4. Form Sync Without Clobbering Active Typing or Unsaved Changes ----------

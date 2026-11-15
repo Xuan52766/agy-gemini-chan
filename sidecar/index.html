@@ -153,13 +153,13 @@
       <section id="tab-mood" role="tabpanel" aria-labelledby="tabbtn-mood" class="tab-panel">
         <div class="sec-head">
           <div>
-            <h2>此刻情緒與 7 維感知</h2>
-            <p class="sec-sub">隨對話自然變動，不依賴外部 API 裁判。</p>
+            <h2>此刻情緒與 8 維感知</h2>
+            <p class="sec-sub">隨對話自然變動（含 45 分鐘快消氣的「生氣」維度），不依賴外部 API 裁判。</p>
           </div>
           <span id="mood-engine-badge" class="chip">對話內 AI ＋ 本地兜底</span>
         </div>
 
-        <div id="mood-dims-grid" class="dims-grid" aria-label="7維情緒數值"></div>
+        <div id="mood-dims-grid" class="dims-grid" aria-label="8維情緒數值"></div>
 
         <div class="surface-block">
           <div class="block-head">
@@ -485,12 +485,12 @@
           <span id="xingxi-stats-badge" class="chip tabular">0 顆星</span>
         </div>
 
-        <!-- Constellation Canvas + DSH Controls -->
+        <!-- 3D Memory Universe Canvas + Timeline (年輪) + DSH Controls -->
         <div class="starmap-frame">
           <div class="starmap-toolbar">
             <div class="map-search-wrap">
               <label for="xx-map-search" class="sr-only">搜尋星圖節點</label>
-              <input id="xx-map-search" type="search" placeholder="篩選星點關鍵詞…" />
+              <input id="xx-map-search" type="search" placeholder="篩選星點關鍵詞（標題／正文／日期）…" />
               <span id="xx-map-hits" class="muted-meta tabular"></span>
             </div>
             <div class="btn-group-compact">
@@ -500,13 +500,34 @@
               <button id="xx-zoom-reset" type="button" class="btn-mini">重置</button>
             </div>
           </div>
-          <canvas id="starmap-canvas" width="520" height="260" aria-label="星汐記憶星座圖（支援滾輪縮放、拖曳平移與點擊星點）"></canvas>
-          <div class="starmap-legend" aria-hidden="true">
-            <span class="leg"><i style="background:#f59e0b"></i>日記</span>
-            <span class="leg"><i style="background:#0ea5e9"></i>八章記憶卡</span>
-            <span class="muted-meta">可拖曳平移 · 滾輪縮放 · 點星點看全文</span>
+
+          <div class="starmap-viewport" id="starmap-viewport">
+            <canvas id="starmap-canvas" width="520" height="320" aria-label="星汐 3D 記憶宇宙星圖（支援拖曳旋轉、滾輪縮放、點擊星點與年輪播放）"></canvas>
+            <div class="starmap-hud-tl" aria-hidden="true">
+              <span class="hud-kicker">MEMORY UNIVERSE · 3D</span>
+              <span id="xx-hud-stats" class="hud-sub tabular">0 顆星 · 0 篇日記</span>
+            </div>
+            <div id="xx-star-tip" class="starmap-tip hidden" role="tooltip"></div>
           </div>
-          <div id="star-detail" class="star-detail">點擊上方任一星點，即可閱讀該章條目或當日日記正文。</div>
+
+          <div class="starmap-timeline" aria-label="記憶年輪時間軸">
+            <span class="tl-title">年輪</span>
+            <button id="xx-tl-play" type="button" class="btn-mini tl-btn" title="按時間播放／暫停">▶</button>
+            <span id="xx-tl-first" class="tl-edge tabular">--</span>
+            <input id="xx-tl-range" type="range" min="0" max="1000" value="1000" aria-label="記憶時間軸進度" />
+            <span id="xx-tl-last" class="tl-edge tabular">--</span>
+            <span id="xx-tl-cur" class="chip tabular tl-cur">全部記憶</span>
+            <button id="xx-tl-reset" type="button" class="btn-mini tl-btn" title="回到全部記憶">↺</button>
+          </div>
+
+          <div class="starmap-legend" aria-hidden="true">
+            <span class="leg"><i style="background:#fff4d6;box-shadow:0 0 6px #fbbf24"></i>核心星（我是誰）</span>
+            <span class="leg"><i style="background:#38bdf8"></i>八章記憶卡（內層）</span>
+            <span class="leg"><i style="background:#f59e0b"></i>日記／事件（外層年輪）</span>
+            <span class="leg"><i style="background:#fbbf24"></i>共詞橋</span>
+            <span class="muted-meta">拖曳 3D 旋轉 · 滾輪縮放 · 點星看鄰居與全文</span>
+          </div>
+          <div id="star-detail" class="star-detail">點擊上方任一星點，即可高亮關聯星座並閱讀該章條目或當日日記正文。</div>
         </div>
 
         <!-- Manual Write / Append -->

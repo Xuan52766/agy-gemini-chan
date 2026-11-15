@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { recallMemories, rememberMemory, mutateMemory, computeFreshness, isUniversalKey } from '../core/memory.mjs';
-import { analyzeTurnLocally, applyMoodDelta, consumeMoodInjection, decayMoodState, getMoodSnapshot, moodLabel, moodTier } from '../core/mood.mjs';
+import { analyzeTurnLocally, applyMoodDelta, consumeMoodInjection, decayMoodState, getMoodSnapshot, moodLabel, moodTier, saveMoodConfig } from '../core/mood.mjs';
 import {
   consumePendingNestContext,
   getNestSnapshot,
@@ -524,5 +524,80 @@ test('sleeping state stays consistent across care actions, auto nap timeout, and
     assert.ok(autoRested.energy >= 92);
     const wokeCtx = consumePendingNestContext(root, { consume: true, now: t0 + 45 * 60_000 + MAX_AUTO_NAP_MS + 2000 });
     assert.match(wokeCtx.text, /剛醒過來/);
+  });
+});
+
+test('upstream parity upgrades: fish-memory v1.6.1 stable_profile recall, feiyu-mood v0.9.3 angry 45m half-life, xingxi v0.3.2 bridges & eventDate, speak-up v0.3.2 tag', async () => {
+  await withTempRoot((root) => {
+    const t0 = Date.UTC(2026, 10, 15, 10, 0, 0);
+
+    // 1. dsh-fish-memory v1.6.1: stable_profile / importance=1 is recalled + custom keywords
+    const profMem = rememberMemory({
+      text: '主人最愛喝熱伯爵鮮奶茶微糖',
+      importance: 1,
+      category: 'stable_profile',
+      factKey: '主人.飲品',
+      keywords: ['飲料偏好', '下午茶'],
+    }, { root, now: t0 });
+    assert.equal(profMem.ok, true);
+    assert.equal(profMem.memory.category, 'stable_profile');
+
+    const recallHit = recallMemories('下午茶想點飲料偏好', { root, now: t0 + 1000 });
+    assert.equal(recallHit.selected.length, 1);
+    assert.equal(recallHit.selected[0].m.id, profMem.memory.id);
+
+    // 2. dsh-feiyu-mood v0.9.3: 8th dimension angry has 45m half-life vs 90m for sad, and blocked preview accuracy
+    saveMoodConfig({ injectPerDay: 1 }, root);
+    const m1 = applyMoodDelta({
+      moodDelta: -18,
+      dims: { angry: 15, sad: 15 },
+      reason: '測試生氣與難過半衰期差異',
+      confidence: 95,
+    }, { root, now: t0 });
+    assert.equal(m1.state.dims.angry, 15);
+    assert.equal(m1.state.dims.sad, 15);
+
+    // After 45 minutes: angry halves (15 -> 8), while sad is at 11 (90m half-life)
+    const after45m = getMoodSnapshot({ root, now: t0 + 45 * 60_000 });
+    const angryVal = after45m.dims.find((d) => d.key === 'angry')?.value;
+    const sadVal = after45m.dims.find((d) => d.key === 'sad')?.value;
+    assert.equal(after45m.dims.length, 8);
+    assert.equal(angryVal, 8);
+    assert.equal(sadVal, 11);
+
+    // Consume 1/1 daily injection -> next significant change must preview as blocked (not said)
+    const inj1 = consumeMoodInjection({ root, now: t0 + 1000, consume: true });
+    assert.equal(inj1.status, 'pending');
+    assert.ok(inj1.text);
+    applyMoodDelta({
+      moodDelta: 18,
+      dims: { happy: 15 },
+      reason: '第二次顯著事件',
+      confidence: 95,
+    }, { root, now: t0 + 5000 });
+    const injPreview = consumeMoodInjection({ root, now: t0 + 6000, consume: false });
+    assert.equal(injPreview.status, 'blocked');
+
+    // 3. dsh-xingxi v0.3.2: eventDate extraction, shared-word bridges, and schedule preservation
+    appendToChapter(3, '- 主人喜歡看星辰煙火與喝伯爵茶', root);
+    appendToChapter(6, '- **2026-11-12｜花火大會**：我們一起在河畔看星辰煙火與喝伯爵茶', root);
+    appendDiary({ date: '2026-11-12', entry: '今晚在河畔看星辰煙火，還喝了熱呼呼的伯爵茶。' }, root);
+    const graph = buildStarGraph(root);
+    assert.ok(graph.stats.stars >= 2);
+    assert.ok(graph.stats.diaries >= 1);
+    assert.ok(Array.isArray(graph.bridges) && graph.bridges.length >= 1);
+    const ch6Star = graph.stars.find((s) => s.chapter === 6);
+    assert.equal(ch6Star?.eventDate, '2026-11-12');
+
+    // saveXingxiConfig preserves lastScheduledDate when time/mode are unchanged
+    saveXingxiConfig({ scheduleHour: 23, scheduleMinute: 30, scheduleMode: 'both', lastScheduledDate: '2026-11-15' }, root);
+    const savedSame = saveXingxiConfig({ scheduleHour: 23, scheduleMinute: 30, scheduleMode: 'both', autoScheduleEnabled: true }, root);
+    assert.equal(savedSame.lastScheduledDate, '2026-11-15');
+    const savedChanged = saveXingxiConfig({ scheduleHour: 22, scheduleMinute: 30, scheduleMode: 'both' }, root);
+    assert.equal(savedChanged.lastScheduledDate, '');
+
+    // 4. dsh-speak-up v0.3.2: closed <speak-up>...</speak-up> block
+    const wrapped = wrapInnerThought('去信箱看看大肥魚有沒有回信', new Date(t0));
+    assert.match(wrapped, /^<speak-up>[\s\S]*<\/speak-up>$/);
   });
 });

@@ -314,13 +314,14 @@ export function formatCurrentTimeLine(date = new Date()) {
 export function wrapInnerThought(promptText, date = new Date(), { wokeFromSleep = false } = {}) {
   const clean = String(promptText || DEFAULT_SPEAK_UP_CONFIG.triggerPrompt).trim();
   const lines = [
+    '<speak-up>',
     SPEAK_UP_MARKER,
-    '（下面這句是你自己心裡冒出來的念頭，不是對方發來的訊息；順著它去做或開口打招呼就行，不要當成對方說的話。）',
+    '（這個區塊裡的內容是你自己心裡冒出來的念頭，不是對方說的話；順著它去做或開口打招呼就行，別把它當成對方發來的訊息、也不用回應它。）',
   ];
   if (wokeFromSleep) {
     lines.push('（你在貓窩軟墊上睡夠一覺剛自己伸懶腰醒過來，側邊欄也已切換為清醒姿態；別說自己還閉著眼在睡，順著剛睡醒的心情開口吧。）');
   }
-  lines.push(formatCurrentTimeLine(date), clean);
+  lines.push(formatCurrentTimeLine(date), clean, '</speak-up>');
   return lines.join('\n');
 }
 

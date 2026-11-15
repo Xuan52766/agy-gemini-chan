@@ -107,7 +107,7 @@ export function isVerifiedProjectConversation(conversationId, root = getProjectR
  */
 export function classifyInputSource(userInput = '') {
   const s = String(userInput || '');
-  if (s.includes(SPEAK_UP_MARKER)) return 'speak-up';
+  if (s.includes(SPEAK_UP_MARKER) || s.includes('<speak-up>')) return 'speak-up';
   if (s.includes(XINGXI_PICKUP_MARKER)) return 'xingxi-pickup';
   if (s.includes(CAT_NEST_EVENT_MARKER)) return 'nest-event';
   if (/^\[(WORK_SCAN|CRON|AUTOMATION|YOUTUBE_PATROL)\]/i.test(s.trim())) return 'work';

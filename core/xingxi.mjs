@@ -105,6 +105,20 @@ export function saveXingxiConfig(patch = {}, root) {
   const { configPath } = archiveFiles(root);
   const prev = loadXingxiConfig(root);
   const merged = { ...prev, ...patch };
+  // dsh-xingxi v0.2.4: only clear today's scheduled marker if hour/minute/mode actually changed
+  const scheduleTouched =
+    patch.scheduleHour !== undefined ||
+    patch.scheduleMinute !== undefined ||
+    patch.scheduleMode !== undefined;
+  if (scheduleTouched && patch.lastScheduledDate === undefined) {
+    const changed =
+      Number(merged.scheduleHour) !== Number(prev.scheduleHour) ||
+      Number(merged.scheduleMinute) !== Number(prev.scheduleMinute) ||
+      String(merged.scheduleMode) !== String(prev.scheduleMode);
+    if (changed && merged.lastScheduledDate === localDayKey()) {
+      merged.lastScheduledDate = '';
+    }
+  }
   if (Array.isArray(merged.logs)) merged.logs = merged.logs.slice(-40);
   writeJsonAtomic(configPath, merged);
   return loadXingxiConfig(root);
@@ -286,7 +300,7 @@ function extractEventDate(star) {
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || /^(?:這一章講什麼|这一章讲什么)/.test(line)) continue;
-    const m = /^(?:[-*]\s*)?(?:\*\*)?(20\d{2})-(\d{1,2})-(\d{1,2})(?:\*\*)?(?=\s|[：:，,、]|$)(.*)$/.exec(line);
+    const m = /^(?:[-*]\s*)?(?:\*\*)?(20\d{2})-(\d{1,2})-(\d{1,2})(?:\*\*)?(?=\s|[：:，,、｜|—\-]|$)(.*)$/.exec(line);
     if (!m) continue;
     const tail = m[4] || '';
     if (/(?:到|至|[~～—–])\s*(?:20\d{2}[-/.年])?\d{1,2}[-/.月]\d{1,2}/.test(tail.slice(0, 32))) continue;
@@ -327,11 +341,13 @@ function parseMonthlyDiary(content, docName, fileDate) {
         date: dateStr,
         doc: docName,
         text: '',
+        subtitles: [],
       };
       byDay.set(dateStr, star);
     }
     const body = (item[4] || '').trim();
     if (tail && !isWeekday) {
+      star.subtitles.push(tail);
       if (body) star.text += (star.text ? '\n\n' : '') + `【${tail}】${body}`;
     } else if (body) {
       star.text += (star.text ? '\n\n' : '') + body;
@@ -451,14 +467,37 @@ export function parseMarkdownToStars(filePath, relName) {
     }
   }
 
+  let fileMtimeMs = 0;
+  try {
+    fileMtimeMs = statSync(filePath).mtimeMs || 0;
+  } catch { /* ignore */ }
+
+  const inferStarTs = (star) => {
+    const txt = `${star.title || ''}\n${star.text || ''}`;
+    let m = /(\d{4})-(\d{2})-(\d{2})/.exec(txt);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+    m = /\*\*(\d{2})-(\d{2})/.exec(txt);
+    if (m) {
+      const y = new Date().getFullYear();
+      return new Date(y, Number(m[1]) - 1, Number(m[2])).getTime();
+    }
+    if (star.date) {
+      const d = /(\d{4})-(\d{2})-(\d{2})/.exec(String(star.date));
+      if (d) return new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3])).getTime();
+    }
+    return fileMtimeMs || Date.now();
+  };
+
   let idx = 0;
   const now = Date.now();
   for (const star of out) {
     star.id = `star:${docName}#${idx}`;
     star.order = idx++;
-    const dStr = star.kind === 'card' ? extractEventDate(star) : (star.date || '');
+    const evDate = star.kind === 'card' ? extractEventDate(star) : '';
+    if (evDate) star.eventDate = evDate;
+    const dStr = star.kind === 'card' ? (evDate || star.date || '') : (star.date || '');
     star.date = dStr;
-    const parsedTs = dStr && /^\d{4}-\d{2}-\d{2}$/.test(dStr) ? Date.parse(dStr) : 0;
+    const parsedTs = inferStarTs(star);
     star.ts = Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : now;
     const ageDays = Math.max(0, (now - star.ts) / 86400000);
     star.energy = Math.max(0.35, Math.min(1, 1 - ageDays / 180));
@@ -611,7 +650,8 @@ export function buildStarGraph(root) {
   }
 
   // 4. Shared rare term bridges (`造共享橋`)
-  for (const br of buildSharedBridges(stars, 100)) {
+  const bridges = buildSharedBridges(stars, 240);
+  for (const br of bridges) {
     pushEdge(br.source, br.target, 'bridge', br.weight, { label: br.label });
   }
 
@@ -643,13 +683,26 @@ export function buildStarGraph(root) {
     }
   }
 
+  diaries.forEach((s, i) => {
+    s.diarySeq = i;
+  });
+
   const ledger = readJsonSafe(ledgerPath, { 已整理到: '' }) || { 已整理到: '' };
   return {
     xingxiDir,
     ledger,
     fileCount: files.length,
     stars,
-    links: links.slice(0, 240),
+    links: links.slice(0, 320),
+    bridges,
+    stats: {
+      stars: stars.length,
+      cards: stars.filter((s) => s.kind === 'card').length,
+      diaries: diaries.length,
+      links: links.length,
+      firstDay: diaries.length ? diaries[0].date : '',
+      lastDay: diaries.length ? diaries[diaries.length - 1].date : '',
+    },
     chapters: CHAPTER_NAMES.map((name, idx) => ({
       index: idx + 1,
       numeral: CHAPTER_NUMERALS[idx],
@@ -951,6 +1004,8 @@ function appendMaterialBlock(rawFilePath, headerLine, bodyLines) {
     return true;
   }
   const prev = readTextSafe(rawFilePath, '');
+  // dsh-xingxi v0.3.2: idempotent raw dialogue append so un-flushed watermarks never duplicate blocks
+  if (prev.includes(body)) return false;
   const fingerprint = bodyLines[0]?.slice(0, 120) || body.slice(0, 120);
   if (fingerprint && prev.includes(fingerprint)) return false;
   writeTextAtomic(rawFilePath, `${prev.trimEnd()}\n\n── 之後 ──\n${fullBlock}`);
@@ -974,7 +1029,7 @@ function isInternalTurnText(text) {
  * Slices verified `gemini_cat` conversation transcripts + Memory + Mood highlights
  * for a given date (`YYYY-MM-DD`) into `data/xingxi/原始對話/YYYY-MM-DD.txt` (matches DSH 切料 & 水位Ms).
  */
-export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = Date.now(), minTs = 0 } = {}) {
+export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = Date.now(), minTs = 0, maxTs = 0 } = {}) {
   const { rawDir, ledgerPath } = ensureXingxiArchive(root);
   mkdirSync(rawDir, { recursive: true });
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date).trim()) ? String(date).trim() : localDayKey(now);
@@ -982,10 +1037,12 @@ export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = 
   const hasExplicitMin = Number(minTs) > 0;
   const watermark = hasExplicitMin ? Number(minTs) : Number(ledger['水位Ms'] || 0);
   const watermarkDay = watermark > 0 ? localDayKey(watermark) : '';
+  const cutoffTs = Number(maxTs) > 0 ? Number(maxTs) : Number(now) || 0;
 
   const { runtimeDir, memoryDir, moodDir } = getDataPaths(root);
   const sessionsData = readJsonSafe(join(runtimeDir, 'sessions.json'), { sessions: [] }) || { sessions: [] };
   const collectedTurns = [];
+  const seenTurnKeys = new Set();
   let maxSeenTs = 0;
 
   for (const sess of sessionsData.sessions || []) {
@@ -1009,6 +1066,8 @@ export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = 
       const ts = step.created_at ? Date.parse(step.created_at) : 0;
       if (Number.isFinite(ts) && ts > 0) {
         if (localDayKey(ts) !== day) continue;
+        // dsh-xingxi v0.3.1: lock cutoff timestamp at pickup start
+        if (cutoffTs > 0 && ts > cutoffTs) continue;
         // Same-day watermark rule (`dsh-xingxi` v0.2.6): later days' watermarks never wipe out backfills of earlier days
         if (watermark > 0 && (hasExplicitMin || watermarkDay === day) && ts <= watermark) continue;
         if (ts > maxSeenTs) maxSeenTs = ts;
@@ -1016,6 +1075,9 @@ export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = 
 
       const clock = Number.isFinite(ts) && ts > 0 ? localClockDisplay(ts) : day;
       const speaker = type === 'USER_INPUT' ? '主人' : 'Gemini-chan';
+      const dedupKey = `${speaker}|${clock}|${content.slice(0, 160)}`;
+      if (seenTurnKeys.has(dedupKey)) continue;
+      seenTurnKeys.add(dedupKey);
       collectedTurns.push({ ts: Number.isFinite(ts) ? ts : 0, clock, speaker, content: content.slice(0, 1200) });
     }
   }
@@ -1147,14 +1209,15 @@ export async function executeXingxiPickup({
     return { action: 'no_target', date: todayStr, material, cfg };
   }
 
+  const prompt = buildXingxiPickupPrompt(root, { date: todayStr, scheduleMode: effectiveMode, material });
+  await sender(targetConvId, prompt);
+
+  // dsh-xingxi v0.3.2: only mark lastScheduledDate AFTER sender succeeds so early failures can retry
   if (trigger === 'scheduled') {
     cfg.lastScheduledDate = todayStr;
     cfg.lastScheduledAt = nowMs;
     saveXingxiConfig(cfg, root);
   }
-
-  const prompt = buildXingxiPickupPrompt(root, { date: todayStr, scheduleMode: effectiveMode, material });
-  await sender(targetConvId, prompt);
 
   // Advance millisecond watermark after clean dispatch
   if (material.maxSeenTs > 0) {

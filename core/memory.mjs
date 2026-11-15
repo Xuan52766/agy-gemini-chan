@@ -236,10 +236,14 @@ export function evaluateMemory(mem, query, queryKeys, df, ruler, policy, now = D
   const atMs = mem.at ? Date.parse(mem.at) : NaN;
   const days = Number.isFinite(atMs) ? Math.max(0, (now - atMs) / DAY_MS) : 0;
 
-  const relatedSet = Array.isArray(mem.related) && mem.related.length
-    ? tokenize(mem.related.join(' '), root)
+  const relWords = [
+    ...(Array.isArray(mem.related) ? mem.related : []),
+    ...(Array.isArray(mem.keywords) ? mem.keywords : []),
+  ];
+  const relatedSet = relWords.length
+    ? tokenize(relWords.join(' '), root)
     : null;
-  const surfaceText = normalizeText(`${mem.text || ''} ${(mem.tags || []).join(' ')} ${(mem.related || []).join(' ')}`);
+  const surfaceText = normalizeText(`${mem.text || ''} ${(mem.tags || []).join(' ')} ${relWords.join(' ')}`);
   const memTokens = tokenize(surfaceText, root);
 
   const speechRarity = (k) => {
@@ -325,8 +329,11 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
     return out;
   }
 
-  // Three-level fallback clue filter matching dsh-fish-memory
-  const qAll = [...tokenize(query, root)];
+  // Three-level fallback clue filter matching dsh-fish-memory v1.5.9 + v1.6.0:
+  // Single-character tokens never count as clue evidence unless the entire query is single-char tokens.
+  const qRaw = [...tokenize(query, root)];
+  const qMulti = qRaw.filter((k) => String(k).length > 1);
+  const qAll = qMulti.length ? qMulti : qRaw;
   const qRare = qAll.filter((k) => {
     if (!(df.totalCount > 1)) return Boolean(df.get(k));
     return wordRarity(df, k) > 0.12;
@@ -378,19 +385,21 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
     deduped.push(item);
   }
 
-  const nonStable = deduped.map((x) => x.row).filter((r) => !r.m || r.m.category !== 'stable_profile');
-  const topC = nonStable.length ? nonStable[0].s.C : 0;
+  // dsh-fish-memory v1.6.1 (issue #38): Do NOT filter out `category === 'stable_profile'` here!
+  // Previously `stable_profile` items (including importance === 1 items) were excluded from recall.
+  const candidateRows = deduped.map((x) => x.row);
+  const topC = candidateRows.length ? candidateRows[0].s.C : 0;
   const tierCaps = [
     [0.6, policy.maxItems],
     [0.5, 4],
     [0.4, 3],
     [0, 1],
   ];
-  const dynamicCap = nonStable.length ? tierCaps.find(([floor]) => topC >= floor)[1] : 0;
+  const dynamicCap = candidateRows.length ? tierCaps.find(([floor]) => topC >= floor)[1] : 0;
   const slotCap = Math.min(dynamicCap, policy.maxItems);
 
-  const withinSlot = nonStable.slice(0, slotCap);
-  for (const row of nonStable.slice(slotCap)) {
+  const withinSlot = candidateRows.slice(0, slotCap);
+  for (const row of candidateRows.slice(slotCap)) {
     if (!row.omission) row.omission = 'weak';
   }
 
@@ -596,8 +605,11 @@ export function rememberMemory(input, { root, now = Date.now(), bypassQuota = fa
     importance,
     tags,
     related: Array.isArray(input?.related) ? input.related.slice(0, 8) : [],
+    keywords: Array.isArray(input?.keywords)
+      ? input.keywords.map((x) => String(x).trim()).filter(Boolean).slice(0, 20)
+      : [],
     factKey: finalFactKey,
-    category: input?.category === 'stable_profile' ? 'stable_profile' : 'event',
+    category: (input?.category === 'stable_profile' || importance >= 0.99) ? 'stable_profile' : 'event',
     at: input?.at || nowIso,
     createdAt: nowIso,
     activation0: 1,
@@ -651,6 +663,17 @@ export function mutateMemory(action, payload = {}, root) {
       }
       if (payload.category === 'stable_profile' || payload.category === 'event') {
         m.category = payload.category;
+      }
+      if (payload.related !== undefined || payload.keywords !== undefined) {
+        const rawKw = payload.related !== undefined ? payload.related : payload.keywords;
+        m.related = Array.isArray(rawKw)
+          ? rawKw.map((w) => String(w).trim()).filter(Boolean).slice(0, 12)
+          : String(rawKw || '')
+              .replace(/[，,、。；;]/g, ' ')
+              .split(/\s+/)
+              .map((w) => w.trim())
+              .filter(Boolean)
+              .slice(0, 12);
       }
       m.updatedAt = new Date(now).toISOString();
       saveMemoryStore(data, root);

@@ -1147,7 +1147,7 @@ button:disabled {
   border-top: 1px dashed var(--line);
 }
 
-/* Xingxi Constellation Stage */
+/* Xingxi 3D Constellation Universe Stage */
 .starmap-frame {
   display: flex;
   flex-direction: column;
@@ -1180,19 +1180,125 @@ button:disabled {
   font-size: 11.5px;
 }
 
+.starmap-viewport {
+  position: relative;
+  width: 100%;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #040610;
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, #040610);
+  box-shadow: inset 0 0 28px rgba(4, 6, 16, 0.85);
+}
+
 #starmap-canvas {
   width: 100%;
-  height: 220px;
+  height: 320px;
   display: block;
-  border-radius: var(--radius-sm);
-  background: #0d1322;
-  border: 1px solid color-mix(in srgb, var(--fg) 14%, #0d1322);
+  background: radial-gradient(ellipse at 50% 42%, #0c1430 0%, #050816 58%, #02030a 100%);
   cursor: grab;
   touch-action: none;
 }
 
 #starmap-canvas:active {
   cursor: grabbing;
+}
+
+.starmap-hud-tl {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  pointer-events: none;
+  z-index: 2;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+}
+
+.hud-kicker {
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  color: rgba(186, 230, 253, 0.65);
+  font-weight: 600;
+}
+
+.hud-sub {
+  font-size: 11px;
+  color: rgba(241, 245, 249, 0.88);
+}
+
+.starmap-tip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;
+  max-width: 240px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: rgba(8, 12, 26, 0.92);
+  border: 1px solid rgba(180, 198, 255, 0.28);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6);
+  color: #f1f5f9;
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.starmap-tip .tip-meta {
+  font-size: 10px;
+  color: #93c5fd;
+  margin-bottom: 2px;
+}
+
+.starmap-tip .tip-title {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.starmap-tip .tip-body {
+  margin-top: 3px;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 10.5px;
+}
+
+.starmap-timeline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+}
+
+.tl-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.tl-btn {
+  min-width: 24px;
+  padding: 2px 6px;
+}
+
+.tl-edge {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+#xx-tl-range {
+  flex: 1;
+  min-width: 70px;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.tl-cur {
+  min-width: 68px;
+  justify-content: center;
+  font-size: 10.5px;
 }
 
 .starmap-legend {
@@ -1218,14 +1324,14 @@ button:disabled {
 }
 
 .star-detail {
-  padding: 8px 10px;
+  padding: 9px 11px;
   border-radius: var(--radius-sm);
   background: var(--bg);
   border: 1px solid var(--line-soft);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.58;
   white-space: pre-wrap;
-  max-height: 140px;
+  max-height: 165px;
   overflow-y: auto;
 }
 

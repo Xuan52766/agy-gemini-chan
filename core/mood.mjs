@@ -19,6 +19,7 @@ import { clampNum, getDataPaths, localDayKey, readJsonSafe, writeJsonAtomic } fr
 
 export const MOOD_STEP_DIVISOR = 3;
 export const DIM_HALF_LIFE_MIN = 90;
+export const ANGRY_HALF_LIFE_MIN = 45;
 
 export const DIMS = [
   ['happy', '開心'],
@@ -28,7 +29,11 @@ export const DIMS = [
   ['worry', '擔心'],
   ['sad', '難過'],
   ['jealous', '吃醋'],
+  // dsh-feiyu-mood v0.9.0: 生氣只對「事」不對「人」（事情卡住、白忙一場、替對方氣；絕不因對方本人而生氣）
+  ['angry', '生氣'],
 ];
+
+const FAST_DECAY_DIMS = new Set(['angry']);
 
 const DIM_PLAIN = {
   happy: '心裡挺高興',
@@ -38,6 +43,7 @@ const DIM_PLAIN = {
   worry: '放心不下',
   sad: '有點難過',
   jealous: '有點吃醋',
+  angry: '心裡有火',
 };
 
 const DIM_SHORT = {
@@ -48,6 +54,7 @@ const DIM_SHORT = {
   worry: '有點掛心',
   sad: '有點難過',
   jealous: '有點酸',
+  angry: '有點氣',
 };
 
 export const INJECT_MODES = ['off', 'label', 'event'];
@@ -121,7 +128,7 @@ export function saveMoodConfig(patch, root) {
 }
 
 function emptyDims() {
-  return { happy: 0, calm: 0, sweet: 0, heartache: 0, worry: 0, sad: 0, jealous: 0 };
+  return { happy: 0, calm: 0, sweet: 0, heartache: 0, worry: 0, sad: 0, jealous: 0, angry: 0 };
 }
 
 function emptyMoodState(base = 70, now = Date.now()) {
@@ -202,9 +209,10 @@ export function decayMoodState(state, base = 70, now = Date.now(), halfHours = 1
   const km = 1 - Math.exp(-(Math.LN2 * ageMin) / halfMin);
   state.mood = state.mood + (base - state.mood) * km;
 
-  const ke = 1 - Math.exp(-(Math.LN2 * ageMin) / DIM_HALF_LIFE_MIN);
   if (!state.dims || typeof state.dims !== 'object') state.dims = emptyDims();
   for (const [k] of DIMS) {
+    const dimHalf = FAST_DECAY_DIMS.has(k) ? ANGRY_HALF_LIFE_MIN : DIM_HALF_LIFE_MIN;
+    const ke = 1 - Math.exp(-(Math.LN2 * ageMin) / dimHalf);
     state.dims[k] = Math.max(0, (Number(state.dims[k]) || 0) * (1 - ke));
   }
   state.lastDecayAt = now;
@@ -426,10 +434,6 @@ export function consumeMoodInjection({ root, slotId, consume = true, now = Date.
   const today = localDayKey(now);
   const saidToday = (state.saidAt || []).filter((t) => localDayKey(t) === today).length;
   if (saidToday >= cfg.injectPerDay) {
-    if (consume) {
-      state.injectedFor = state.updatedAt;
-      saveMoodState(state, { slotId, root });
-    }
     return { status: 'blocked', text: '', saidToday, cap: cfg.injectPerDay, state, inject: '' };
   }
 
@@ -461,14 +465,15 @@ export function buildJudgePrompt(cfg, userText, replyText, mode = 'user') {
       : '';
   return {
     system: `你是「${self}」，正在陪伴${owner}。` + modeNote + `
-下面給你一輪對話，判斷這一輪裡你的心情和 7 維情緒變化。
+下面給你一輪對話，判斷這一輪裡你的心情和 8 維情緒變化。
 只輸出一個 JSON 物件，不要 markdown 代碼塊：
-{"moodDelta":0,"dims":{"happy":0,"calm":0,"sweet":0,"heartache":0,"worry":0,"sad":0,"jealous":0},"reason":"","confidence":80}
+{"moodDelta":0,"dims":{"happy":0,"calm":0,"sweet":0,"heartache":0,"worry":0,"sad":0,"jealous":0,"angry":0},"reason":"","confidence":80}
 規則：
 - ${owner}累/煩/卡住/熬夜/難受/受委屈 -> heartache/worry 增加，moodDelta -1~-10（日常小情緒也要判 -1~-3，別輕易全 0）
-- 真的好事：被惦記/被哄/被誇/撒嬌/開心分享 -> happy/calm/sweet 增加，moodDelta +1~+10（通常 +1~+4）
-- 你自己這輪辦成事/受挫/被稱讚/遇到報錯 -> 也要算進自己心情與 sad/happy
+- 真的好事：被惦記/被哄/被誇/撒嬌/開心分享 -> happy/calm/sweet 增加，moodDelta +1~+10（通常 +1~+4）；日常報平安（「吃了、睡了」）moodDelta 給 0~+1，只微加 calm/sweet +1~+2
+- 你自己這輪辦成事/受挫/被稱讚/遇到報錯 -> 也要算進自己心情與 sad/happy/angry
 - 提別人/誇別人 -> jealous +1~3
+- 生氣（angry）只對「事」不對「人」：事情卡住、白忙一場、報錯反覆、或替${owner}受委屈抱不平（可與 heartache 一起漲），幅度 2~10；絕不因為${owner}本人而生氣，也不單獨拉低 mood
 - reason 寫具體過去式畫面（「${owner}……，${me}當時……」），不用「此刻/現在/一直」`,
     user: `${owner}說：\n${String(userText || '').slice(0, 1200)}\n\n你的回覆：\n${String(replyText || '').slice(0, 1200)}`,
   };
@@ -520,7 +525,12 @@ export function analyzeTurnLocally(userText = '', replyText = '', cfg = DEFAULT_
     {
       source: 'user',
       re: /(報錯|卡關|修不好|完蛋|好糟糕|真糟糕|糟糕了|壞掉了|失敗了|對不起|抱歉)/gi,
-      mood: -2, dims: { worry: 3, sad: 2 }, tag: '遇到狀況有點擔心',
+      mood: -2, dims: { worry: 3, sad: 2, angry: 3 }, tag: '遇到狀況有點擔心跟來氣',
+    },
+    {
+      source: 'user',
+      re: /(被欺負|被罵|被凶|太過分|氣死|白忙一場|白忙了|搞砸了)/g,
+      mood: -2, dims: { heartache: 3, angry: 5 }, tag: '替對方抱不平心裡有火',
     },
     {
       source: 'user',
@@ -530,7 +540,7 @@ export function analyzeTurnLocally(userText = '', replyText = '', cfg = DEFAULT_
     {
       source: 'user',
       re: /(晚安|早安|陪你|在這裡|我在你|沒事了|別擔心|好好休息|去休息|去睡覺|去喝水)/g,
-      mood: 2, dims: { calm: 4, sweet: 2 }, tag: '覺得踏實安心',
+      mood: 1, dims: { calm: 3, sweet: 2 }, tag: '覺得踏實安心',
     },
     {
       source: 'user',

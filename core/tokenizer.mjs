@@ -136,18 +136,20 @@ export function tokenize(s, root) {
 export function buildRarityTable(memories, root) {
   const df = new Map();
   for (const m of memories) {
-    if (!m || m.replacedBy || m.已被取代) continue;
+    if (!m || m.replacedBy || m.已被取代 || m.superseded) continue;
     const surface =
       String(m.text || '') +
       ' ' +
       (Array.isArray(m.tags) ? m.tags.join(' ') : '') +
       ' ' +
-      (Array.isArray(m.related) ? m.related.join(' ') : '');
+      (Array.isArray(m.related) ? m.related.join(' ') : '') +
+      ' ' +
+      (Array.isArray(m.keywords) ? m.keywords.join(' ') : '');
     for (const k of tokenize(surface, root)) {
       df.set(k, (df.get(k) || 0) + 1);
     }
   }
-  const count = memories.filter((m) => m && !m.replacedBy && !m.已被取代).length;
+  const count = memories.filter((m) => m && !m.replacedBy && !m.已被取代 && !m.superseded).length;
   df.totalCount = count;
   df.top = Math.log((count + 1) / 2);
   return df;
@@ -202,8 +204,11 @@ export function queryInformationScore(ruler, query, df, root) {
   const top = Math.log(n + 1);
   if (!(top > 0)) return Infinity;
   const dfMap = ruler?.df || {};
+  const rawTokens = [...tokenize(query, root)];
+  const multiTokens = rawTokens.filter((k) => String(k).length > 1);
+  const tokens = multiTokens.length ? multiTokens : rawTokens;
   let sum = 0;
-  for (const k of tokenize(query, root)) {
+  for (const k of tokens) {
     if (!df.get(k)) continue;
     sum += Math.log((n + 1) / ((Number(dfMap[k]) || 0) + 1));
   }

@@ -35,7 +35,7 @@ const TOOLS = [
       required: ['text'],
       properties: {
         text: { type: 'string', description: '要記住的一件事，簡潔明確。' },
-        importance: { type: 'number', description: '0~1，1=約定/稱呼/禁忌等必須常駐的事，0.5=一般事件與喜好（預設 0.5）。' },
+        importance: { type: 'number', description: '0~1，1=對方的名字/稱呼/約定/禁忌等要記一輩子的事，0.5=一般事件與喜好（預設 0.5）。' },
         tags: { type: 'array', items: { type: 'string' }, description: '關鍵詞標籤，例如 ["約定","作息"]。' },
         factKey: {
           type: 'string',
@@ -139,7 +139,7 @@ const TOOLS = [
   },
   {
     name: 'mood_status',
-    description: '讀取目前的心情數值（0~100）、7 維情緒、貓窩精力/飽食/羈絆度與目前啟用的人設摘要（嚴格限 gemini_cat 專案內）。',
+    description: '讀取目前的心情數值（0~100）、8 維情緒、貓窩精力/飽食/羈絆度與目前啟用的人設摘要（嚴格限 gemini_cat 專案內）。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -148,7 +148,7 @@ const TOOLS = [
   },
   {
     name: 'mood_update',
-    description: '由對話內的你依這輪真實互動，安靜記錄心情與 7 維情緒變化（寫入即時貓窩 UI 與時間線，無需外部 API）。',
+    description: '由對話內的你依這輪真實互動，安靜記錄心情與 8 維情緒變化（寫入即時貓窩 UI 與時間線，無需外部 API）。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -157,7 +157,7 @@ const TOOLS = [
         moodDelta: { type: 'number', description: '-10 到 +10 的心情起伏（負值代表心疼/擔心/委屈，正值代表開心/踏實/甜蜜）' },
         dims: {
           type: 'object',
-          description: '情緒維度微調：happy, calm, sweet, heartache, worry, sad, jealous（各 -10~+10）',
+          description: '情緒維度微調：happy, calm, sweet, heartache, worry, sad, jealous, angry（各 -10~+10；angry 只對事或替主人抱不平，絕不對主人本人）',
         },
         reason: { type: 'string', description: '具體過去式簡短原因（例如：主人主動摸了摸頭還說早安，心裡暖呼呼的）' },
         confidence: { type: 'number', description: '0~100 可信度（預設 80）' },
@@ -206,6 +206,18 @@ async function callTool(name, args = {}) {
       const isCh2 = chSpec === '2' || chSpec === '二';
       if (args.wholeChapter === true && isCh2) {
         const res = replaceChapterTwo(args.content, ROOT);
+        if (!res.ok) {
+          // dsh-xingxi v0.3.0: if whole-chapter replacement was rejected (e.g. <70% items), fall back to safe append
+          const fb = appendToChapter(2, args.content, ROOT);
+          if (fb.ok) {
+            return {
+              content: [{
+                type: 'text',
+                text: `${res.error} 已自動改走安全追加（第 2 章新增 ${fb.added} 條，跳過重複 ${fb.skipped} 條）。`,
+              }],
+            };
+          }
+        }
         return {
           content: [{
             type: 'text',
