@@ -279,10 +279,22 @@ export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDiv
   const cfg = loadMoodConfig(root);
   const state = loadMoodState({ slotId, root, now, persist: false });
 
-  const rawMoodDelta = clampNum(Math.round(Number(delta?.moodDelta) || 0), -15, 15, 0);
+  const subject = ['owner', 'self', 'other', 'none'].includes(delta?.subject) ? delta.subject : '';
+  const isBystanderOrGossip = subject === 'other' || subject === 'none';
+
+  let rawMoodDelta = clampNum(Math.round(Number(delta?.moodDelta) || 0), -15, 15, 0);
   const dimsDelta = emptyDims();
   for (const [k] of DIMS) {
     dimsDelta[k] = clampNum(Math.round(Number(delta?.dims?.[k]) || 0), -15, 15, 0);
+  }
+  // dsh-feiyu-mood v0.9.6: third-party / bystander topics ('other' | 'none') never pull companion mood
+  if (isBystanderOrGossip) {
+    rawMoodDelta = 0;
+    for (const [k] of DIMS) {
+      dimsDelta[k] = (k === 'calm' || k === 'happy')
+        ? clampNum(dimsDelta[k], 0, 1, 0)
+        : 0;
+    }
   }
   const reason = String(delta?.reason || '').trim().slice(0, 120);
   const confidence = clampNum(Math.round(Number(delta?.confidence ?? 75)), 0, 100, 75);
@@ -382,7 +394,7 @@ export function renderMoodLine(state, cfg, now = Date.now()) {
 export function buildInChatMoodRule(cfg) {
   if (!cfg.enabled || cfg.judgeMode === 'local') return '';
   const owner = cfg.ownerName || '主人';
-  return `【對話內心情自評（免外部 API）】本輪結束前若互動帶來明顯或細微的情緒起伏（被關心/誇讚/撒嬌/完成大事，或見${owner}累/煩/卡關/受委屈/冷落/吃醋），請安靜呼叫 \`mood_update\`（moodDelta -10..+10、dims、過去式簡短 reason、confidence）記錄這輪感受，但**不要在回覆中提到數值或工具名稱**；若只是普通寒暄或純寫碼無情緒波動，則不必硬調。`;
+  return `【對話內心情自評（免外部 API）】僅當本輪出現與${owner}或你自己直接相關的**明確情緒事件**（被深切關心/誇讚/哄好/完成大事，或${owner}明顯疲憊/受委屈/卡關/吃醋）時，才安靜呼叫 \`mood_update\`（含 \`subject: "owner"|"self"\`、moodDelta -10..+10、dims、過去式簡短 reason）；日常寒暄、小幅波動、純技術問答或聊外人八卦（\`other\`）**請勿呼叫工具**（背景 Stop 鉤子會自動零消耗兜底），也不要在回覆裡提到數值或工具名稱。`;
 }
 
 export function buildSessionMoodGuide(root, now = Date.now()) {
@@ -467,8 +479,9 @@ export function buildJudgePrompt(cfg, userText, replyText, mode = 'user') {
     system: `你是「${self}」，正在陪伴${owner}。` + modeNote + `
 下面給你一輪對話，判斷這一輪裡你的心情和 8 維情緒變化。
 只輸出一個 JSON 物件，不要 markdown 代碼塊：
-{"moodDelta":0,"dims":{"happy":0,"calm":0,"sweet":0,"heartache":0,"worry":0,"sad":0,"jealous":0,"angry":0},"reason":"","confidence":80}
+{"subject":"owner","moodDelta":0,"dims":{"happy":0,"calm":0,"sweet":0,"heartache":0,"worry":0,"sad":0,"jealous":0,"angry":0},"reason":"","confidence":80}
 規則：
+- 先判「這件事是誰的事」（subject）："${owner}" 的事填 "owner"、你自己的事填 "self"、聊外人/網友/劇中人物填 "other"、純閒聊填 "none"；若是 "other" 或 "none"，moodDelta 固定填 0
 - ${owner}累/煩/卡住/熬夜/難受/受委屈 -> heartache/worry 增加，moodDelta -1~-10（日常小情緒也要判 -1~-3，別輕易全 0）
 - 真的好事：被惦記/被哄/被誇/撒嬌/開心分享 -> happy/calm/sweet 增加，moodDelta +1~+10（通常 +1~+4）；日常報平安（「吃了、睡了」）moodDelta 給 0~+1，只微加 calm/sweet +1~+2
 - 你自己這輪辦成事/受挫/被稱讚/遇到報錯 -> 也要算進自己心情與 sad/happy/angry

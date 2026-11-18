@@ -62,7 +62,8 @@ async function main() {
   const turnStartAt = Number(sess?.lastTurnStartAt || 0);
 
   if (cfg.enabled && cfg.autoJudge && mode !== 'xingxi-pickup' && (fallbackInput || assistantText)) {
-    const turnHash = createHash('sha1').update(`${fallbackInput}\n---\n${assistantText}`).digest('hex');
+    const judgeUserInput = (mode === 'speak-up' || mode === 'nest-event') ? '' : fallbackInput;
+    const turnHash = createHash('sha1').update(`${mode}:${fallbackInput}\n---\n${assistantText}`).digest('hex');
     const state = loadMoodState({ root: ROOT, persist: false });
 
     if (state.lastTurnHash !== turnHash) {
@@ -72,7 +73,7 @@ async function main() {
         saveMoodState(state, { root: ROOT });
         appendLogLine(LOG, `Stop mood kept in-conversation AI judgement: mood=${Math.round(state.mood)}`);
       } else {
-        const delta = await evaluateTurnMood(fallbackInput, assistantText, { root: ROOT, mode });
+        const delta = await evaluateTurnMood(judgeUserInput, assistantText, { root: ROOT, mode });
         if (delta) {
           const res = applyMoodDelta(delta, { root: ROOT, source: mode === 'speak-up' ? 'speak-up' : 'chat' });
           const updated = res.state;

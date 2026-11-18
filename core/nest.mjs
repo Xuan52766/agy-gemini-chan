@@ -1,13 +1,13 @@
 /**
- * @fileoverview Interactive Cat Nest (貓窩) pet state, visual sprite resolver,
- * realistic cooldown / satiety / tiredness / daily-cap limits, live chat activity
- * bridge, and bidirectional event queue (`pendingForChat`) linking Sidecar actions
- * into Antigravity conversations.
+ * @fileoverview Interactive Cat Nest (貓窩) companion state, visual sprite resolver,
+ * balanced cooldown & daily-cap rules, bond progression + daily warmth tracking,
+ * live chat activity bridge, and bidirectional event queue (`pendingForChat`) linking
+ * Sidecar care actions into Antigravity conversations.
  *
  * NOTE: Per DSH principle, Cat Nest care buttons NEVER directly inflate `mood`
- * (`dsh-feiyu-mood`). Care interactions modify physical vitals (`satiety`,
- * `energy`, `bond`, `sleeping`) within daily & cooldown limits and feed into
- * real dialogue, where genuine conversational response drives mood.
+ * (`dsh-feiyu-mood`). Care interactions build long-term `bond` (羈絆) and daily
+ * companionship warmth (`todayWarmth` / `todayCareCount`) without decaying survival
+ * chores (`飽食/精力`), and feed naturally into real dialogue.
  */
 
 import { join } from 'node:path';
@@ -28,47 +28,41 @@ function nestStatePath(root) {
 export const CARE_RULES = {
   pet: {
     label: '摸摸頭',
-    cooldownSec: 15,
-    dailyCap: 6,
-    satiety: 0,
-    energy: 1,
+    cooldownSec: 8,
+    dailyCap: 15,
     bond: 2,
+    warmth: 12,
     reaction: '喵嗚～被輕輕摸摸腦袋，星髮夾晃了晃，尾巴高高翹起來了！',
     chatNote: '主人在貓窩側邊欄裡輕輕摸了摸你的頭',
     capMsg: '今天頭毛已經被摸得順順亮亮好多次啦，先陪她聊聊別的嘛～',
   },
   feed: {
     label: '餵小魚乾',
-    cooldownSec: 60,
-    dailyCap: 4,
-    maxSatiety: 95,
-    satiety: 18,
-    energy: 5,
+    cooldownSec: 12,
+    dailyCap: 10,
     bond: 3,
+    warmth: 18,
     reaction: '啊嗚一口吃掉香噴噴的星空小魚乾，滿足得眼睛瞇起來！',
-    chatNote: '主人在貓窩裡餵你吃了小魚乾',
-    capMsg: '今天的小魚乾扣打已經吃光光了，不能再挑食一直吃啦！',
+    chatNote: '主人在貓窩裡餵你吃了香噴噴的小魚乾點心',
+    capMsg: '今天的小魚乾點心袋已經空空啦，留一點明天再吃嘛！',
   },
   play: {
     label: '逗貓棒玩耍',
-    cooldownSec: 45,
-    dailyCap: 5,
-    minEnergy: 20,
-    satiety: -5,
-    energy: -8,
+    cooldownSec: 12,
+    dailyCap: 10,
     bond: 4,
-    reaction: '追著星星逗貓棒撲過去，差點在軟墊上滾成一團～',
+    warmth: 20,
+    reaction: '追著星星逗貓棒撲過去，開心地在軟墊上滾了一圈～',
     chatNote: '主人在貓窩裡揮著星星逗貓棒陪你玩了一會兒',
-    capMsg: '今天已經玩夠多回合啦，讓小貓爪休息一下嘛！',
+    capMsg: '今天已經玩夠多回合啦，讓小貓爪歇一下陪你聊天嘛！',
   },
   nap: {
     label: '蓋小被子休息',
     toggleSleep: true,
-    cooldownSec: 10,
-    dailyCap: 4,
-    satiety: 0,
-    energy: 14,
+    cooldownSec: 6,
+    dailyCap: 10,
     bond: 2,
+    warmth: 10,
     reaction: '鑽進星空毛毯裡蜷成一團打個小盹……zzZ',
     reactionWake: '伸了個大懶腰醒過來，雙色貓眼亮晶晶地看著你！',
     chatNote: '主人在貓窩裡幫你蓋好了星空小被子休息',
@@ -77,19 +71,20 @@ export const CARE_RULES = {
   },
   comfort: {
     label: '貼貼抱抱',
-    cooldownSec: 30,
-    dailyCap: 5,
-    satiety: 0,
-    energy: 3,
+    cooldownSec: 10,
+    dailyCap: 12,
     bond: 3,
+    warmth: 16,
     reaction: '被緊緊抱在懷裡蹭了蹭，感覺整個人都被好好接住了。',
     chatNote: '主人在貓窩裡給了你一個溫暖的貼貼抱抱',
     capMsg: '一直貼貼抱抱會害羞到冒煙的！先把這份溫暖收進心裡，跟她說說話吧～',
   },
 };
 
-const WHISPER_COOLDOWN_SEC = 8;
-const WHISPER_DAILY_BOND_CAP = 5;
+const WHISPER_COOLDOWN_SEC = 5;
+const WHISPER_DAILY_BOND_CAP = 10;
+const VARIETY_BONUS_TARGET = 3;
+const VARIETY_BONUS_BOND = 5;
 export const MIN_SLEEP_FOR_SPEAKUP_WAKE_MS = 20 * 60_000;
 export const MAX_AUTO_NAP_MS = 90 * 60_000;
 
@@ -98,13 +93,15 @@ function emptyLimits(now = Date.now()) {
     dayKey: localDayKey(now),
     lastActionAt: {},
     dailyCounts: {},
+    todayWarmth: 0,
+    varietyBonusClaimed: false,
   };
 }
 
 function emptyNestState(now = Date.now()) {
   return {
-    satiety: 76,
-    energy: 84,
+    satiety: 100,
+    energy: 100,
     bond: 45,
     sleeping: false,
     sleepStartedAt: 0,
@@ -133,10 +130,16 @@ function rolloverDailyLimits(limits, now = Date.now()) {
   if (clean.dayKey !== today) {
     clean.dayKey = today;
     clean.dailyCounts = {};
+    clean.todayWarmth = 0;
+    clean.varietyBonusClaimed = false;
   } else {
     clean.dailyCounts = clean.dailyCounts && typeof clean.dailyCounts === 'object'
       ? { ...clean.dailyCounts }
       : {};
+    const existingCount = Object.values(clean.dailyCounts).reduce((sum, n) => sum + Math.max(0, Number(n) || 0), 0);
+    const fallbackWarmth = Math.min(100, existingCount * 14);
+    clean.todayWarmth = clampNum(Math.round(Number(clean.todayWarmth) || fallbackWarmth), 0, 100, fallbackWarmth);
+    clean.varietyBonusClaimed = Boolean(clean.varietyBonusClaimed);
   }
   return clean;
 }
@@ -157,6 +160,9 @@ export function loadNestState(root, now = Date.now()) {
   const state = {
     ...base,
     ...raw,
+    satiety: 100,
+    energy: 100,
+    bond: clampNum(Math.round(Number(raw.bond ?? 45)), 0, 9999, 45),
     sleeping: rawSleeping,
     sleepStartedAt: resolvedSleepStart,
     lastWokeNote: raw.lastWokeNote && typeof raw.lastWokeNote === 'object' ? raw.lastWokeNote : null,
@@ -171,7 +177,6 @@ export function loadNestState(root, now = Date.now()) {
   if (state.sleeping && state.sleepStartedAt > 0 && (now - state.sleepStartedAt) >= MAX_AUTO_NAP_MS) {
     state.sleeping = false;
     state.sleepStartedAt = 0;
-    state.energy = clampNum(Math.max(state.energy, 92), 0, 100, 92);
     state.lastCareAt = now;
     state.lastWokeNote = {
       at: now,
@@ -187,16 +192,6 @@ export function loadNestState(root, now = Date.now()) {
     dirty = true;
   }
 
-  // Gentle time drift for satiety/energy
-  const elapsedMin = Math.max(0, (now - Number(state.lastCareAt || now)) / 60000);
-  if (elapsedMin >= 5) {
-    state.satiety = clampNum(state.satiety - elapsedMin * 0.08, 10, 100, state.satiety);
-    state.energy = state.sleeping
-      ? clampNum(state.energy + elapsedMin * 0.25, 10, 100, state.energy)
-      : clampNum(state.energy - elapsedMin * 0.04, 15, 100, state.energy);
-    state.lastCareAt = now;
-    dirty = true;
-  }
   if (dirty) writeJsonAtomic(p, state);
   return state;
 }
@@ -270,17 +265,6 @@ function checkActionLimit(action, state, now) {
     };
   }
 
-  if (action === 'feed' && state.satiety >= def.maxSatiety) {
-    return {
-      blocked: true,
-      limitReason: 'full',
-      cooldownLeftSec: 0,
-      dailyUsed,
-      dailyCap: def.dailyCap,
-      message: `小肚肚已經吃撐啦（飽食 ${Math.round(state.satiety)}/100），過一會兒消化完再吃小魚乾～`,
-    };
-  }
-
   if (action === 'play' && state.sleeping) {
     return {
       blocked: true,
@@ -288,22 +272,42 @@ function checkActionLimit(action, state, now) {
       cooldownLeftSec: 0,
       dailyUsed,
       dailyCap: def.dailyCap,
-      message: '還在被窩裡迷迷糊糊打盹呢，想一起玩的話先點「叫醒她」喔！',
-    };
-  }
-
-  if (action === 'play' && state.energy < def.minEnergy) {
-    return {
-      blocked: true,
-      limitReason: 'tired',
-      cooldownLeftSec: 0,
-      dailyUsed,
-      dailyCap: def.dailyCap,
-      message: `精力不太夠了（${Math.round(state.energy)}/100），尾巴都垂下來了，先讓她蓋被子歇一會兒吧…`,
+      message: '還在被窩裡迷迷糊糊打盹呢，想一起玩的話先點「叫醒她」或餵小魚乾喔！',
     };
   }
 
   return { blocked: false, cooldownLeftSec: 0, dailyUsed, dailyCap: def.dailyCap };
+}
+
+function applyVarietyBonusIfEligible(state) {
+  if (state.limits.varietyBonusClaimed) return false;
+  const distinctUsed = Object.values(state.limits.dailyCounts || {}).filter((n) => Number(n) > 0).length;
+  if (distinctUsed >= VARIETY_BONUS_TARGET) {
+    state.limits.varietyBonusClaimed = true;
+    state.bond = clampNum(state.bond + VARIETY_BONUS_BOND, 0, 9999, state.bond);
+    return true;
+  }
+  return false;
+}
+
+function computeTodayCareStats(state) {
+  const counts = state?.limits?.dailyCounts || {};
+  let todayCareCount = 0;
+  let varietyDone = 0;
+  for (const v of Object.values(counts)) {
+    const n = Math.max(0, Number(v) || 0);
+    if (n > 0) {
+      todayCareCount += n;
+      varietyDone += 1;
+    }
+  }
+  const todayWarmth = clampNum(
+    Math.round(Number(state?.limits?.todayWarmth) || Math.min(100, todayCareCount * 14)),
+    0,
+    100,
+    0,
+  );
+  return { todayCareCount, todayWarmth, varietyDone };
 }
 
 function pushPendingDeduped(state, entry) {
@@ -414,9 +418,11 @@ export function performNestAction(actionInput, { note = '', root, now = Date.now
     state.limits.lastActionAt.whisper = now;
     const prevCount = Number(state.limits.dailyCounts.whisper || 0);
     state.limits.dailyCounts.whisper = prevCount + 1;
+    state.limits.todayWarmth = clampNum((Number(state.limits.todayWarmth) || 0) + 15, 0, 100, 15);
     if (prevCount < WHISPER_DAILY_BOND_CAP) {
-      state.bond = clampNum(state.bond + 2, 0, 1000, state.bond);
+      state.bond = clampNum(state.bond + 2, 0, 9999, state.bond);
     }
+    const varietyBonusAwarded = applyVarietyBonusIfEligible(state);
 
     const wasSleeping = Boolean(state.sleeping);
     const entry = {
@@ -440,14 +446,16 @@ export function performNestAction(actionInput, { note = '', root, now = Date.now
       updatedAt: now,
     };
     saveNestState(state, root);
+    const bonusSuffix = varietyBonusAwarded ? `（✦ 達成今日 ${VARIETY_BONUS_TARGET} 種陪伴互動，額外羈絆 +${VARIETY_BONUS_BOND}！）` : '';
     return {
       ok: true,
       limited: false,
+      varietyBonusAwarded,
       dailyUsed: state.limits.dailyCounts.whisper,
       dailyCap: WHISPER_DAILY_BOND_CAP,
-      reaction: wasSleeping
+      reaction: (wasSleeping
         ? `把小紙條輕輕壓在枕邊的星空毛毯旁，等她迷糊睜眼就會看到：「${clean}」`
-        : `收到小紙條啦：「${clean}」（已存入下輪對話感應）`,
+        : `收到小紙條啦：「${clean}」（已存入下輪對話感應）`) + bonusSuffix,
       state,
     };
   }
@@ -477,6 +485,7 @@ export function performNestAction(actionInput, { note = '', root, now = Date.now
   state.totalInteractions = (state.totalInteractions || 0) + 1;
   state.limits.lastActionAt[action] = now;
   state.limits.dailyCounts[action] = Number(state.limits.dailyCounts[action] || 0) + 1;
+  state.limits.todayWarmth = clampNum((Number(state.limits.todayWarmth) || 0) + (def.warmth || 12), 0, 100, 12);
 
   const wasSleeping = Boolean(state.sleeping);
   let wokeFromSleep = false;
@@ -516,9 +525,11 @@ export function performNestAction(actionInput, { note = '', root, now = Date.now
     chatLine = '你在軟墊上還閉眼睡著時，主人輕輕抱了抱你（你此刻還在熟睡中沒有醒來，只用半夢半醒、含糊安心的夢囈簡短應一兩句就好）';
   }
 
-  state.satiety = clampNum(state.satiety + def.satiety, 0, 100, state.satiety);
-  state.energy = clampNum(state.energy + def.energy, 0, 100, state.energy);
-  state.bond = clampNum(state.bond + def.bond, 0, 1000, state.bond);
+  state.bond = clampNum(state.bond + def.bond, 0, 9999, state.bond);
+  const varietyBonusAwarded = applyVarietyBonusIfEligible(state);
+  if (varietyBonusAwarded) {
+    reaction = `${reaction}（✦ 達成今日 ${VARIETY_BONUS_TARGET} 種陪伴互動，額外羈絆 +${VARIETY_BONUS_BOND}！）`;
+  }
 
   const entry = {
     at: now,
@@ -541,6 +552,7 @@ export function performNestAction(actionInput, { note = '', root, now = Date.now
     ok: true,
     limited: false,
     wokeFromSleep,
+    varietyBonusAwarded,
     dailyUsed: state.limits.dailyCounts[action],
     dailyCap: def.dailyCap,
     reaction,
@@ -562,11 +574,13 @@ export function setNestActivity({ phase = 'idle', label = '', toolName = '' } = 
 
 /**
  * Peeks or drains pending Cat Nest UI interactions to inject into the next chat turn.
+ * Silent on ordinary turns when no care actions are pending and the cat is awake.
  */
 export function consumePendingNestContext(root, { consume = true, now = Date.now() } = {}) {
   const state = loadNestState(root, now);
   const bondLevel = Math.floor((state.bond || 0) / 50) + 1;
-  const header = `【Gemini-chan 貓窩即時狀態】飽食 ${Math.round(state.satiety)}/100｜精力 ${Math.round(state.energy)}/100｜羈絆 Lv.${bondLevel}（${state.bond}）${state.sleeping ? '｜狀態：在軟墊熟睡打盹中（側邊欄顯示睡姿立繪）' : ''}`;
+  const { todayCareCount } = computeTodayCareStats(state);
+  const header = `【Gemini-chan 貓窩狀態】羈絆 Lv.${bondLevel}（${state.bond}）｜今日陪伴 ${todayCareCount} 次${state.sleeping ? '｜狀態：在軟墊熟睡打盹中（側邊欄顯示睡姿立繪）' : ''}`;
 
   const events = state.pendingForChat || [];
   const wokeNote = state.lastWokeNote && (now - Number(state.lastWokeNote.at || 0)) <= 6 * 3600_000
@@ -597,7 +611,7 @@ export function consumePendingNestContext(root, { consume = true, now = Date.now
   if (state.sleeping) {
     lines.push('【睡覺狀態表現準則】你現在正閉著眼睛在貓窩裡睡覺，並沒有清醒地坐起來聊天；若這輪收到撫摸／抱抱／晚安或剛蓋被子入睡，請只用半夢半醒、迷糊帶濃濃困意的短句夢囈應聲（切勿突然表現得精力充沛、問東問西或把話題打開），也不要寫 `*動作*` 或 `（動作旁白）`。');
   } else if (events.length) {
-    lines.push('請用自然聊天口吻順口帶過這個互動（如撒嬌、道謝或抱怨吃太撐等），直接像傳訊息一樣對話，不要穿插 `*動作*` 或 `（動作旁白）`，也不要像唸系統日誌那樣照本宣科；如果心裡確實有情緒波動，可靜靜呼叫 `mood_update` 記下一筆。');
+    lines.push('請用自然聊天口吻順口帶過這個互動（如撒嬌、道謝或開心回應等），直接像傳訊息一樣對話，不要穿插 `*動作*` 或 `（動作旁白）`，也不要像唸系統日誌那樣照本宣科。');
   }
 
   if (dirty) {
@@ -611,6 +625,7 @@ export function consumePendingNestContext(root, { consume = true, now = Date.now
     pendingCount: events.length,
     sleeping: Boolean(state.sleeping),
     bondLevel,
+    todayCareCount,
   };
 }
 
@@ -633,6 +648,9 @@ export function resolveSpriteFile(moodValue, sleeping = false) {
 export function getNestSnapshot(root, moodValue = 70, now = Date.now()) {
   const state = loadNestState(root, now);
   const bondLevel = Math.floor((state.bond || 0) / 50) + 1;
+  const bondInLevel = (state.bond || 0) % 50;
+  const bondProgress = Math.round(bondInLevel * 2);
+  const { todayCareCount, todayWarmth, varietyDone } = computeTodayCareStats(state);
 
   const limits = {};
   for (const [act, def] of Object.entries(CARE_RULES)) {
@@ -657,10 +675,18 @@ export function getNestSnapshot(root, moodValue = 70, now = Date.now()) {
   };
 
   return {
-    satiety: Math.round(state.satiety),
-    energy: Math.round(state.energy),
+    satiety: 100,
+    energy: 100,
     bond: state.bond,
     bondLevel,
+    bondInLevel,
+    bondProgress,
+    todayCareCount,
+    todayWarmth,
+    varietyDone,
+    varietyTarget: VARIETY_BONUS_TARGET,
+    varietyBonusClaimed: Boolean(state.limits?.varietyBonusClaimed),
+    lastCareAt: Number(state.lastCareAt || 0),
     sleeping: Boolean(state.sleeping),
     syncChatOnCare: Boolean(state.syncChatOnCare),
     sprite: resolveSpriteFile(moodValue, state.sleeping),

@@ -8,6 +8,7 @@ import vm from 'node:vm';
 
 import { applyMoodDelta, getMoodSnapshot } from '../core/mood.mjs';
 import { getNestSnapshot, loadNestState, performNestAction } from '../core/nest.mjs';
+import { mutatePersona } from '../core/persona.mjs';
 import { appendDiary, appendToChapter } from '../core/xingxi.mjs';
 import { buildSidecarConfig, setupSidecar } from '../scripts/setup-sidecar.mjs';
 import { registerSidecarRoutes } from '../sidecar/routes.mjs';
@@ -148,14 +149,86 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
     assert.equal(getMoodSnapshot({ root: REPO_ROOT }).mood, moodAfterAi);
     assert.equal(getMoodSnapshot({ root: REPO_ROOT }).lastReason, '主人溫柔道早安');
 
-    // Turn 2 WITHOUT mood_update -> Stop runs local fallback and strips Antigravity XML wrappers
-    runHook('hooks/pre-invocation.mjs', {
+    // Turn 2 WITHOUT mood_update -> PreInvocation only injects the one-shot mood shift from Turn 1 (zero static rules / zero nest spam!)
+    // and Stop runs local fallback and strips Antigravity XML wrappers
+    const preTurn2 = runHook('hooks/pre-invocation.mjs', {
       conversationId: 'cat-conv-1',
       workspacePaths: [REPO_ROOT],
       invocationNum: 1,
       initialNumSteps: 3,
       lastUserInput: '今天真的好開心超棒',
     }, env);
+    const pre2Text = preTurn2.injectSteps?.[0]?.systemMessage?.systemMessage || '';
+    assert.match(pre2Text, /主人溫柔道早安/);
+    assert.doesNotMatch(pre2Text, /對話內長期記憶提醒|對話內心情自評|貓窩狀態/);
+
+    // Changing persona mid-conversation triggers a one-time persona re-injection on next turn
+    mutatePersona('create', { name: '新切換人設', text: 'UPDATED_PERSONA_TEXT', activate: true }, REPO_ROOT);
+    const prePersonaChanged = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 4,
+      lastUserInput: '換新造型囉',
+    }, env);
+    assert.match(prePersonaChanged.injectSteps?.[0]?.systemMessage?.systemMessage || '', /UPDATED_PERSONA_TEXT/);
+    const preAfterPersonaSynced = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 5,
+      lastUserInput: '普通閒聊不重複塞人設',
+    }, env);
+    assert.deepEqual(preAfterPersonaSynced, {});
+
+    // Mid-turn tool continuation via transcript.jsonl (GENERIC tool output after USER_INPUT) is skipped even when invocationNum=1 and initialNumSteps changes
+    writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ step_index: 10, type: 'USER_INPUT', content: '<USER_REQUEST>\n普通閒聊不重複塞人設\n</USER_REQUEST>' }),
+        JSON.stringify({ step_index: 11, type: 'PLANNER_RESPONSE', content: '', tool_calls: [{ name: 'mood_status' }] }),
+        JSON.stringify({ step_index: 12, type: 'GENERIC', content: '{"mood":70}' }),
+      ].join('\n'),
+      'utf-8',
+    );
+    performNestAction('feed', { root: REPO_ROOT, now: Date.now() + 30_000 });
+    const midTurnToolCall = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      transcriptPath,
+      invocationNum: 1,
+      initialNumSteps: 13,
+      lastUserInput: '<USER_REQUEST>\n普通閒聊不重複塞人設\n</USER_REQUEST>',
+    }, env);
+    assert.deepEqual(midTurnToolCall, {});
+    // Pending feed event was NOT consumed during mid-turn tool call
+    assert.equal(getNestSnapshot(REPO_ROOT).pendingCount, 1);
+
+    // Sidecar Speak-Up SYSTEM_MESSAGE in transcript.jsonl is classified as 'speak-up' even when payload.lastUserInput is stale
+    const sessionsBeforeSpeakUp = JSON.parse(readFileSync(join(dataDir, 'runtime', 'sessions.json'), 'utf8'));
+    const speechTsBefore = sessionsBeforeSpeakUp.sessions.find((s) => s.conversationId === 'cat-conv-1').lastUserSpeechAt;
+    writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ step_index: 10, type: 'USER_INPUT', content: '<USER_REQUEST>\n普通閒聊不重複塞人設\n</USER_REQUEST>' }),
+        JSON.stringify({ step_index: 13, type: 'PLANNER_RESPONSE', content: '回覆完成' }),
+        JSON.stringify({ step_index: 14, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: '<speak-up>\n[SPEAK_UP_INTERNAL]\n好久沒人說話了\n</speak-up>' }),
+      ].join('\n'),
+      'utf-8',
+    );
+    const speakUpPre = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      transcriptPath,
+      invocationNum: 1,
+      initialNumSteps: 15,
+      lastUserInput: '<USER_REQUEST>\n普通閒聊不重複塞人設\n</USER_REQUEST>',
+    }, env);
+    // Drains pending feed event on speak-up turn, does NOT overwrite lastUserSpeechAt!
+    assert.match(speakUpPre.injectSteps?.[0]?.systemMessage?.systemMessage || '', /小魚乾/);
+    const sessionsAfterSpeakUp = JSON.parse(readFileSync(join(dataDir, 'runtime', 'sessions.json'), 'utf8'));
+    const speechTsAfter = sessionsAfterSpeakUp.sessions.find((s) => s.conversationId === 'cat-conv-1').lastUserSpeechAt;
+    assert.equal(speechTsAfter, speechTsBefore);
     writeFileSync(
       transcriptPath,
       [
@@ -281,7 +354,7 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
       name: 'nest_interact',
       arguments: { action: 'pet' },
     });
-    assert.match(nest.result.content[0].text, /飽食/);
+    assert.match(nest.result.content[0].text, /羈絆 Lv\./);
 
     // Test xingxi_append + Ch2 wholeChapter replacement guard
     await rpc(6, 'tools/call', {

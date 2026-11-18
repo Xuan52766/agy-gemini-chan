@@ -62,28 +62,28 @@
 
       <!-- Compact Vitals Readout Strip -->
       <div class="vitals-strip" aria-label="貓窩日常狀態">
-        <div class="vital-cell">
+        <div class="vital-cell" title="隨對話互動自然變化的心情分數">
           <div class="vital-meta">
             <span>心情</span>
             <strong id="val-mood-mirror" class="tabular">70</strong>
           </div>
           <div class="vital-track"><div id="bar-mood" class="vital-fill fill-mood"></div></div>
         </div>
-        <div class="vital-cell">
+        <div class="vital-cell" title="每次照護互動都會永久累積羈絆（每 50 點升一級，永不倒扣）">
           <div class="vital-meta">
-            <span>飽食</span>
-            <strong id="val-satiety" class="tabular">76</strong>
+            <span>羈絆進度</span>
+            <strong id="val-satiety" class="tabular">45/50</strong>
           </div>
           <div class="vital-track"><div id="bar-satiety" class="vital-fill fill-satiety"></div></div>
         </div>
-        <div class="vital-cell">
+        <div class="vital-cell" title="今日陪伴暖度（每天集滿 3 種不同互動可額外獲得 +5 羈絆加成）">
           <div class="vital-meta">
-            <span>精力</span>
-            <strong id="val-energy" class="tabular">84</strong>
+            <span>今日陪伴</span>
+            <strong id="val-energy" class="tabular">0 次</strong>
           </div>
           <div class="vital-track"><div id="bar-energy" class="vital-fill fill-energy"></div></div>
         </div>
-        <div class="vital-bond">
+        <div class="vital-bond" title="目前累積羈絆等級">
           <span>羈絆</span>
           <strong id="val-bond" class="tabular">Lv.1</strong>
         </div>
@@ -94,27 +94,27 @@
         <button type="button" class="care-btn" data-action="pet">
           <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.9-2.5L3.3 16a2 2 0 0 1 2.8-2.8L8 15"/></svg>
           <span class="btn-label">摸頭</span>
-          <span class="care-badge" data-badge="pet">0/6</span>
+          <span class="care-badge" data-badge="pet">0/15</span>
         </button>
         <button type="button" class="care-btn" data-action="feed">
           <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 12c.9-3.5 4.8-6 9.5-6 3 0 5 1.5 6 3-1 1.5-3 3-6 3-4.7 0-8.6-2.5-9.5-6z" opacity=".01"/><path d="M2 12c3.5-4 8.5-5 13-2.5L20 7v10l-5-2.5C10.5 17 5.5 16 2 12z"/><circle cx="7" cy="11.5" r=".8" fill="currentColor"/></svg>
           <span class="btn-label">小魚乾</span>
-          <span class="care-badge" data-badge="feed">0/4</span>
+          <span class="care-badge" data-badge="feed">0/10</span>
         </button>
         <button type="button" class="care-btn" data-action="play">
           <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20L15 9"/><path d="M15 9l4-4"/><path d="M17 4l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
           <span class="btn-label">逗貓棒</span>
-          <span class="care-badge" data-badge="play">0/5</span>
+          <span class="care-badge" data-badge="play">0/10</span>
         </button>
         <button type="button" class="care-btn" data-action="comfort">
           <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12.572l-7.5 7.428-7.5-7.428A5 5 0 1 1 12 6.006a5 5 0 1 1 7.5 6.572z"/></svg>
           <span class="btn-label">貼貼</span>
-          <span class="care-badge" data-badge="comfort">0/5</span>
+          <span class="care-badge" data-badge="comfort">0/12</span>
         </button>
         <button type="button" class="care-btn" id="btn-nap" data-action="nap">
           <svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
           <span class="btn-label">打盹</span>
-          <span class="care-badge" data-badge="nap">0/4</span>
+          <span class="care-badge" data-badge="nap">0/10</span>
         </button>
       </div>
 
@@ -460,6 +460,14 @@
                 <div class="field">
                   <label for="pol-dailyQuota">每日寫入條數配額</label>
                   <input id="pol-dailyQuota" type="number" min="1" max="100" />
+                </div>
+                <div class="field">
+                  <label for="pol-repeatWindow">同條記憶防重複 (輪 0–40)</label>
+                  <input id="pol-repeatWindow" type="number" min="0" max="40" />
+                </div>
+                <div class="field">
+                  <label for="pol-factCap">常駐檔案單輪上限 (0–5)</label>
+                  <input id="pol-factCap" type="number" min="0" max="5" />
                 </div>
               </div>
             </div>

@@ -10,6 +10,7 @@
  * 5. Drains pending Cat Nest interactions (`摸摸頭/餵小魚乾/小紙條`) so Sidecar care directly enters dialogue
  */
 
+import { createHash } from 'node:crypto';
 import { classifyInputSource, loadRegisteredSessions, registerProjectConversation } from '../core/bridge.mjs';
 import { buildInChatMemoryRule, recallMemories } from '../core/memory.mjs';
 import { buildInChatMoodRule, consumeMoodInjection, loadMoodConfig } from '../core/mood.mjs';
@@ -22,10 +23,23 @@ import {
   getProjectRoot,
   stripAntigravityWrappers,
 } from '../core/storage.mjs';
-import { ensureInProjectScope, injectSystemContext, readHookInput, writeHookOutput } from './lib.mjs';
+import {
+  ensureInProjectScope,
+  injectSystemContext,
+  inspectTranscriptTail,
+  readHookInput,
+  writeHookOutput,
+} from './lib.mjs';
 
 const ROOT = getProjectRoot();
 const LOG = `${getDataPaths(ROOT).runtimeDir}/hooks.log`;
+
+function computePersonaHash(persona) {
+  return createHash('sha1')
+    .update(`${persona?.source || 'none'}:${persona?.persona?.id || ''}:${persona?.effectiveText || ''}`)
+    .digest('hex')
+    .slice(0, 16);
+}
 
 function main() {
   const payload = readHookInput();
@@ -35,14 +49,34 @@ function main() {
   }
 
   const sid = payload.conversationId || '';
-  const userInput = stripAntigravityWrappers(payload.lastUserInput);
-  const sourceKind = classifyInputSource(userInput);
-  const invocationNum = Number(payload.invocationNum || 1);
-  const turnKey = `${payload.initialNumSteps ?? ''}:${userInput.slice(0, 80)}`;
-
   const sessions = loadRegisteredSessions(ROOT);
   const prevSess = sessions.sessions.find((s) => canonicalSessionKey(s.conversationId) === canonicalSessionKey(sid));
-  const isMidTurnContinuation = invocationNum > 1 || (prevSess && prevSess.lastInjectedTurnKey === turnKey && turnKey !== ':');
+
+  const transcriptPath = payload.transcriptPath || prevSess?.transcriptPath || '';
+  const transcriptInfo = inspectTranscriptTail(transcriptPath);
+  const cleanPayloadInput = stripAntigravityWrappers(payload.lastUserInput);
+
+  // Sidecar.sendMessage writes a SYSTEM_MESSAGE to transcript.jsonl while payload.lastUserInput stays stale
+  const effectiveInput = (transcriptInfo.hasTranscript && transcriptInfo.isSidecarInput && transcriptInfo.latestInputText)
+    ? transcriptInfo.latestInputText
+    : (cleanPayloadInput || transcriptInfo.latestInputText || '');
+
+  const sourceKind = classifyInputSource(effectiveInput);
+  const invocationNum = Number(payload.invocationNum || 1);
+  const turnKey = (transcriptInfo.hasTranscript && transcriptInfo.latestInputStepIndex >= 0)
+    ? `step-${transcriptInfo.latestInputStepIndex}:${effectiveInput.slice(0, 80)}`
+    : `${payload.initialNumSteps ?? ''}:${effectiveInput.slice(0, 80)}`;
+
+  const isNewPayloadUserInput = Boolean(cleanPayloadInput && cleanPayloadInput !== (prevSess?.lastRawUserInput || ''));
+  const isMidTurnContinuation =
+    invocationNum > 1 ||
+    Boolean(prevSess && prevSess.lastInjectedTurnKey === turnKey && turnKey !== ':') ||
+    Boolean(transcriptInfo.isMidTurnToolContinuation && !isNewPayloadUserInput && !transcriptInfo.isSidecarInput);
+
+  const persona = resolvePersona({ root: ROOT, sessionId: sid });
+  const personaHash = computePersonaHash(persona);
+  const needsPersonaInject = Boolean(persona.effectiveText && prevSess?.injectedPersonaHash !== personaHash);
+  const needsStaticRules = !prevSess?.hasInjectedStaticRules || needsPersonaInject;
 
   registerProjectConversation(
     {
@@ -54,7 +88,15 @@ function main() {
       sourceKind,
       lastUserMessageAt: sourceKind === 'user' && !isMidTurnContinuation ? Date.now() : 0,
       turnStartedAt: !isMidTurnContinuation ? Date.now() : 0,
-      turnKey,
+      turnKey: !isMidTurnContinuation ? turnKey : undefined,
+      lastRawUserInput: !isMidTurnContinuation && sourceKind === 'user' ? cleanPayloadInput : undefined,
+      lastInputStepIndex: !isMidTurnContinuation && transcriptInfo.latestInputStepIndex >= 0
+        ? transcriptInfo.latestInputStepIndex
+        : undefined,
+      injectedPersonaHash: !isMidTurnContinuation ? personaHash : undefined,
+      hasInjectedStaticRules: !isMidTurnContinuation
+        ? Boolean(prevSess?.hasInjectedStaticRules || sourceKind !== 'xingxi-pickup')
+        : undefined,
     },
     ROOT,
   );
@@ -62,7 +104,7 @@ function main() {
   const KEEP_SLEEPING_RE = /^(?:(?:晚安|安安|好夢|你?快睡吧?|先?去睡吧?|繼續睡吧?|回去睡吧?|好好休息吧?|好好睡吧?|乖乖睡吧?|睡吧|睡覺吧?|不要醒|別醒|別起床|不用起來|再睡一下|晚安喵)[，,、！!~～.。…\s]*)+$/i;
   let nestState = loadNestState(ROOT);
   let wokeByChat = false;
-  if (!isMidTurnContinuation && sourceKind === 'user' && nestState.sleeping && !KEEP_SLEEPING_RE.test(userInput.trim())) {
+  if (!isMidTurnContinuation && sourceKind === 'user' && nestState.sleeping && !KEEP_SLEEPING_RE.test(effectiveInput.trim())) {
     const woke = wakeFromSleep(ROOT, {
       reason: 'user-chat',
       label: '聽到你的聲音揉揉眼醒來，正準備回你話…',
@@ -72,7 +114,7 @@ function main() {
     nestState = woke.state;
   }
 
-  const shortPreview = userInput.replace(/\s+/g, ' ').slice(0, 18);
+  const shortPreview = effectiveInput.replace(/\s+/g, ' ').slice(0, 18);
   if (nestState.sleeping) {
     setNestActivity(
       {
@@ -85,7 +127,7 @@ function main() {
       },
       ROOT,
     );
-  } else {
+  } else if (!isMidTurnContinuation) {
     setNestActivity(
       {
         phase: 'thinking',
@@ -98,7 +140,7 @@ function main() {
               : sourceKind === 'nest-event'
                 ? '感受到貓窩裡的互動，正開心地想回應你…'
                 : shortPreview
-                  ? `在想「${shortPreview}${userInput.length > 18 ? '…' : ''}」`
+                  ? `在想「${shortPreview}${effectiveInput.length > 18 ? '…' : ''}」`
                   : '在思考要怎麼回覆你…',
       },
       ROOT,
@@ -112,18 +154,17 @@ function main() {
 
   const sections = [];
 
-  // 1. Project-only Persona
-  const persona = resolvePersona({ root: ROOT, sessionId: sid });
-  if (persona.effectiveText) {
+  // 1. Project-only Persona — injected ONLY if not yet injected in this session or if user changed/edited persona
+  if (needsPersonaInject) {
     sections.push(persona.effectiveText);
   }
 
-  // 2. Fish Memory recall (genuine human dialogue or nest event)
-  if (userInput && sourceKind !== 'work' && sourceKind !== 'xingxi-pickup') {
-    const recalled = recallMemories(userInput, {
+  // 2. Fish Memory recall (only on genuine human dialogue or nest event, never on speak-up / work / xingxi-pickup)
+  if (effectiveInput && (sourceKind === 'user' || sourceKind === 'nest-event')) {
+    const recalled = recallMemories(effectiveInput, {
       root: ROOT,
       recordSample: sourceKind === 'user',
-      saveTrace: true,
+      saveTrace: sourceKind === 'user',
     });
     if (recalled.rendered) sections.push(recalled.rendered);
   }
@@ -134,16 +175,14 @@ function main() {
     sections.push(moodInject.inject);
   }
 
-  // 4. Drain Cat Nest UI interactions into conversation turn
+  // 4. Drain Cat Nest UI interactions into conversation turn (silent on ordinary turns when no action pending)
   const nestCtx = consumePendingNestContext(ROOT, { consume: true });
   if (nestCtx.text) {
     sections.push(nestCtx.text);
-  } else {
-    sections.push(nestCtx.statusSummary);
   }
 
-  // 5. In-conversation zero-API mood evaluation prompt & Fish Memory write reminder
-  if (sourceKind !== 'xingxi-pickup') {
+  // 5. Static in-conversation rules — injected once per session (or when persona changes), not repeated every turn
+  if (needsStaticRules && sourceKind !== 'xingxi-pickup') {
     const moodCfg = loadMoodConfig(ROOT);
     const judgeRule = buildInChatMoodRule(moodCfg);
     if (judgeRule) sections.push(judgeRule);

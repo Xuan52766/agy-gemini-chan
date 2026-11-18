@@ -1284,10 +1284,14 @@
     renderSprite(nest.sprite);
 
     $('bar-mood').style.width = `${mood.mood}%`;
-    $('bar-satiety').style.width = `${nest.satiety}%`;
-    $('val-satiety').textContent = nest.satiety;
-    $('bar-energy').style.width = `${nest.energy}%`;
-    $('val-energy').textContent = nest.energy;
+    const bondInLevel = nest.bondInLevel ?? ((nest.bond || 0) % 50);
+    const bondProgress = nest.bondProgress ?? Math.round(bondInLevel * 2);
+    const todayCareCount = nest.todayCareCount ?? 0;
+    const todayWarmth = nest.todayWarmth ?? Math.min(100, todayCareCount * 14);
+    $('bar-satiety').style.width = `${bondProgress}%`;
+    $('val-satiety').textContent = `${bondInLevel}/50`;
+    $('bar-energy').style.width = `${todayWarmth}%`;
+    $('val-energy').textContent = `${todayCareCount} 次`;
     $('val-bond').textContent = `Lv.${nest.bondLevel}`;
 
     const napBtn = $('btn-nap');
@@ -1394,6 +1398,8 @@
     setIfClean($('pol-halfLife'), memory.policy.baseHalfLifeDays, 'policy');
     setIfClean($('pol-emotionHalfLife'), memory.policy.emotionHalfLifeDays, 'policy');
     setIfClean($('pol-dailyQuota'), memory.policy.dailyQuota, 'policy');
+    setIfClean($('pol-repeatWindow'), memory.policy.repeatWindow ?? 15, 'policy');
+    setIfClean($('pol-factCap'), memory.policy.factCap ?? 1, 'policy');
 
     // Tab 3: Xingxi
     $('xingxi-stats-badge').textContent = `${xingxi.stars.length} 顆星 · ${xingxi.fileCount} 檔案`;
@@ -1883,6 +1889,8 @@
         baseHalfLifeDays: Number($('pol-halfLife').value),
         emotionHalfLifeDays: Number($('pol-emotionHalfLife').value),
         dailyQuota: Number($('pol-dailyQuota').value),
+        repeatWindow: Number($('pol-repeatWindow')?.value ?? 15),
+        factCap: Number($('pol-factCap')?.value ?? 1),
       }),
     });
     setDirty('policy', false);

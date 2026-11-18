@@ -15,6 +15,7 @@ import { clampNum, getDataPaths, localDayKey, readJsonSafe, writeJsonAtomic } fr
 import {
   buildRarityTable,
   isSubstantiveClue,
+  loadCommonWords,
   normalizeText,
   queryInformationScore,
   RECALL_DUPLICATE_THRESHOLD,
@@ -43,6 +44,8 @@ export const DEFAULT_MEMORY_POLICY = {
   rarityK: 0.8,
   queryGate: 0.8,
   unknownActivation: 0.5,
+  repeatWindow: 15,
+  factCap: 1,
   ownerPronoun: 'ta',
   selfPronoun: '我',
 };
@@ -95,6 +98,8 @@ export function normalizePolicy(raw) {
     rarityK: clampNum(m.rarityK, 0.1, 5, DEFAULT_MEMORY_POLICY.rarityK),
     queryGate: clampNum(m.queryGate, 0, 3, DEFAULT_MEMORY_POLICY.queryGate),
     unknownActivation: clampNum(m.unknownActivation, 0, 1, DEFAULT_MEMORY_POLICY.unknownActivation),
+    repeatWindow: Math.round(clampNum(m.repeatWindow, 0, 40, DEFAULT_MEMORY_POLICY.repeatWindow)),
+    factCap: Math.round(clampNum(m.factCap, 0, 5, DEFAULT_MEMORY_POLICY.factCap)),
     ownerPronoun: String(m.ownerPronoun || DEFAULT_MEMORY_POLICY.ownerPronoun).trim().slice(0, 12) || 'ta',
     selfPronoun: String(m.selfPronoun || DEFAULT_MEMORY_POLICY.selfPronoun).trim().slice(0, 12) || '我',
   };
@@ -109,6 +114,8 @@ export function loadMemoryStore(root) {
       policy: normalizePolicy({}),
       memories: [],
       ruler: { n: 0, df: {} },
+      turnSeq: 0,
+      recentInjected: {},
       traces: [],
     };
     writeJsonAtomic(p, init);
@@ -119,6 +126,8 @@ export function loadMemoryStore(root) {
     policy: normalizePolicy(raw.policy),
     memories: Array.isArray(raw.memories) ? raw.memories : [],
     ruler: raw.ruler && typeof raw.ruler === 'object' ? raw.ruler : { n: 0, df: {} },
+    turnSeq: Math.max(0, Math.round(Number(raw.turnSeq) || 0)),
+    recentInjected: raw.recentInjected && typeof raw.recentInjected === 'object' ? { ...raw.recentInjected } : {},
     traces: Array.isArray(raw.traces) ? raw.traces.slice(-20) : [],
   };
 }
@@ -129,6 +138,8 @@ export function saveMemoryStore(store, root) {
     policy: normalizePolicy(store.policy),
     memories: Array.isArray(store.memories) ? store.memories : [],
     ruler: store.ruler || { n: 0, df: {} },
+    turnSeq: Math.max(0, Math.round(Number(store.turnSeq) || 0)),
+    recentInjected: store.recentInjected && typeof store.recentInjected === 'object' ? store.recentInjected : {},
     traces: Array.isArray(store.traces) ? store.traces.slice(-20) : [],
   };
   writeJsonAtomic(storePath(root), clean);
@@ -256,8 +267,12 @@ export function evaluateMemory(mem, query, queryKeys, df, ruler, policy, now = D
   };
 
   let s = 0;
+  let hitN = 0;
+  let hitLen = 0;
   for (const k of queryKeys) {
     if (!memTokens.has(k)) continue;
+    hitN += 1;
+    hitLen += String(k).length;
     const weight = !relatedSet ? 1 : (relatedSet.has(k) ? 1 : 0.7);
     s += wordRarity(df, k) * speechRarity(k) * weight;
   }
@@ -290,7 +305,18 @@ export function evaluateMemory(mem, query, queryKeys, df, ruler, policy, now = D
     }
   }
 
-  return { C, A, E, I, P, s, timeHit };
+  return { C, A, E, I, P, s, hitN, hitLen, timeHit };
+}
+
+function compareRecallRank(a, b) {
+  const dc = Math.round(((b?.s?.C || 0) - (a?.s?.C || 0)) * 1000);
+  if (dc === 0) {
+    const dn = (b?.s?.hitN || 0) - (a?.s?.hitN || 0);
+    if (dn !== 0) return dn;
+    const dl = (b?.s?.hitLen || 0) - (a?.s?.hitLen || 0);
+    if (dl !== 0) return dl;
+  }
+  return (b?.s?.P || 0) - (a?.s?.P || 0);
 }
 
 /**
@@ -309,6 +335,7 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
 
   if (recordSample && query) {
     data.ruler = recordSpeechSample(data.ruler, query, root);
+    data.turnSeq = (Number(data.turnSeq) || 0) + 1;
   }
 
   const infoScore = queryInformationScore(data.ruler, query, df, root);
@@ -343,6 +370,30 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
   const qNonCommon = qAll.filter((k) => isSubstantiveClue(k, root));
   const qFinal = useSubstantive ? qSubstantive : (qNonCommon.length ? qNonCommon : qAll);
 
+  // dsh-fish-memory v1.6.3: strict raw-query gate for `stable_profile` long-term facts
+  const commonMap = loadCommonWords(root);
+  const rawMulti = qMulti;
+  const rawRare = rawMulti.filter((k) => {
+    const isRareInBank = !(df.totalCount > 1) ? Boolean(df.get(k)) : wordRarity(df, k) > 0.12;
+    return isRareInBank && isSubstantiveClue(k, root);
+  });
+  const passesFactGate = (mem) => {
+    if (!mem || mem.category !== 'stable_profile') return true;
+    if (!rawMulti.length) return true;
+    const relWords = [
+      ...(Array.isArray(mem.related) ? mem.related : []),
+      ...(Array.isArray(mem.keywords) ? mem.keywords : []),
+    ];
+    const memSet = tokenize(`${mem.text || ''} ${(mem.tags || []).join(' ')} ${relWords.join(' ')}`, root);
+    const hits = rawMulti.filter((k) => memSet.has(k));
+    const rareHits = rawRare.filter((k) => memSet.has(k));
+    if (rawMulti.length === 1) {
+      return rareHits.length >= 1;
+    }
+    const singleProperNoun = hits.length === 1 && !commonMap.has(hits[0]) && (df.get(hits[0]) || 0) <= 1;
+    return rareHits.length >= 1 && (hits.length >= 2 || singleProperNoun);
+  };
+
   const scored = active.map((m) => ({
     m,
     s: evaluateMemory(m, query, qFinal, df, data.ruler, policy, now, root),
@@ -350,13 +401,14 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
     nearMiss: false,
   }));
 
-  const picked = [];
+  let picked = [];
   for (const row of scored) {
     if (row.s.C <= 0) row.omission = 'hard_gate';
     else if (row.s.C < policy.threshold) row.omission = 'below_threshold';
+    else if (!passesFactGate(row.m)) row.omission = 'fact_unmatched';
     else picked.push(row);
   }
-  picked.sort((a, b) => b.s.P - a.s.P);
+  picked.sort(compareRecallRank);
 
   // Near-miss safety rescue (`>= 75%` of threshold if nothing reached threshold)
   if (!picked.length) {
@@ -373,6 +425,22 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
     }
   }
 
+  // dsh-fish-memory v1.6.3: repeatWindow suppression (skip memories injected within the last N user turns)
+  const repeatWin = Math.max(0, Number.isFinite(policy.repeatWindow) ? policy.repeatWindow : 15);
+  const currentTurn = Number(data.turnSeq || 0);
+  if (recordSample && repeatWin > 0 && currentTurn > 0 && data.recentInjected) {
+    const nonRepeated = [];
+    for (const row of picked) {
+      const lastTurn = Number(data.recentInjected[String(row.m.id)]);
+      if (Number.isFinite(lastTurn) && lastTurn > 0 && (currentTurn - lastTurn) < repeatWin) {
+        row.omission = 'repeat';
+        continue;
+      }
+      nonRepeated.push(row);
+    }
+    picked = nonRepeated;
+  }
+
   // Dedupe at >= 0.80 similarity
   const tokenizedPicked = picked.map((row) => ({ row, tokens: tokenize(row.m.text, root) }));
   const deduped = [];
@@ -385,22 +453,31 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
     deduped.push(item);
   }
 
-  // dsh-fish-memory v1.6.1 (issue #38): Do NOT filter out `category === 'stable_profile'` here!
-  // Previously `stable_profile` items (including importance === 1 items) were excluded from recall.
-  const candidateRows = deduped.map((x) => x.row);
-  const topC = candidateRows.length ? candidateRows[0].s.C : 0;
+  // dsh-fish-memory v1.6.3: separate slot allocation for event vs `stable_profile` (`factCap`)
+  const allRows = deduped.map((x) => x.row);
+  const factRows = allRows.filter((r) => r.m && r.m.category === 'stable_profile');
+  const eventRows = allRows.filter((r) => !(r.m && r.m.category === 'stable_profile'));
+  const topEventC = eventRows.length ? eventRows[0].s.C : 0;
   const tierCaps = [
     [0.6, policy.maxItems],
     [0.5, 4],
     [0.4, 3],
     [0, 1],
   ];
-  const dynamicCap = candidateRows.length ? tierCaps.find(([floor]) => topC >= floor)[1] : 0;
-  const slotCap = Math.min(dynamicCap, policy.maxItems);
+  const eventDynamicCap = eventRows.length ? tierCaps.find(([floor]) => topEventC >= floor)[1] : 0;
+  const eventCap = Math.min(eventDynamicCap, policy.maxItems);
+  const eventsPickedCount = Math.min(eventRows.length, eventCap);
+  const factLimit = Math.max(0, Number.isFinite(policy.factCap) ? policy.factCap : 1);
+  const factSlotCap = (factRows.length && factLimit > 0 && eventsPickedCount < policy.maxItems)
+    ? Math.min(factLimit, policy.maxItems - eventsPickedCount)
+    : 0;
 
-  const withinSlot = candidateRows.slice(0, slotCap);
-  for (const row of candidateRows.slice(slotCap)) {
+  const withinSlot = eventRows.slice(0, eventCap).concat(factSlotCap ? factRows.slice(0, factSlotCap) : []);
+  for (const row of eventRows.slice(eventCap)) {
     if (!row.omission) row.omission = 'weak';
+  }
+  for (const row of factRows.slice(factSlotCap)) {
+    if (!row.omission) row.omission = 'fact_cap';
   }
 
   const selected = [];
@@ -412,6 +489,13 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
       chars += len;
     } else {
       row.omission = 'budget';
+    }
+  }
+
+  if (recordSample && repeatWin > 0 && currentTurn > 0 && selected.length) {
+    if (!data.recentInjected || typeof data.recentInjected !== 'object') data.recentInjected = {};
+    for (const r of selected) {
+      data.recentInjected[String(r.m.id)] = currentTurn;
     }
   }
 

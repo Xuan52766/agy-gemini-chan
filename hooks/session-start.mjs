@@ -8,6 +8,7 @@
  * 4. Cat Nest live vitals snapshot
  */
 
+import { createHash } from 'node:crypto';
 import { registerProjectConversation } from '../core/bridge.mjs';
 import { buildInChatMemoryRule } from '../core/memory.mjs';
 import { buildSessionMoodGuide, getMoodSnapshot } from '../core/mood.mjs';
@@ -20,6 +21,13 @@ import { ensureInProjectScope, injectSystemContext, readHookInput, writeHookOutp
 const ROOT = getProjectRoot();
 const LOG = `${getDataPaths(ROOT).runtimeDir}/hooks.log`;
 
+function computePersonaHash(persona) {
+  return createHash('sha1')
+    .update(`${persona?.source || 'none'}:${persona?.persona?.id || ''}:${persona?.effectiveText || ''}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
 function main() {
   const payload = readHookInput();
   if (!ensureInProjectScope(payload, ROOT)) {
@@ -29,6 +37,9 @@ function main() {
 
   ensureXingxiArchive(ROOT);
   const sid = payload.conversationId || '';
+  const persona = resolvePersona({ root: ROOT, sessionId: sid });
+  const personaHash = computePersonaHash(persona);
+
   registerProjectConversation(
     {
       conversationId: sid,
@@ -36,7 +47,8 @@ function main() {
       cwd: payload.cwd,
       transcriptPath: payload.transcriptPath,
       modelName: payload.modelName,
-      sourceKind: 'user',
+      sourceKind: 'session-start',
+      injectedPersonaHash: personaHash,
     },
     ROOT,
   );
@@ -45,7 +57,6 @@ function main() {
   const nest = getNestSnapshot(ROOT, mood.mood);
   setNestActivity({ phase: nest.sleeping ? 'sleeping' : 'idle', label: '剛連上這個新對話～從星汐檔案回憶起你們的事' }, ROOT);
 
-  const persona = resolvePersona({ root: ROOT, sessionId: sid });
   const blocks = [];
   if (persona.effectiveText) {
     blocks.push(persona.effectiveText);
@@ -67,7 +78,7 @@ function main() {
   const moodGuide = buildSessionMoodGuide(ROOT);
   if (moodGuide) blocks.push(moodGuide);
 
-  blocks.push(`【貓窩即時狀態】飽食 ${nest.satiety}/100｜精力 ${nest.energy}/100｜羈絆 Lv.${nest.bondLevel}${nest.sleeping ? '｜打盹中' : ''}${nest.pendingCount ? `｜待帶入互動 ${nest.pendingCount} 項` : ''}`);
+  blocks.push(`【貓窩即時狀態】羈絆 Lv.${nest.bondLevel}（${nest.bond}）｜今日陪伴 ${nest.todayCareCount || 0} 次${nest.sleeping ? '｜打盹中' : ''}${nest.pendingCount ? `｜待帶入互動 ${nest.pendingCount} 項` : ''}`);
 
   appendLogLine(LOG, `SessionStart ok: sid=${sid}`);
   writeHookOutput(injectSystemContext(blocks.join('\n\n')));

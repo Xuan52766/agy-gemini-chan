@@ -52,6 +52,10 @@ export function registerProjectConversation(
     lastUserMessageAt = 0,
     turnKey = '',
     turnStartedAt = 0,
+    lastRawUserInput = undefined,
+    lastInputStepIndex = undefined,
+    injectedPersonaHash = undefined,
+    hasInjectedStaticRules = undefined,
   } = {},
   root = getProjectRoot(),
 ) {
@@ -69,9 +73,13 @@ export function registerProjectConversation(
       conversationId: String(conversationId),
       firstSeenAt: now,
       lastSeenAt: now,
-      lastUserSpeechAt: lastUserMessageAt || (sourceKind === 'user' ? now : 0),
+      lastUserSpeechAt: lastUserMessageAt > 0 ? lastUserMessageAt : 0,
       lastTurnStartAt: turnStartedAt || 0,
       lastInjectedTurnKey: turnKey || '',
+      lastRawUserInput: typeof lastRawUserInput === 'string' ? lastRawUserInput : '',
+      lastInputStepIndex: Number.isFinite(lastInputStepIndex) ? lastInputStepIndex : -1,
+      injectedPersonaHash: typeof injectedPersonaHash === 'string' ? injectedPersonaHash : '',
+      hasInjectedStaticRules: Boolean(hasInjectedStaticRules),
       transcriptPath: transcriptPath || '',
       modelName: modelName || '',
       turnCount: 0,
@@ -83,9 +91,12 @@ export function registerProjectConversation(
     if (transcriptPath) entry.transcriptPath = transcriptPath;
     if (modelName) entry.modelName = modelName;
     if (lastUserMessageAt > 0) entry.lastUserSpeechAt = lastUserMessageAt;
-    else if (sourceKind === 'user') entry.lastUserSpeechAt = now;
     if (turnStartedAt > 0) entry.lastTurnStartAt = turnStartedAt;
     if (turnKey) entry.lastInjectedTurnKey = turnKey;
+    if (typeof lastRawUserInput === 'string') entry.lastRawUserInput = lastRawUserInput;
+    if (Number.isFinite(lastInputStepIndex)) entry.lastInputStepIndex = lastInputStepIndex;
+    if (typeof injectedPersonaHash === 'string') entry.injectedPersonaHash = injectedPersonaHash;
+    if (typeof hasInjectedStaticRules === 'boolean') entry.hasInjectedStaticRules = hasInjectedStaticRules;
   }
   data.activeConversationId = String(conversationId);
   writeJsonAtomic(sessionsFile(root), data);

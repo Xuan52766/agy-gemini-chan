@@ -687,7 +687,7 @@ export function buildStarGraph(root) {
     s.diarySeq = i;
   });
 
-  const ledger = readJsonSafe(ledgerPath, { 已整理到: '' }) || { 已整理到: '' };
+  const ledger = syncLedgerWithRealDiaries(root);
   return {
     xingxiDir,
     ledger,
@@ -995,6 +995,43 @@ export function appendDiary({ date = localDayKey(), entry = '' } = {}, root) {
   return { ok: true, path, date: day };
 }
 
+/**
+ * dsh-xingxi v0.3.6 / v0.3.7: sync `.xingxi.json` `已整理到` with actual non-empty
+ * diary files (`>= 40` non-markup characters) so progress never gets stuck behind existing diaries.
+ */
+export function syncLedgerWithRealDiaries(root) {
+  const { diaryDir, diaryDirCompat, ledgerPath } = ensureXingxiArchive(root);
+  const ledger = readJsonSafe(ledgerPath, { 已整理到: '' }) || { 已整理到: '' };
+  let latestDiaryDate = String(ledger['已整理到'] || '');
+
+  for (const dir of [diaryDir, diaryDirCompat]) {
+    if (!existsSync(dir)) continue;
+    let names = [];
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (!name.toLowerCase().endsWith('.md') || name.includes('.bak-')) continue;
+      const d = detectDate(name);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+      if (latestDiaryDate && d <= latestDiaryDate) continue;
+      const body = readTextSafe(join(dir, name), '');
+      const substantive = body
+        .replace(/^#.*$/gm, '')
+        .replace(/^>.*$/gm, '')
+        .replace(/\s+/g, '');
+      if (substantive.length >= 40) {
+        latestDiaryDate = d;
+      }
+    }
+  }
+
+  if (latestDiaryDate && latestDiaryDate !== String(ledger['已整理到'] || '')) {
+    ledger['已整理到'] = latestDiaryDate;
+    ledger.updatedAt = new Date().toISOString();
+    writeJsonAtomic(ledgerPath, ledger);
+  }
+  return ledger;
+}
+
 function appendMaterialBlock(rawFilePath, headerLine, bodyLines) {
   const body = bodyLines.join('\n').trim();
   if (!body) return false;
@@ -1004,11 +1041,35 @@ function appendMaterialBlock(rawFilePath, headerLine, bodyLines) {
     return true;
   }
   const prev = readTextSafe(rawFilePath, '');
-  // dsh-xingxi v0.3.2: idempotent raw dialogue append so un-flushed watermarks never duplicate blocks
   if (prev.includes(body)) return false;
-  const fingerprint = bodyLines[0]?.slice(0, 120) || body.slice(0, 120);
-  if (fingerprint && prev.includes(fingerprint)) return false;
-  writeTextAtomic(rawFilePath, `${prev.trimEnd()}\n\n── 之後 ──\n${fullBlock}`);
+
+  // dsh-xingxi v0.3.6: longest-common-prefix / line-level delta append so later turns on the
+  // same day are appended cleanly even when earlier turns of the same day are already present
+  const existingLines = new Set(
+    prev
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('# ') && l !== '── 之後 ──'),
+  );
+  const deltaLines = [];
+  let pendingSectionHeader = '';
+  for (const line of bodyLines) {
+    const t = String(line || '').trim();
+    if (!t) continue;
+    if (/^【.+】$/.test(t)) {
+      pendingSectionHeader = t;
+      continue;
+    }
+    if (existingLines.has(t)) continue;
+    if (pendingSectionHeader) {
+      if (deltaLines.length) deltaLines.push('');
+      deltaLines.push(pendingSectionHeader);
+      pendingSectionHeader = '';
+    }
+    deltaLines.push(line);
+  }
+  if (!deltaLines.length) return false;
+  writeTextAtomic(rawFilePath, `${prev.trimEnd()}\n\n── 之後 ──\n${deltaLines.join('\n')}\n`);
   return true;
 }
 
@@ -1175,8 +1236,11 @@ export async function executeXingxiPickup({
   const nowDate = now instanceof Date ? now : new Date(now);
   const nowMs = nowDate.getTime();
   const todayStr = date || localDayKey(nowMs);
+  const yesterdayStr = localDayKey(nowMs - 86400000);
   const cfg = loadXingxiConfig(root);
   const effectiveMode = scheduleMode || cfg.scheduleMode || 'both';
+  let targetDateStr = todayStr;
+  let isCatchUp = false;
 
   if (trigger === 'scheduled') {
     if (!cfg.autoScheduleEnabled) {
@@ -1184,37 +1248,43 @@ export async function executeXingxiPickup({
     }
     const nowMinutes = nowDate.getHours() * 60 + nowDate.getMinutes();
     const targetMinutes = cfg.scheduleHour * 60 + cfg.scheduleMinute;
+    // dsh-xingxi v0.3.6 + v0.3.8: if a previously active schedule missed yesterday (`lastScheduledDate` non-empty and < yesterday),
+    // catch up on yesterday immediately without waiting until tonight's scheduled time
+    const missedYesterday = Boolean(!date && cfg.lastScheduledDate && cfg.lastScheduledDate < yesterdayStr);
     if (nowMinutes < targetMinutes) {
-      return { action: 'before_time', cfg };
-    }
-    if (cfg.lastScheduledDate === todayStr) {
+      if (!missedYesterday) {
+        return { action: 'before_time', cfg };
+      }
+      targetDateStr = yesterdayStr;
+      isCatchUp = true;
+    } else if (cfg.lastScheduledDate === todayStr) {
       return { action: 'already_ran_today', cfg };
     }
   }
 
-  const material = prepareXingxiPickupMaterial(root, { date: todayStr, now: nowMs });
+  const material = prepareXingxiPickupMaterial(root, { date: targetDateStr, now: nowMs });
   if (trigger === 'scheduled' && !force && !material.hasContent) {
-    cfg.lastScheduledDate = todayStr;
+    cfg.lastScheduledDate = targetDateStr;
     cfg.lastScheduledAt = nowMs;
-    appendXingxiLog(cfg, `${todayStr} 到點檢查：今日尚無對話／記憶料，已略過不打擾`, nowMs);
+    appendXingxiLog(cfg, `${targetDateStr} ${isCatchUp ? '補跑檢查' : '到點檢查'}：尚無對話／記憶料，已略過不打擾`, nowMs);
     saveXingxiConfig(cfg, root);
-    return { action: 'empty_skipped', date: todayStr, material, cfg };
+    return { action: 'empty_skipped', date: targetDateStr, catchUp: isCatchUp, material, cfg };
   }
 
   if (!targetConvId || typeof sender !== 'function') {
     if (trigger === 'scheduled') {
-      appendXingxiLog(cfg, `${todayStr} 到點想拾星，但目前無在線對話（素材已先切存 ${material.turnCount} 段）`, nowMs);
+      appendXingxiLog(cfg, `${targetDateStr} 到點想拾星，但目前無在線對話（素材已先切存 ${material.turnCount} 段）`, nowMs);
       saveXingxiConfig(cfg, root);
     }
-    return { action: 'no_target', date: todayStr, material, cfg };
+    return { action: 'no_target', date: targetDateStr, catchUp: isCatchUp, material, cfg };
   }
 
-  const prompt = buildXingxiPickupPrompt(root, { date: todayStr, scheduleMode: effectiveMode, material });
+  const prompt = buildXingxiPickupPrompt(root, { date: targetDateStr, scheduleMode: effectiveMode, material });
   await sender(targetConvId, prompt);
 
   // dsh-xingxi v0.3.2: only mark lastScheduledDate AFTER sender succeeds so early failures can retry
   if (trigger === 'scheduled') {
-    cfg.lastScheduledDate = todayStr;
+    cfg.lastScheduledDate = targetDateStr;
     cfg.lastScheduledAt = nowMs;
     saveXingxiConfig(cfg, root);
   }
@@ -1228,12 +1298,14 @@ export async function executeXingxiPickup({
     writeJsonAtomic(ledgerPath, ledger);
   }
 
-  const tag = trigger === 'scheduled' ? '定時拾星已派發' : '手動拾星已派發';
+  const tag = trigger === 'scheduled'
+    ? (isCatchUp ? '錯過定時補跑已派發' : '定時拾星已派發')
+    : '手動拾星已派發';
   const freshCfg = loadXingxiConfig(root);
-  appendXingxiLog(freshCfg, `${tag}（${todayStr} · 模式 ${effectiveMode} · 素材 ${material.turnCount} 段 → 對話 ${targetConvId.slice(-6)}）`, nowMs);
+  appendXingxiLog(freshCfg, `${tag}（${targetDateStr} · 模式 ${effectiveMode} · 素材 ${material.turnCount} 段 → 對話 ${targetConvId.slice(-6)}）`, nowMs);
   saveXingxiConfig(freshCfg, root);
 
-  return { action: 'dispatched', date: todayStr, mode: effectiveMode, material, prompt, cfg: freshCfg };
+  return { action: 'dispatched', date: targetDateStr, catchUp: isCatchUp, mode: effectiveMode, material, prompt, cfg: freshCfg };
 }
 
 /**

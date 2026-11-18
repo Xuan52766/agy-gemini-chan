@@ -139,7 +139,7 @@ const TOOLS = [
   },
   {
     name: 'mood_status',
-    description: '讀取目前的心情數值（0~100）、8 維情緒、貓窩精力/飽食/羈絆度與目前啟用的人設摘要（嚴格限 gemini_cat 專案內）。',
+    description: '讀取目前的心情數值（0~100）、8 維情緒、貓窩羈絆等級／今日陪伴狀態與目前啟用的人設摘要（嚴格限 gemini_cat 專案內）。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -148,12 +148,17 @@ const TOOLS = [
   },
   {
     name: 'mood_update',
-    description: '由對話內的你依這輪真實互動，安靜記錄心情與 8 維情緒變化（寫入即時貓窩 UI 與時間線，無需外部 API）。',
+    description: '由對話內的你依這輪真實互動，在發生明確情緒事件時安靜記錄心情與 8 維情緒變化（寫入即時貓窩 UI 與時間線，無需外部 API）。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['reason'],
       properties: {
+        subject: {
+          type: 'string',
+          enum: ['owner', 'self', 'other', 'none'],
+          description: '情緒主體：owner=主人本人的事、self=你自己的事、other=外人八卦故事、none=純閒聊（若為 other/none 則不變動大心情）。',
+        },
         moodDelta: { type: 'number', description: '-10 到 +10 的心情起伏（負值代表心疼/擔心/委屈，正值代表開心/踏實/甜蜜）' },
         dims: {
           type: 'object',
@@ -166,7 +171,7 @@ const TOOLS = [
   },
   {
     name: 'nest_interact',
-    description: '在對話中替貓窩裡的 Gemini-chan 進行照護或作息互動（摸摸/餵食/玩耍/貼貼，或用 sleep 入睡、wake 叫醒、nap 切換打盹，受冷卻與飽食精力限制）。',
+    description: '在對話中替貓窩裡的 Gemini-chan 進行陪伴或作息互動（摸摸/餵食/玩耍/貼貼，或用 sleep 入睡、wake 叫醒、nap 切換打盹，累積羈絆與今日陪伴）。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -265,7 +270,14 @@ async function callTool(name, args = {}) {
           type: 'text',
           text: JSON.stringify({
             mood: { score: mood.mood, label: mood.moodLabel, dims: mood.dims, lastReason: mood.lastReason },
-            nest: { satiety: nest.satiety, energy: nest.energy, bond: nest.bond, bondLevel: nest.bondLevel, sleeping: nest.sleeping },
+            nest: {
+              bond: nest.bond,
+              bondLevel: nest.bondLevel,
+              bondProgress: nest.bondProgress,
+              todayCareCount: nest.todayCareCount,
+              todayWarmth: nest.todayWarmth,
+              sleeping: nest.sleeping,
+            },
             persona: { resolvedName: persona.resolvedName, source: persona.resolvedSource, scopeNotice: persona.scopeNotice },
           }, null, 2),
         }],
@@ -286,11 +298,12 @@ async function callTool(name, args = {}) {
       const res = performNestAction(args.action, { root: ROOT });
       if (!res.ok) return { content: [{ type: 'text', text: `✗ ${res.error}` }] };
       const limitNote = res.limited ? '【受限未計入額度】' : '';
+      const bondLevel = Math.floor((res.state.bond || 0) / 50) + 1;
       const sleepTag = res.state.sleeping ? '｜狀態：睡覺中' : '｜狀態：清醒';
       return {
         content: [{
           type: 'text',
-          text: `${limitNote}${res.reaction}（飽食 ${Math.round(res.state.satiety)} / 精力 ${Math.round(res.state.energy)}${sleepTag}）`,
+          text: `${limitNote}${res.reaction}（羈絆 Lv.${bondLevel} · ${res.state.bond}${sleepTag}）`,
         }],
       };
     }

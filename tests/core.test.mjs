@@ -370,14 +370,14 @@ test('speak-up customizable peak/valley schedule, cross-midnight windows, quiet 
   });
 });
 
-test('cat nest actions do not inflate mood, enforce cooldown/satiety/daily limits, and queue chat injection', async () => {
+test('cat nest actions do not inflate mood, build bond & daily warmth + variety bonus, enforce cooldown/daily limits, and queue chat injection', async () => {
   await withTempRoot((root) => {
     const t0 = Date.UTC(2026, 10, 14, 10, 0, 0);
     const moodBefore = getMoodSnapshot({ root, now: t0 }).mood;
 
     const r = performNestAction('feed', { root, now: t0 });
     assert.equal(r.ok, true);
-    assert.ok(r.state.satiety >= 90);
+    assert.equal(r.state.bond, 48);
     assert.equal(getMoodSnapshot({ root, now: t0 + 100 }).mood, moodBefore);
 
     // Immediate repeat hits cooldown limit
@@ -387,13 +387,19 @@ test('cat nest actions do not inflate mood, enforce cooldown/satiety/daily limit
     assert.equal(cooldownHit.limitReason, 'cooldown');
     assert.ok(cooldownHit.cooldownLeftSec > 0);
 
-    // Exhaust daily pet cap (6/day) cleanly
-    let curTs = t0;
-    for (let i = 0; i < 6; i++) {
+    // Complete 3 distinct care actions (`feed` + `play` + `pet`) -> triggers daily variety bonus (+5 bond)
+    const playRes = performNestAction('play', { root, now: t0 + 15_000 });
+    assert.equal(playRes.ok, true);
+    assert.equal(playRes.varietyBonusAwarded, false);
+
+    // Exhaust daily pet cap (15/day) cleanly, first pet awards variety bonus
+    let curTs = t0 + 15_000;
+    for (let i = 0; i < 15; i++) {
       curTs += 20_000;
       const petRes = performNestAction('pet', { root, now: curTs });
       assert.equal(petRes.ok, true);
       assert.equal(petRes.limited, false);
+      if (i === 0) assert.equal(petRes.varietyBonusAwarded, true);
     }
     curTs += 20_000;
     const capHit = performNestAction('pet', { root, now: curTs });
@@ -405,16 +411,23 @@ test('cat nest actions do not inflate mood, enforce cooldown/satiety/daily limit
     assert.equal(resolveSpriteFile(70, false), 'chibi_base.png');
     assert.equal(resolveSpriteFile(70, true), 'mood_sleep.jpg');
 
+    const snap = getNestSnapshot(root, 70, curTs);
+    assert.equal(snap.varietyBonusClaimed, true);
+    assert.ok(snap.todayCareCount >= 17);
+    assert.ok(snap.todayWarmth === 100);
+
     setNestPreferences({ syncChatOnCare: true }, root, curTs);
     assert.equal(getNestSnapshot(root, 70, curTs).syncChatOnCare, true);
     performNestAction('whisper', { note: '記得喝溫水', root, now: curTs + 10_000 });
     const ctxBlock = consumePendingNestContext(root, { consume: true });
-    assert.match(ctxBlock.text, /餵你吃了小魚乾/);
+    assert.match(ctxBlock.text, /餵你吃了香噴噴的小魚乾/);
     assert.match(ctxBlock.text, /記得喝溫水/);
+    assert.doesNotMatch(ctxBlock.text, /飽食|精力/);
 
-    // Drained after consume
+    // Drained after consume -> silent on ordinary turns (`text === ''`)
     const after = consumePendingNestContext(root, { consume: false });
     assert.equal(after.pendingCount, 0);
+    assert.equal(after.text, '');
   });
 });
 
@@ -528,7 +541,7 @@ test('sleeping state stays consistent across care actions, auto nap timeout, and
 });
 
 test('upstream parity upgrades: fish-memory v1.6.1 stable_profile recall, feiyu-mood v0.9.3 angry 45m half-life, xingxi v0.3.2 bridges & eventDate, speak-up v0.3.2 tag', async () => {
-  await withTempRoot((root) => {
+  await withTempRoot(async (root) => {
     const t0 = Date.UTC(2026, 10, 15, 10, 0, 0);
 
     // 1. dsh-fish-memory v1.6.1: stable_profile / importance=1 is recalled + custom keywords
@@ -589,15 +602,81 @@ test('upstream parity upgrades: fish-memory v1.6.1 stable_profile recall, feiyu-
     const ch6Star = graph.stars.find((s) => s.chapter === 6);
     assert.equal(ch6Star?.eventDate, '2026-11-12');
 
-    // saveXingxiConfig preserves lastScheduledDate when time/mode are unchanged
-    saveXingxiConfig({ scheduleHour: 23, scheduleMinute: 30, scheduleMode: 'both', lastScheduledDate: '2026-11-15' }, root);
+    // saveXingxiConfig preserves lastScheduledDate when time/mode are unchanged, and clears today's marker when changed
+    const todayKey = new Date().toLocaleDateString('sv-SE');
+    saveXingxiConfig({ scheduleHour: 23, scheduleMinute: 30, scheduleMode: 'both', lastScheduledDate: todayKey }, root);
     const savedSame = saveXingxiConfig({ scheduleHour: 23, scheduleMinute: 30, scheduleMode: 'both', autoScheduleEnabled: true }, root);
-    assert.equal(savedSame.lastScheduledDate, '2026-11-15');
+    assert.equal(savedSame.lastScheduledDate, todayKey);
     const savedChanged = saveXingxiConfig({ scheduleHour: 22, scheduleMinute: 30, scheduleMode: 'both' }, root);
     assert.equal(savedChanged.lastScheduledDate, '');
 
     // 4. dsh-speak-up v0.3.2: closed <speak-up>...</speak-up> block
     const wrapped = wrapInnerThought('去信箱看看大肥魚有沒有回信', new Date(t0));
     assert.match(wrapped, /^<speak-up>[\s\S]*<\/speak-up>$/);
+
+    // 5. Latest upstream sync: fish-memory v1.6.3 (OOV proper noun sliding window + repeatWindow + factCap),
+    //    feiyu-mood v0.9.6 (subject=other/none bystander protection), xingxi v0.3.8 (missed-schedule catch-up & delta append)
+    const oovTokens = tokenize('糯鯨今天乖乖', root);
+    assert.equal(oovTokens.has('糯鯨'), true);
+
+    const oovMem = rememberMemory({
+      text: '糯鯨是一隻愛吃草莓大福的小鯨魚',
+      importance: 0.8,
+      category: 'event',
+    }, { root, now: t0 + 10_000 });
+    assert.equal(oovMem.ok, true);
+
+    // First user turn recalls OOV proper noun memory
+    const firstTurnRecall = recallMemories('糯鯨最喜歡吃什麼甜點', { root, now: t0 + 11_000, recordSample: true });
+    assert.ok(firstTurnRecall.selected.some((r) => r.m.id === oovMem.memory.id));
+    // Immediate next user turn within repeatWindow (15 turns) suppresses duplicate re-injection
+    const secondTurnRecall = recallMemories('糯鯨最喜歡吃什麼甜點', { root, now: t0 + 12_000, recordSample: true });
+    assert.equal(secondTurnRecall.selected.some((r) => r.m.id === oovMem.memory.id), false);
+
+    // feiyu-mood v0.9.6: subject='other' clamps moodDelta to 0
+    const moodBeforeBystander = getMoodSnapshot({ root, now: t0 + 20_000 }).mood;
+    const bystanderRes = applyMoodDelta({
+      subject: 'other',
+      moodDelta: -12,
+      dims: { sad: 10, heartache: 9, calm: 2 },
+      reason: '聊到電視劇裡的路人角色很慘',
+      confidence: 90,
+    }, { root, now: t0 + 20_000 });
+    assert.equal(getMoodSnapshot({ root, now: t0 + 20_000 }).mood, moodBeforeBystander);
+    assert.equal(bystanderRes.state.dims.heartache, 0);
+
+    // xingxi v0.3.6-v0.3.8: missed-schedule catch-up when lastScheduledDate < yesterday (and before today's scheduled hour)
+    const { writeFileSync, mkdirSync } = await import('node:fs');
+    const paths = getDataPaths(root);
+    mkdirSync(paths.runtimeDir, { recursive: true });
+    const catchupTranscript = join(paths.runtimeDir, 'conv-catchup.jsonl');
+    writeFileSync(catchupTranscript, [
+      JSON.stringify({ type: 'USER_INPUT', content: '昨天傍晚一起吃章魚燒', created_at: '2026-11-17T18:00:00' }),
+      JSON.stringify({ type: 'PLANNER_RESPONSE', content: '超好吃！', created_at: '2026-11-17T18:01:00' }),
+    ].join('\n'), 'utf-8');
+    writeFileSync(join(paths.runtimeDir, 'sessions.json'), JSON.stringify({
+      sessions: [{ conversationId: 'conv-catchup', transcriptPath: catchupTranscript }],
+    }), 'utf-8');
+
+    saveXingxiConfig({
+      autoScheduleEnabled: true,
+      scheduleHour: 23,
+      scheduleMinute: 30,
+      scheduleMode: 'both',
+      lastScheduledDate: '2026-11-16',
+    }, root);
+    const catchupSent = [];
+    const catchupRes = await executeXingxiPickup({
+      root,
+      trigger: 'scheduled',
+      now: new Date('2026-11-18T10:00:00'),
+      targetConvId: 'conv-catchup',
+      sender: async (id, prompt) => catchupSent.push({ id, prompt }),
+    });
+    assert.equal(catchupRes.action, 'dispatched');
+    assert.equal(catchupRes.catchUp, true);
+    assert.equal(catchupRes.date, '2026-11-17');
+    assert.equal(catchupSent.length, 1);
+    assert.match(catchupSent[0].prompt, /章魚燒/);
   });
 });

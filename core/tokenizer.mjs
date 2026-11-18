@@ -96,8 +96,9 @@ export function normalizeText(s) {
 }
 
 /**
- * FMM greedy longest-match dictionary segmentation with single-character fallback.
- * Never drops unknown CJK characters (fixes compound loss such as 「她的胃」 vs 「胃不好」).
+ * FMM greedy longest-match dictionary segmentation with single-character fallback
+ * plus `dsh-fish-memory` v1.6.2 proper-noun sliding window (`補專名`: 2..4 char
+ * windows across consecutive non-dictionary single characters such as 「糯鯨」「奈奈」).
  */
 export function tokenize(s, root) {
   const dict = loadChineseDict(root);
@@ -107,6 +108,7 @@ export function tokenize(s, root) {
     if (!EN_STOPS.has(m[0])) out.add(m[0]);
   }
   for (const run of clean.match(/[\u4e00-\u9fa5]+/g) || []) {
+    const segs = [];
     let i = 0;
     while (i < run.length) {
       let matchLen = 0;
@@ -118,13 +120,35 @@ export function tokenize(s, root) {
         }
       }
       if (matchLen > 0) {
-        out.add(run.slice(i, i + matchLen));
+        const word = run.slice(i, i + matchLen);
+        out.add(word);
+        segs.push({ start: i, end: i + matchLen, isDict: true });
         i += matchLen;
       } else {
         const ch = run[i];
         if (!SINGLE_STOP_CHARS.has(ch)) out.add(ch);
+        segs.push({ start: i, end: i + 1, isDict: false });
         i += 1;
       }
+    }
+
+    // dsh-fish-memory v1.6.2 `補專名`: consecutive single-char fallbacks form 2..4 char OOV proper noun tokens
+    let a = 0;
+    while (a < segs.length) {
+      if (segs[a].isDict) {
+        a += 1;
+        continue;
+      }
+      let b = a + 1;
+      while (b < segs.length && !segs[b].isDict) b += 1;
+      if (b - a >= 2) {
+        for (let p = a; p < b; p++) {
+          for (let w = 2; w <= 4 && p + w <= b; w++) {
+            out.add(run.slice(segs[p].start, segs[p + w - 1].end));
+          }
+        }
+      }
+      a = b;
     }
   }
   return out;
