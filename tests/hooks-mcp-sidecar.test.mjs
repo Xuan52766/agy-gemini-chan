@@ -65,6 +65,14 @@ test('hooks.json follows Antigravity plugin schema contract', () => {
   const pluginMeta = JSON.parse(readFileSync(join(pluginDir, 'plugin.json'), 'utf-8'));
   assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
   assert.equal(pluginMeta.version, pkg.version);
+  assert.equal(pluginMeta.logo, 'logo.svg');
+  assert.equal(existsSync(join(pluginDir, 'logo.svg')), true);
+  assert.equal(existsSync(join(pluginDir, 'README.md')), true);
+
+  const sidecarDir = join(pluginDir, 'sidecars/gemini_cat_nest');
+  const sidecarCfg = JSON.parse(readFileSync(join(sidecarDir, 'sidecar.json'), 'utf-8'));
+  assert.equal(sidecarCfg.has_web_ui, true);
+  assert.equal(existsSync(resolve(sidecarDir, sidecarCfg.args[0])), true);
 });
 
 test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip Stop fallback when AI updated mood', () => {
