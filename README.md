@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Antigravity 2.0 專案限定 AI 伴侶與互動貓窩系統</strong><br/>
-  <span>版本：<code>v1.2.0</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a></span>
+  <span>版本：<code>v1.2.1</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a></span>
 </p>
 
 ---
@@ -124,7 +124,7 @@ npm run setup
 ```mermaid
 flowchart LR
   subgraph Antigravity["Antigravity 2.0 對話生命週期"]
-    SS["SessionStart Hook<br/>注入 1 次人設 + 記憶卡 + 近 3 日記"] --> PI["PreInvocation Hook<br/>僅注入當輪差量（召回記憶 / 顯著心情 / 貓窩事件）"]
+    SS["SessionStart Hook<br/>初始化星汐檔與專案對話登記"] --> PI["PreInvocation Hook<br/>第 1 輪注入人設 + 記憶卡 + 近 3 日記；後續僅注入當輪差量"]
     PI --> LLM["Agent 回覆與 MCP 工具"]
     LLM --> PT["PostToolUse Hook<br/>同步側邊欄活動狀態"]
     LLM --> ST["Stop Hook<br/>未呼叫 mood_update 時自動本地情緒兜底"]
@@ -135,7 +135,7 @@ flowchart LR
   UI <-->|"data/* 本地狀態與主動推播"| Antigravity
 ```
 
-- **單次基底注入、每輪差量更新**：人設全文與靜態規則僅在對話啟動（或中途切換人設）時注入一次；後續回合若無新命中的記憶、顯著心情變化或待處理的貓窩互動，`PreInvocation` 直接回傳 `{}`（**0 Token 注入**）。
+- **單次基底注入、每輪差量更新**：人設全文、星汐啟動包（記憶卡＋近 3 日日記）與靜態規則僅在新對話第 1 輪（或中途切換人設）由 `PreInvocation` 注入一次；後續回合若無新命中的記憶、顯著心情變化或待處理的貓窩互動，`PreInvocation` 直接回傳 `{}`（**0 Token 注入**）。
 - **工具續行自動跳過**：模型在回合中呼叫 MCP 工具後的續行推理（Mid-turn continuation）會由 `inspectTranscriptTail` 自動識別並跳過，不重複塞入上下文。
 - **本機資料完全隔離**：所有個人設定、記憶、日記與對話切片均存放於 `data/`（已由 `.gitignore` 排除，僅保留 `data/dict/` 公開分詞詞表），不會隨 Git 提交外洩，也不會在平時佔用對話 Token。
 
@@ -154,7 +154,7 @@ flowchart LR
 <details>
 <summary><strong>Q2：放在專案裡的記憶檔、日記或說明文件會讓對話 Token 變多嗎？</strong></summary>
 
-不會。一般檔案與 `data/` 下的歷史日記、原始對話切片、備份檔平時保存在硬碟中 **0 Token 消耗**；僅有 `SessionStart` 開新對話時會讀取 `記憶卡.md`（上限 4,200 字）與最近 3 天日記（上限 2,400 字），更早的檔案只有在呼叫 `xingxi_read` 檢索時才會按需讀取。
+不會。一般檔案與 `data/` 下的歷史日記、原始對話切片、備份檔平時保存在硬碟中 **0 Token 消耗**；僅有新對話第 1 輪 `PreInvocation` 啟動注入時會讀取 `記憶卡.md`（上限 4,200 字）與最近 3 天日記（上限 2,400 字），更早的檔案只有在呼叫 `xingxi_read` 檢索時才會按需讀取。
 </details>
 
 <details>
