@@ -5,6 +5,9 @@
 ## [1.2.0] - 2026-11-18
 
 ### 架構與體驗升級（Added & Changed）
+- **完整 Plugin ＋ Sidecar 單一化打包與左紅右黃異色瞳圖示**（`.agents/plugins/gemini-cat/`、`scripts/setup-sidecar.mjs`）：
+  - 新增插件專屬 `logo.svg`（左紅 `#EA4335`、右黃 `#FBBC05` 異色瞳貓貓＋星星髮夾，致敬 Google 前兩個 `o` 配色）、插件說明頁 `README.md` 與內建 `sidecars/gemini_cat_nest/sidecar.json`。
+  - `npm run setup`（`scripts/setup-sidecar.mjs`）現在會將插件與 Sidecar 統一同步至 `~/.gemini/config/plugins/gemini-cat/`（並自動清理舊版獨立 `~/.gemini/config/sidecars/gemini-cat-nest`），支援於 **Customizations → Plugins** 一鍵開關整個插件與側邊欄，同時維持跨專案 0 規則外洩與 0 Token 干擾。
 - **貓窩（Cat Nest）數值與陪伴架構改版**（`core/nest.mjs`、`sidecar/index.html`、`sidecar/app.js`、`mcp/server.mjs`）：
   - 移除隨時間倒扣的「飽食 / 精力」生存懲罰機制與每輪固定狀態洗版，改為 **「心情（0–100） / 羈絆進度（Lv.X · 0–50） / 今日陪伴（今日互動次數與暖度 0–100%）」** 三欄設計。
   - 保留全部 5 個照護按鈕（摸頭、餵小魚乾、逗貓棒、貼貼、打盹／叫醒）與傳小紙條，移除「吃太飽拒食」與「精力過低拒玩」限制，並將冷卻時間調降至 `5–12` 秒、每日互動額度調升至 `10–15` 次。

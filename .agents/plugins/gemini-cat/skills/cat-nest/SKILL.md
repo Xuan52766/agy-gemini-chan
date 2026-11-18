@@ -5,7 +5,7 @@ description: 管理與照護側邊欄「Gemini-chan 貓窩」、在對話內評�
 
 # 貓窩陪伴與互動指南
 
-- 使用者可透過 `[打開 Gemini-chan 貓窩](sidecar://gemini-cat-nest/)` 開啟右側貓窩側邊欄。
+- 使用者可透過 `[打開 Gemini-chan 貓窩](sidecar://gemini-cat/gemini_cat_nest/)` 開啟右側貓窩側邊欄，或透過 `[Gemini-chan 貓窩伴侶](customization://gemini-cat)` 開啟插件設定頁。
 - 對話中若要查詢狀態或照護互動，可呼叫：
   - `mood_status`：查看心情 (0-100)、8 維情緒、貓窩羈絆等級／今日陪伴暖度與本專案人設摘要
   - `mood_update`：由對話內的 AI 在發生明確情緒轉折時記錄心情變化（免外部 API；貓窩觸摸不直接刷心情分）

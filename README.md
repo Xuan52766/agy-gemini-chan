@@ -42,18 +42,18 @@
 - **Node.js `>= 20.0.0`**
 - **Antigravity 2.0**（支援 Workspace Plugin 與 Aux Pane Sidecar）
 
-### 1. 下載專案並註冊 Sidecar
+### 1. 下載專案並註冊 Plugin 與 Sidecar
 ```bash
 git clone https://github.com/Xuan52766/agy-gemini-chan.git
 cd agy-gemini-chan
 npm run setup
 ```
-> `npm run setup`（即 `node scripts/setup-sidecar.mjs`）會將目前專案路徑以正斜線 `/` 格式寫入 `~/.gemini/config/sidecars/gemini-cat-nest/sidecar.json`。若目標設定檔已存在且路徑不同，可加上 `--force` 自動建立 `.bak-*` 備份後更新，或加 `--dry-run` 預覽內容。
+> `npm run setup`（即 `node scripts/setup-sidecar.mjs`）會自動將你電腦上這個資料夾的實際路徑註冊至 `~/.gemini/config/plugins/gemini-cat/`（包含插件清單、左紅右黃異色瞳貓貓圖示 `logo.svg`、Hooks、MCP 與內建 `sidecars/gemini_cat_nest/sidecar.json`），並自動清理舊版獨立設定。若目標已存在且路徑不同，可加上 `--force` 自動備份 `.bak-*` 後更新，或加 `--dry-run` 預覽。
 
 <details>
-<summary>手動設定 <code>sidecar.json</code> 範例（選用）</summary>
+<summary>手動檢視 <code>sidecar.json</code> 結構範例（選用）</summary>
 
-檔案位置：`~/.gemini/config/sidecars/gemini-cat-nest/sidecar.json`（Windows 為 `%USERPROFILE%\.gemini\config\sidecars\gemini-cat-nest\sidecar.json`）
+檔案位置：`~/.gemini/config/plugins/gemini-cat/sidecars/gemini_cat_nest/sidecar.json`（Windows 為 `%USERPROFILE%\.gemini\config\plugins\gemini-cat\sidecars\gemini_cat_nest\sidecar.json`）
 
 ```json
 {
@@ -81,8 +81,8 @@ npm run setup
 </details>
 
 ### 2. 開啟專案工作區與側邊欄面板
-1. 在 Antigravity 2.0 **直接開啟 `agy-gemini-chan` 資料夾本身**（工作區邊界檢查僅在本專案根目錄或子目錄下啟用）。
-2. 於 Antigravity 的 **UI Extensions** 啟用 **「Gemini-chan 貓窩」**，再從右側輔窗或對話點擊 `[打開 Gemini-chan 貓窩](sidecar://gemini-cat-nest/)` 開啟面板。
+1. 在 Antigravity 2.0 **將下載下來的資料夾當作專案（Project / Workspace）開啟**（不限資料夾名稱，系統會自動認得該目錄並啟用伴侶機制）。
+2. 在 **Customizations → Plugins**（或點擊 `[Gemini-chan 貓窩伴侶](customization://gemini-cat)`）可一鍵開關整個插件；並從 **Extensions → Gemini-chan 貓窩**（或對話中點擊 `[打開 Gemini-chan 貓窩](sidecar://gemini-cat/gemini_cat_nest/)`）喚出右側貓窩面板。
 
 ### 3. 選擇或匯入人設
 1. 切換至右側貓窩面板的 **「人設」** 分頁。
@@ -146,9 +146,9 @@ flowchart LR
 ## 常見問題（FAQ）
 
 <details>
-<summary><strong>Q1：為什麼在 Antigravity 的全域設定頁看不到 <code>gemini-cat</code>？</strong></summary>
+<summary><strong>Q1：在 Customizations → Plugins 關掉開關會發生什麼事？切到別的專案會被干擾嗎？</strong></summary>
 
-本專案將插件定義置於工作區內的 [`.agents/plugins/gemini-cat/`](.agents/plugins/gemini-cat/)，屬於 **Workspace-scoped Plugin**。只有直接開啟本專案資料夾時才會掛載 Hooks、Skills 與 MCP 工具；切換到其他程式專案時完全不會載入或干擾。
+執行 `npm run setup` 後，`Gemini-chan 貓窩伴侶` 會出現在 **Customizations → Plugins** 列表中，你可以隨時一鍵開關整個插件（含 Hooks、MCP 工具、Skills 與貓窩側邊欄）。而當插件保持開啟、你切換去其他程式專案時，所有 Hooks 與 Sidecar 都會透過 `isProjectWorkspaceActive` 自動進入靜默待機，對外部專案維持 **0 規則外洩、0 Token 消耗**。
 </details>
 
 <details>
