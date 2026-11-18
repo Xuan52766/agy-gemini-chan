@@ -1,81 +1,59 @@
-# agy-gemini-chan｜Gemini-chan 貓窩（Antigravity 2.0 伴侶插件系統）
+# agy-gemini-chan｜Gemini-chan 貓窩
 
 <p align="center">
-  <img src="./assets/geminichan/chibi_base.png" width="180" alt="Gemini-chan 貓窩 Q 版立繪" />
+  <img src="./assets/geminichan/chibi_base.png" width="176" alt="Gemini-chan 貓窩 Q 版立繪" />
 </p>
 
 <p align="center">
-  <strong>目前版本：<code>v1.1.0</code></strong> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a>
+  <strong>Antigravity 2.0 專案限定 AI 伴侶與互動貓窩系統</strong><br/>
+  <span>版本：<code>v1.2.0</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a></span>
 </p>
 
-**專為 Antigravity 2.0 生態打造的專案限定 AI 伴侶與互動貓窩系統**——透過 Antigravity 原生 **Plugin Lifecycle Hooks**、**Stdio MCP Server**、**Skills** 與 **Sidecar Aux Pane Web UI** 深度整合，不需要額外外部 AI API Key，就能在單一工作區裡為你的 Agent 帶來會淡忘的長期記憶、可感知的即時心情、八章星汐記憶卡、視覺化星座星圖，以及隨時陪伴在側邊欄的 Q 版 Gemini-chan 貓窩。
+---
 
-> **來源與授權聲明（必讀）**
->
-> 本專案派生並改寫自以下原專案與原作者之創作，特此致謝並依各自授權條款公開分享：
-> - **Yuuyuko-uu**（<https://github.com/Yuuyuko-uu>）—— 原作者開發之 DSH 伴侶插件系列，本專案依 **[Yuuyuko-uu 插件許可 1.2](./LICENSE)**（其中 `dsh-xingxi` 原倉庫為 `1.1`）進行跨平台移植與公開衍生：
->   - 長期記憶：<https://github.com/Yuuyuko-uu/dsh-fish-memory>
->   - 心情引擎：<https://github.com/Yuuyuko-uu/dsh-feiyu-mood>
->   - 星汐記憶卡與日記：<https://github.com/Yuuyuko-uu/dsh-xingxi>
->   - 主動搭話：<https://github.com/Yuuyuko-uu/dsh-speak-up>
-> - **huaizhuanghub** —— 原作者開發之人設插件 **`dsh-persona-dafeiyu`**（<https://www.npmjs.com/package/dsh-persona-dafeiyu> / <https://github.com/huaizhuanghub/dsh-persona-dafeiyu>，MIT 授權），本專案參考並移植其雙層作用域人設設計。
+## 專案簡介
+
+**`agy-gemini-chan`** 是專為 **Antigravity 2.0** 打造的本地端 AI 伴侶與互動側邊欄系統。透過原生 **Plugin Lifecycle Hooks**、**Stdio MCP Server**、**Skills** 與 **Sidecar Aux Pane Web UI** 整合，無須額外申請外部 LLM API Key，即可在指定工作區內提供：
+
+- **Q 版互動貓窩側邊欄**：即時情緒立繪切換、照護互動、羈絆等級與今日陪伴暖度。
+- **雙軌長期記憶**：結合「艾賓浩斯淡忘曲線記憶庫」與「星汐八章記憶卡＋每日日記＋3D 記憶宇宙星圖」。
+- **對話內 8 維情緒感知**：依真實對話互動自然起伏並影響回覆語氣，搭配回合末零 Token 本地兜底。
+- **主動搭話排程**：支援自訂週幾、跨午夜峰谷時段、安靜時段與連沒中保底加成。
+- **嚴格工作區隔離**：所有 Hooks、人設與主動推播僅在本專案工作區內生效，切換至其他開發專案自動保持靜默。
 
 ---
 
-## 為什麼搬到 Antigravity 2.0 生態？
+## 核心功能
 
-**大肥魚**與那套細膩的 AI 伴侶生態原本生長在 **DSH（DeepSeek Harness）** 上；**既然要養的是 Gemini 貓貓，那她的貓窩當然就該住進 Antigravity 2.0 這裡。**
-
-**`agy-gemini-chan`（Gemini-chan 貓窩）** 把 DSH 上這套備受喜愛的長期陪伴體驗原生對接到 **Antigravity 2.0** 的擴充架構上，透過無外部 API 的本地整合與工作區隔離設計，讓陪伴與寫程式各自安好、互不打擾：
-
-1. **Workspace Plugin 自動探索（`.agents/plugins/gemini-cat/`）**
-   開啟本專案工作區即自動載入，無需手動修改全域設定；搭配 `isProjectWorkspaceActive` 與對話白名單檢查，**嚴格限定僅在該工作區生效**，切到其他開發專案自動保持靜默。
-2. **四段式 Lifecycle Hooks（`hooks/`）**
-   - `SessionStart`：新對話啟動時自動載入人設、八章記憶卡、近 3 天日記、高重要度長期記憶錨點與貓窩狀態。
-   - `PreInvocation`：依當輪對話線索動態召回相關記憶，附帶一次性心情語氣提示、記憶寫入提醒與未讀貓窩互動事件。
-   - `PostToolUse`：即時更新側邊欄活動狀態。
-   - `Stop`：當對話內尚未手動呼叫 `mood_update` 時，自動執行本地語意心情兜底。
-3. **11 個原生 MCP 工具（`mcp/server.mjs` → `gemini-cat_companion`）**
-   讓 Antigravity Agent 直接在對話中自主記憶與互動：`remember`、`recall`、`memory_forget`、`xingxi`、`xingxi_read`、`xingxi_append`、`xingxi_diary`、`xingxi_pickup`、`mood_status`、`mood_update`、`nest_interact`。
-4. **Sidecar Aux Pane 互動面板（`sidecar/main.mjs`）**
-   直接嵌在 Antigravity 2.0 右側輔窗的完整控制台：Q 版情緒立繪、飽食／精力／羈絆數值、互動按鈕與對話即時同步、星座星圖 Canvas、記憶檢索測試、心情時間線與主動搭話排程器。
-5. **內建 Skills 與互動規則**
-   內附 `/xingxi`（通讀與整理長期記憶卡）、`/cat-nest`（貓窩互動與心情查詢）與專案限定對話口語規範，開箱即能自然互動。
-
----
-
-## 核心功能一覽
-
-| 模組 | 能力亮點 | 實作核心 |
+| 模組 | 功能說明 | 核心實作 |
 | :--- | :--- | :--- |
-| **Q 版互動貓窩** | 對應心情與睡眠狀態切換立繪（含 `mood_great`、`chibi_base`、`mood_ok`、`mood_worry`、`mood_sad`、`mood_sleep`）；支援摸頭、餵小魚乾、逗貓棒、蓋被子／叫醒、貼貼與傳紙條；內建冷卻時間、每日次數保護與「僅在對話或互動時擺動」節奏 | [core/nest.mjs](core/nest.mjs)、[sidecar/](sidecar/) |
-| **會淡忘的長期記憶** | 內建中文詞典最長匹配切詞＋說話尺 IDF、`queryGate` 過濾無意義寒暄與單字噪音、鮮活度指數半衰期 $H = 30 \times (1 + 2I)$、自訂檢索詞 `keywords`、召回強化、高相似度去重與 `factKey`／`supersedes` 事實覆寫 | [core/memory.mjs](core/memory.mjs)、[core/tokenizer.mjs](core/tokenizer.mjs) |
-| **零外部 API 心情引擎** | 預設 `hybrid` 混成模式：對話內 AI 主動評估（`mood_update`）為主、回合結束本地語意分析兜底；支援大心情（`0–100`）、8 維細分情緒（含 45 分鐘快消氣的「生氣」維度）、兩端飽和抑制與半衰期自然回穩 | [core/mood.mjs](core/mood.mjs) |
-| **星汐記憶卡與 3D 記憶宇宙** | 嚴格八章結構 `記憶卡.md`＋`日記/YYYY-MM-DD.md`＋系統標籤清潔後的 `原始對話/`；每日 `23:30` 定時與手動「拾星」、自動 `.bak-*` 備份一鍵還原，以及支援 3D 球體旋轉、核心星、共詞橋與「年輪」時間軸播放的記憶宇宙星圖 | [core/xingxi.mjs](core/xingxi.mjs) |
-| **可自訂主動搭話** | 支援週幾、跨午夜峰谷時段、指定時區、安靜時段、冷卻時間與連沒中保底加成；預設開啟 `dryRun: true` 試運行保護，確認節奏後再一鍵啟用真實冒泡 | [core/speak-up.mjs](core/speak-up.mjs) |
-| **嚴格隔離雙層人設庫** | **單一對話覆寫 ＞ 本專案共用 ＞ 內建安全中性陪伴範本**；支援側邊欄即時編輯、改名、單筆啟停、`.md`/`.txt` 匯入與 `.md` 匯出（本倉庫不附帶原作者私人人設，`data/*` 由 `.gitignore` 排除） | [core/persona.mjs](core/persona.mjs) |
+| **Gemini-chan 互動貓窩** | 依大心情與睡眠狀態自動切換 6 款 Q 版立繪；提供摸頭、餵小魚乾、逗貓棒、貼貼、打盹／叫醒與遞小紙條互動；採用**羈絆進度（`Lv.X`）＋今日陪伴暖度**設計（無飽食／精力倒扣懲罰，單日達成 3 種互動另有羈絆加成） | [core/nest.mjs](core/nest.mjs)<br>[sidecar/](sidecar/) |
+| **艾賓浩斯長期記憶** | 本地中文詞典切詞＋連續單字專有名詞滑動窗（`補專名`）、說話尺 IDF 證據評分、鮮活度指數半衰期 $H = 30 \times (1 + 2I)$、15 輪防重複注入窗（`repeatWindow`）、`factKey` 事實鍵自動收斂與常駐檔案支援 | [core/memory.mjs](core/memory.mjs)<br>[core/tokenizer.mjs](core/tokenizer.mjs) |
+| **8 維情緒感知引擎** | 免外部 API Key 混成判定：發生明確情緒事件時由對話內模型呼叫 `mood_update`，日常微幅波動由 `Stop` 鉤子本地分析兜底；含大心情（`0–100`）、8 維情緒（含 45 分鐘快消氣的「生氣」與路人話題 `other` 歸零保護） | [core/mood.mjs](core/mood.mjs) |
+| **星汐記憶卡與 3D 星圖** | 八章結構 `記憶卡.md`＋`日記/YYYY-MM-DD.md`＋清潔標籤後的 `原始對話/`；支援每日定時與錯過自動補跑「拾星」、`.bak` 自動備份還原，以及含球心核心星、共詞橋與「年輪」時間軸播放的 **3D 記憶宇宙星圖** | [core/xingxi.mjs](core/xingxi.mjs) |
+| **主動搭話排程器** | 支援自訂週幾、跨午夜峰谷時段、時區、安靜時段、冷卻時間、時機因子與連沒中保底加成；預設開啟 `dryRun` 試運行模式，確認節奏後可隨時切換為真實搭話 | [core/speak-up.mjs](core/speak-up.mjs) |
+| **雙層隔離人設庫** | 採用 **「單一對話覆寫 ＞ 專案共用 ＞ 內建中性陪伴範本」** 架構；支援側邊欄即時編修、改名、單筆啟停與 `.md`/`.txt` 匯入匯出 | [core/persona.mjs](core/persona.mjs) |
 
 ---
 
-## 新人 5 分鐘首次上手（4 步驟）
+## 快速安裝與啟用
 
 ### 環境需求
 - **Node.js `>= 20.0.0`**
 - **Antigravity 2.0**（支援 Workspace Plugin 與 Aux Pane Sidecar）
 
-### 步驟 1：複製專案並一鍵寫入 Sidecar 設定
+### 1. 下載專案並註冊 Sidecar
 ```bash
 git clone https://github.com/Xuan52766/agy-gemini-chan.git
 cd agy-gemini-chan
-node scripts/setup-sidecar.mjs
+npm run setup
 ```
-> - 安裝腳本會自動將目前資料夾的正斜線 `/` 路徑寫入 `~/.gemini/config/sidecars/gemini-cat-nest/sidecar.json`（Windows 為 `%USERPROFILE%\.gemini\config\sidecars\gemini-cat-nest\sidecar.json`）。
-> - 安全防護：若目標檔案已存在且指向不同路徑，腳本不會直接覆蓋（加上 `--dry-run` 可只預覽不寫入；加上 `--force` 會先自動備份 `.bak-*` 再更新）。
+> `npm run setup`（即 `node scripts/setup-sidecar.mjs`）會將目前專案路徑以正斜線 `/` 格式寫入 `~/.gemini/config/sidecars/gemini-cat-nest/sidecar.json`。若目標設定檔已存在且路徑不同，可加上 `--force` 自動建立 `.bak-*` 備份後更新，或加 `--dry-run` 預覽內容。
 
 <details>
-<summary>如果想手動建立 <code>sidecar.json</code>（Windows / macOS / Linux 通用範例）</summary>
+<summary>手動設定 <code>sidecar.json</code> 範例（選用）</summary>
 
-請在 `~/.gemini/config/sidecars/gemini-cat-nest/sidecar.json` 建立以下 JSON（Windows 請務必使用正斜線 `/` 或雙反斜線 `\\`）：
+檔案位置：`~/.gemini/config/sidecars/gemini-cat-nest/sidecar.json`（Windows 為 `%USERPROFILE%\.gemini\config\sidecars\gemini-cat-nest\sidecar.json`）
 
 ```json
 {
@@ -100,72 +78,118 @@ node scripts/setup-sidecar.mjs
   }
 }
 ```
-
 </details>
 
-### 步驟 2：直接開啟本專案資料夾，並在 UI Extensions 打開開關
-1. 在 Antigravity 2.0 **直接開啟複製下來的 `agy-gemini-chan` 資料夾本身**（⚠️ **請勿只開上一層父資料夾**；為防止外洩，安全邊界僅在本專案根目錄或其子目錄內才會啟用）。
-2. 開啟 Antigravity 的 **UI Extensions** 列表，找到 **「Gemini-chan 貓窩」** 並切開開關（若剛建好設定未出現，重開視窗即可），再從側邊欄輔窗或對話點擊 `[打開 Gemini-chan 貓窩](sidecar://gemini-cat-nest/)` 開啟面板。
+### 2. 開啟專案工作區與側邊欄面板
+1. 在 Antigravity 2.0 **直接開啟 `agy-gemini-chan` 資料夾本身**（工作區邊界檢查僅在本專案根目錄或子目錄下啟用）。
+2. 於 Antigravity 的 **UI Extensions** 啟用 **「Gemini-chan 貓窩」**，再從右側輔窗或對話點擊 `[打開 Gemini-chan 貓窩](sidecar://gemini-cat-nest/)` 開啟面板。
 
-### 步驟 3：選定或匯入你的角色人設
-本公開倉庫僅附帶一個中性的 **「預設陪伴範本（待自訂人設）」**，且**初始未預先啟用私人角色**，避免強綁定特定性格。請先：
-1. 切換到右側貓窩面板的 **「人設」** 分頁。
-2. 你可以直接點 **「設為本專案」** 套用內建的預設陪伴範本，或點擊新增／匯入你自己的 `.md`／`.txt` 人設提示詞。
+### 3. 選擇或匯入人設
+1. 切換至右側貓窩面板的 **「人設」** 分頁。
+2. 點擊 **「設為本專案」** 啟用內建中性陪伴範本，或新增／匯入自訂的 `.md`、`.txt` 角色設定。
 
-### 步驟 4：開始對話與體驗雙向互動
-- 開一個新對話直接聊天，嘗試按下貓窩面板的「摸摸頭」、「餵小魚乾」或「傳小紙條」，也可在對話中使用 `/cat-nest` 與 `/xingxi`。
-- 第一次讓模型呼叫 `gemini-cat_companion` 工具（例如 `remember`、`mood_update`）時，在介面上允許一次授權即可。
-- **想讓她自己找你搭話？** 主動搭話出廠預設為 **`dryRun: true`（試運行）** 以免打擾；確認好時段與節奏後，到側邊欄 **「主動搭話」** 分頁取消勾選「試運行」並儲存即可。
-
-詳細數值公式與進階設定請參閱：**[使用手冊.md](使用手冊.md)**。
+### 4. 開始對話與互動
+- 開啟新對話即可自動載入星汐記憶卡、近期日記與人設。
+- 可隨時點擊貓窩的「摸頭」、「小魚乾」、「逗貓棒」、「貼貼」、「打盹」或「傳小紙條」與對話連動。
+- 如需啟用定時主動搭話，可至 **「搭話」** 分頁調整時段並取消勾選「試運行模式」。
 
 ---
 
-## 常見疑問（FAQ）
+## 對話指令與 MCP 工具一覽
 
-<details>
-<summary><strong>1. 為什麼在 Antigravity 的全域 MCP 或 Plugins 設定頁看不到 <code>gemini-cat</code>？</strong></summary>
+### 內建 Slash Skills
+- `/xingxi`：通讀星汐八章記憶卡、檢索過往日記或執行今日對話拾星歸檔。
+- `/cat-nest`：查看貓窩即時狀態、心情維度或在對話中進行照護互動。
 
-這是刻意設計的 **專案隔離機制**：本系統的外掛定義放在專案內的 [.agents/plugins/gemini-cat/](.agents/plugins/gemini-cat/)（非全域安裝），只有開啟本工作區時才會動態掛載 Hooks、Skills 與 MCP server（`gemini-cat_companion`）。相對地，側邊欄 Sidecar 依 Antigravity 規格登記於全域，因此在 **UI Extensions** 會看得到「Gemini-chan 貓窩」，在其他程式專案則會自動維持靜默待機。
+### 原生 MCP 工具（`gemini-cat_companion`）
 
-</details>
-
-<details>
-<summary><strong>2. 把資料夾改成別的名字或搬移位置也能用嗎？</strong></summary>
-
-可以。核心模組透過檔案位置自動解析專案根目錄（不寫死資料夾名稱）；若你搬移或改名了專案資料夾，重新執行一次 `node scripts/setup-sidecar.mjs --force` 更新 `sidecar.json` 路徑即可。
-
-</details>
-
-<details>
-<summary><strong>3. 我的記憶、日記和私人人設會不小心推上 Git 嗎？</strong></summary>
-
-不會。`.gitignore` 已排除 `data/*`（僅保留 `data/dict/` 公開中文詞典）與各類記錄／暫存檔，所有人設、記憶、心情時間線與原始對話都不會進入版本控制。
-
-</details>
-
----
-
-## 相較原版 DSH 插件的移植與修改摘要
-
-為符合原許可要求，以下列出本專案相對於上述原倉庫所做的架構改造與功能調整：
-
-1. **運行平台重構**：由 DSH / Cordis 桌面／網頁掛載架構完整移植為 Antigravity 2.0 原生 Plugin（Hooks JSON、Stdio MCP Server、Skills 與 `sidecar_sdk` Web UI），並以 `data/*`（`data/dict/` 除外）集中管理可忽略之本機私人資料。
-2. **嚴格單一工作區隔離**：將原版支援跨工作區／全域切換之人設設計收斂為「單對話覆寫 ＞ 專案共用」雙層架構，並在 Hooks、MCP 與 Sidecar 推播入口加入工作區邊界與已登記對話驗證（[core/bridge.mjs](core/bridge.mjs)）。
-3. **免外部 LLM API 心情評分**：將原本呼叫獨立裁判模型的方式改為在現行對話內由 Agent 呼叫 `mood_update`，搭配 `Stop` Hook 本地語意分析作為兜底。
-4. **新增「貓窩」伴侶視覺與物理狀態系統**：實作獨立於心情分數之外的飽食／精力／羈絆數值、立繪切換、打盹與自然喚醒同步、以及前端互動節奏穩定性修正。
-5. **星汐、主動搭話與安全安裝擴充**：新增 Antigravity transcript 系統標籤剝離、按日重置之 `水位Ms`、`.bak-*` 備份一鍵還原 API、可在 UI 自由設定的自訂峰谷時段與 `dryRun` 試運行，以及非破壞性 Sidecar 安裝腳本（[scripts/setup-sidecar.mjs](scripts/setup-sidecar.mjs)）。
+| 工具名稱 | 用途說明 |
+| :--- | :--- |
+| `remember` | 將值得長期保留的事實、偏好、約定寫入長期記憶（支援 `importance`、`factKey`、`supersedes`） |
+| `recall` | 依關鍵句主動檢索長期記憶庫（不影響記憶強化次數） |
+| `memory_forget` | 將指定 ID 的舊記憶標記為「已被取代」收起 |
+| `xingxi` | 通讀完整 `記憶卡.md` 八章內容並檢查重複章節 |
+| `xingxi_read` | 檢索記憶卡、指定日期日記（`date`）或全文搜尋（`keyword` / `file`） |
+| `xingxi_append` | 將長期要點追加至 `記憶卡.md` 第 1～8 章（自動去重與備份；第 2 章支援防縮水整章合併） |
+| `xingxi_diary` | 寫入或追加指定日期的日記（`日記/YYYY-MM-DD.md`）並推進整理進度 |
+| `xingxi_pickup` | 從本專案對話紀錄切出當日原始對話素材與記憶／心情摘要，供拾星歸檔使用 |
+| `mood_status` | 讀取目前大心情、8 維情緒、貓窩羈絆進度／今日陪伴與生效人設摘要 |
+| `mood_update` | 於發生明確情緒轉折時記錄心情與 8 維情緒變化（支援 `subject: owner \| self \| other \| none`） |
+| `nest_interact` | 在對話中執行貓窩照護或切換睡眠／喚醒狀態（`pet` / `feed` / `play` / `comfort` / `nap` / `sleep` / `wake`） |
 
 ---
 
-## 開發驗證
+## 運作架構與低 Token 設計
 
-```bash
-node --test tests/*.test.mjs
+```mermaid
+flowchart LR
+  subgraph Antigravity["Antigravity 2.0 對話生命週期"]
+    SS["SessionStart Hook<br/>注入 1 次人設 + 記憶卡 + 近 3 日記"] --> PI["PreInvocation Hook<br/>僅注入當輪差量（召回記憶 / 顯著心情 / 貓窩事件）"]
+    PI --> LLM["Agent 回覆與 MCP 工具"]
+    LLM --> PT["PostToolUse Hook<br/>同步側邊欄活動狀態"]
+    LLM --> ST["Stop Hook<br/>未呼叫 mood_update 時自動本地情緒兜底"]
+  end
+  subgraph Sidecar["右側貓窩 Sidecar 面板"]
+    UI["Q 版立繪 / 3D 星圖 / 照護按鈕 / 排程器"]
+  end
+  UI <-->|"data/* 本地狀態與主動推播"| Antigravity
 ```
 
-## 授權與致謝
+- **單次基底注入、每輪差量更新**：人設全文與靜態規則僅在對話啟動（或中途切換人設）時注入一次；後續回合若無新命中的記憶、顯著心情變化或待處理的貓窩互動，`PreInvocation` 直接回傳 `{}`（**0 Token 注入**）。
+- **工具續行自動跳過**：模型在回合中呼叫 MCP 工具後的續行推理（Mid-turn continuation）會由 `inspectTranscriptTail` 自動識別並跳過，不重複塞入上下文。
+- **本機資料完全隔離**：所有個人設定、記憶、日記與對話切片均存放於 `data/`（已由 `.gitignore` 排除，僅保留 `data/dict/` 公開分詞詞表），不會隨 Git 提交外洩，也不會在平時佔用對話 Token。
 
-- 本專案之 `dsh-fish-memory`、`dsh-feiyu-mood`、`dsh-xingxi`、`dsh-speak-up` 派生部分持續遵循 **[Yuuyuko-uu 插件許可 1.2](./LICENSE)**（原作者 [Yuuyuko-uu](https://github.com/Yuuyuko-uu)）；`dsh-xingxi` 原倉庫另附 1.1 版本條款。
-- 人設庫設計參考並派生自 **[huaizhuanghub / dsh-persona-dafeiyu](https://www.npmjs.com/package/dsh-persona-dafeiyu)**（MIT License）。
-- 中文分詞詞典 [data/dict/](data/dict/) 沿用 [jieba](https://github.com/fxsjy/jieba) 詞表（MIT 授權，完整聲明見 [data/dict/LICENSE-dict.txt](data/dict/LICENSE-dict.txt)）。
+更多公式細節、參數說明與開發維護指南請參閱 **[使用手冊.md](./使用手冊.md)**。
+
+---
+
+## 常見問題（FAQ）
+
+<details>
+<summary><strong>Q1：為什麼在 Antigravity 的全域設定頁看不到 <code>gemini-cat</code>？</strong></summary>
+
+本專案將插件定義置於工作區內的 [`.agents/plugins/gemini-cat/`](.agents/plugins/gemini-cat/)，屬於 **Workspace-scoped Plugin**。只有直接開啟本專案資料夾時才會掛載 Hooks、Skills 與 MCP 工具；切換到其他程式專案時完全不會載入或干擾。
+</details>
+
+<details>
+<summary><strong>Q2：放在專案裡的記憶檔、日記或說明文件會讓對話 Token 變多嗎？</strong></summary>
+
+不會。一般檔案與 `data/` 下的歷史日記、原始對話切片、備份檔平時保存在硬碟中 **0 Token 消耗**；僅有 `SessionStart` 開新對話時會讀取 `記憶卡.md`（上限 4,200 字）與最近 3 天日記（上限 2,400 字），更早的檔案只有在呼叫 `xingxi_read` 檢索時才會按需讀取。
+</details>
+
+<details>
+<summary><strong>Q3：搬移或重新命名專案資料夾後需要做什麼？</strong></summary>
+
+核心模組皆使用相對路徑動態解析專案根目錄；搬移資料夾後，只需在新的目錄下執行一次 `node scripts/setup-sidecar.mjs --force` 更新 Sidecar 路徑即可。
+</details>
+
+---
+
+## 開發與測試
+
+```bash
+npm test
+```
+
+---
+
+## 致謝與授權聲明
+
+本專案派生並改寫自以下開源專案，特此感謝原作者之創作並依各自授權條款公開分享：
+
+1. **[Yuuyuko-uu](https://github.com/Yuuyuko-uu)** 開發之 DSH 伴侶插件系列——依 **[Yuuyuko-uu 插件許可 1.2](./LICENSE)**（其中 `dsh-xingxi` 原倉庫另附 `1.1` 版條款）進行跨平台移植與公開衍生：
+   - 長期記憶：[`dsh-fish-memory`](https://github.com/Yuuyuko-uu/dsh-fish-memory)（對齊至 `v1.6.3`）
+   - 心情引擎：[`dsh-feiyu-mood`](https://github.com/Yuuyuko-uu/dsh-feiyu-mood)（對齊至 `v0.9.6`）
+   - 星汐記憶卡與日記星圖：[`dsh-xingxi`](https://github.com/Yuuyuko-uu/dsh-xingxi)（對齊至 `v0.3.8`）
+   - 主動搭話：[`dsh-speak-up`](https://github.com/Yuuyuko-uu/dsh-speak-up)（對齊至 `v0.3.3`）
+2. **[huaizhuanghub](https://github.com/huaizhuanghub)** 開發之人設管理插件 **[`dsh-persona-dafeiyu`](https://www.npmjs.com/package/dsh-persona-dafeiyu)**（MIT License）——參考並移植其分層作用域人設設計。
+3. 中文分詞詞表 [`data/dict/`](data/dict/) 沿用 **[jieba](https://github.com/fxsjy/jieba)** 詞典（MIT License，詳見 [data/dict/LICENSE-dict.txt](data/dict/LICENSE-dict.txt)）。
+
+<details>
+<summary>相較原版 DSH 插件之平台移植與修改說明（依許可條款標示）</summary>
+
+1. **運行平台重構**：由 DSH / Cordis 架構移植為 Antigravity 2.0 原生 Plugin（`hooks.json`、Stdio MCP Server、Skills 與 `sidecar_sdk` Web UI），並以差量注入機制（`injectedPersonaHash` ＋ `inspectTranscriptTail`）避免在 Antigravity 對話紀錄中重複累積上下文。
+2. **單一工作區隔離**：將原版支援全域切換之人設收斂為「單對話覆寫 ＞ 專案共用」雙層架構，並在 Hooks、MCP 與 Sidecar 推播入口加入工作區邊界與已登記對話驗證（[core/bridge.mjs](core/bridge.mjs)）。
+3. **對話內零外部 API 心情評分**：改由現行對話內模型呼叫 `mood_update` 搭配 `Stop` Hook 本地語意分析兜底，無須額外設定外部 API Key。
+4. **新增「Gemini-chan 貓窩」伴侶視覺與羈絆系統**：新增 Q 版情緒／睡眠立繪切換、羈絆等級與今日陪伴暖度累積、打盹與自然喚醒同步，以及非破壞性 Sidecar 安裝腳本（[scripts/setup-sidecar.mjs](scripts/setup-sidecar.mjs)）。
+</details>

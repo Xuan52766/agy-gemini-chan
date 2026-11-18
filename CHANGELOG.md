@@ -2,6 +2,31 @@
 
 本專案採用語意化版本控制（[Semantic Versioning](https://semver.org/)），版本號同步維護於 [package.json](./package.json)、[.agents/plugins/gemini-cat/plugin.json](./.agents/plugins/gemini-cat/plugin.json) 與 [mcp/server.mjs](./mcp/server.mjs)。
 
+## [1.2.0] - 2026-11-18
+
+### 架構與體驗升級（Added & Changed）
+- **貓窩（Cat Nest）數值與陪伴架構改版**（`core/nest.mjs`、`sidecar/index.html`、`sidecar/app.js`、`mcp/server.mjs`）：
+  - 移除隨時間倒扣的「飽食 / 精力」生存懲罰機制與每輪固定狀態洗版，改為 **「心情（0–100） / 羈絆進度（Lv.X · 0–50） / 今日陪伴（今日互動次數與暖度 0–100%）」** 三欄設計。
+  - 保留全部 5 個照護按鈕（摸頭、餵小魚乾、逗貓棒、貼貼、打盹／叫醒）與傳小紙條，移除「吃太飽拒食」與「精力過低拒玩」限制，並將冷卻時間調降至 `5–12` 秒、每日互動額度調升至 `10–15` 次。
+  - 新增 **「每日多元陪伴加成」**：單日內達成 **3 種不同照護動作** 時，自動額外獎勵 **羈絆 `+5`**。
+- **同步 `dsh-fish-memory` v1.6.2–v1.6.3 檢索與防重複機制**（`core/tokenizer.mjs`、`core/memory.mjs`、`sidecar/`）：
+  - **專有名詞滑動切詞（`補專名`）**：對連續 2～4 個詞典外單字（如「糯鯨」「奈奈」）自動建立多字詞 token，避免單字過濾時漏掉專有名詞。
+  - **同條記憶防重複注入窗（`repeatWindow`，預設 `15` 輪）**：剛注入過的記憶在接下來 15 輪使用者對話內不再重複塞入，節省上下文名額與 Token。
+  - **常駐檔案單輪上限（`factCap`，預設 `1` 條）與原句嚴格門檻**：`stable_profile` 條目需命中 $\ge 2$ 個實詞（含至少 1 個罕見詞）或單一專有名詞才放行。
+  - **同分排序優化（`比召回`）**：當關聯度 `C` 同分（精確至小數第 3 位）時，優先排命中詞數 `hitN` 與命中總字長 `hitLen`。
+- **同步 `dsh-feiyu-mood` v0.9.4–v0.9.6 情緒主體保護**（`core/mood.mjs`、`mcp/server.mjs`）：
+  - `mood_update` 與情緒判定新增 `subject`（`owner | self | other | none`）：當對話主題為外人八卦或無關雙方的閒聊（`other` / `none`）時，強制將 `moodDelta` 歸零並壓制負向情緒維度，避免聊別人的事拉低伴侶心情。
+- **同步 `dsh-xingxi` v0.3.6–v0.3.8 拾星差量追加與錯過補跑**（`core/xingxi.mjs`）：
+  - **同日二次拾星差量追加**：`原始對話/YYYY-MM-DD.txt` 改按已存在行比對差量寫入，解決同日第二次切料因開頭相同而被整段略過的問題。
+  - **錯過定時自動補跑**：若已啟用定時拾星且 `lastScheduledDate` 非空並早於昨天，輪詢時自動補跑昨天的拾星歸檔，無須等到當晚定時點。
+  - **帳本進度自動對齊真實日記**：若 `日記/YYYY-MM-DD.md` 已存在 $\ge 40$ 字有效正文且晚於 `.xingxi.json` 的 `已整理到`，自動推進帳本日期。
+
+### 問題修正與 Token 最佳化（Fixed）
+- **大幅降低對話 Token 消耗（消除每輪與工具呼叫重複注入）**（`hooks/lib.mjs`、`hooks/pre-invocation.mjs`、`hooks/session-start.mjs`、`core/bridge.mjs`）：
+  - 以 `injectedPersonaHash` 追蹤對話已注入的人設版本；人設與靜態規則僅在 `SessionStart`（或側邊欄中途切換／編修人設）時注入一次，不再每輪重複往 `transcript.jsonl` 累加 4,500 字人設。
+  - 新增 `inspectTranscriptTail(transcriptPath)`：精確攔截工具呼叫後的同輪續行（`PLANNER_RESPONSE` / `GENERIC`），並辨識 `sidecar.sendMessage` 寫入的 `SYSTEM_MESSAGE`（`[SPEAK_UP_INTERNAL]`、`[XINGXI_AUTO_PICKUP]`、`[CAT_NEST_EVENT]`），防止主動搭話輪誤重置 `lastUserSpeechAt` 或在 `Stop` 重複拿舊訊息評分。
+  - 收緊對話內 `mood_update` 觸發條件（僅在明確情緒事件時呼叫工具，微幅波動交由輪末 0 Token 的 `Stop` 鉤子處理），減少不必要的第二次模型推理呼叫。
+
 ## [1.1.0] - 2026-11-15
 
 ### 新增功能（Added）
