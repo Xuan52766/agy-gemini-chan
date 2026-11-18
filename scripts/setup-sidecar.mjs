@@ -51,6 +51,69 @@ export function resolveTargetSidecarPath(configDir) {
   return join(base, 'sidecars', SIDECAR_ID, 'sidecar.json');
 }
 
+export function resolveTargetPluginDir(configDir) {
+  const base = configDir
+    ? resolve(configDir)
+    : process.env.GEMINI_CONFIG_DIR
+      ? resolve(process.env.GEMINI_CONFIG_DIR)
+      : join(homedir(), '.gemini', 'config');
+  return join(base, 'plugins', 'gemini-cat');
+}
+
+export function syncGlobalPluginBundle(repoRoot = DEFAULT_REPO_ROOT, configDir = '') {
+  const pluginSrcDir = resolve(repoRoot, '.agents', 'plugins', 'gemini-cat');
+  const targetPluginDir = resolveTargetPluginDir(configDir);
+  const rootPosix = toPosixPath(resolve(repoRoot));
+
+  mkdirSync(join(targetPluginDir, 'sidecars', 'gemini_cat_nest'), { recursive: true });
+  mkdirSync(join(targetPluginDir, 'skills', 'cat-nest'), { recursive: true });
+  mkdirSync(join(targetPluginDir, 'skills', 'xingxi'), { recursive: true });
+
+  // Copy manifest, logo, README, and skills
+  for (const rel of ['plugin.json', 'logo.svg', 'README.md', 'skills/cat-nest/SKILL.md', 'skills/xingxi/SKILL.md']) {
+    const src = join(pluginSrcDir, rel);
+    if (existsSync(src)) {
+      copyFileSync(src, join(targetPluginDir, rel));
+    }
+  }
+
+  // Write global-safe hooks.json pointing to repoRoot hooks (which strictly check ensureInProjectScope)
+  const hooksObj = {
+    'gemini-cat': {
+      SessionStart: [{ type: 'command', command: `node "${rootPosix}/hooks/session-start.mjs"`, timeout: 10 }],
+      PreInvocation: [{ type: 'command', command: `node "${rootPosix}/hooks/pre-invocation.mjs"`, timeout: 10 }],
+      PostToolUse: [{
+        matcher: '*',
+        hooks: [{ type: 'command', command: `node "${rootPosix}/hooks/post-tool-use.mjs"`, timeout: 5 }],
+      }],
+      Stop: [{ type: 'command', command: `node "${rootPosix}/hooks/stop.mjs"`, timeout: 15 }],
+    },
+  };
+  writeFileSync(join(targetPluginDir, 'hooks.json'), JSON.stringify(hooksObj, null, 2) + '\n', { encoding: 'utf-8' });
+
+  // Write mcp_config.json pointing to repoRoot mcp/server.mjs
+  const mcpObj = {
+    mcpServers: {
+      companion: {
+        command: 'node',
+        args: [`${rootPosix}/mcp/server.mjs`],
+        cwd: rootPosix,
+      },
+    },
+  };
+  writeFileSync(join(targetPluginDir, 'mcp_config.json'), JSON.stringify(mcpObj, null, 2) + '\n', { encoding: 'utf-8' });
+
+  // Write bundled sidecar.json inside plugins/gemini-cat/sidecars/gemini_cat_nest/
+  const sidecarJson = JSON.stringify(buildSidecarConfig(repoRoot), null, 2) + '\n';
+  writeFileSync(
+    join(targetPluginDir, 'sidecars', 'gemini_cat_nest', 'sidecar.json'),
+    sidecarJson,
+    { encoding: 'utf-8' },
+  );
+
+  return targetPluginDir;
+}
+
 export function setupSidecar({
   repoRoot = DEFAULT_REPO_ROOT,
   configDir = '',
@@ -73,6 +136,7 @@ export function setupSidecar({
       const parsed = JSON.parse(existingRaw);
       const currentArg = toPosixPath(parsed?.args?.[0] || '');
       if (currentArg === nextConfig.args[0] && parsed?.has_web_ui === true) {
+        if (!dryRun) syncGlobalPluginBundle(repoRoot, configDir);
         return { ok: true, status: 'unchanged', targetPath, config: nextConfig };
       }
     } catch {
@@ -96,7 +160,8 @@ export function setupSidecar({
     const backupPath = `${targetPath}.bak-${Date.now()}`;
     copyFileSync(targetPath, backupPath);
     writeFileSync(targetPath, nextJson, { encoding: 'utf-8' });
-    return { ok: true, status: 'updated', targetPath, backupPath, config: nextConfig };
+    const pluginDir = syncGlobalPluginBundle(repoRoot, configDir);
+    return { ok: true, status: 'updated', targetPath, backupPath, pluginDir, config: nextConfig };
   }
 
   if (dryRun) {
@@ -105,7 +170,8 @@ export function setupSidecar({
 
   mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, nextJson, { encoding: 'utf-8' });
-  return { ok: true, status: 'created', targetPath, config: nextConfig };
+  const pluginDir = syncGlobalPluginBundle(repoRoot, configDir);
+  return { ok: true, status: 'created', targetPath, pluginDir, config: nextConfig };
 }
 
 function parseArgs(argv) {
