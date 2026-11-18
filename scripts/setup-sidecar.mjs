@@ -4,7 +4,7 @@
  * pointing to this repository's `sidecar/main.mjs` with forward-slash paths.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const DEFAULT_REPO_ROOT = resolve(dirname(__filename), '..');
 export const SIDECAR_ID = 'gemini-cat-nest';
+export const PLUGIN_SIDECAR_FOLDER = 'gemini_cat_nest';
 
 export function toPosixPath(p) {
   return String(p || '').replace(/\\/g, '/');
@@ -42,22 +43,33 @@ export function buildSidecarConfig(repoRoot = DEFAULT_REPO_ROOT) {
   };
 }
 
-export function resolveTargetSidecarPath(configDir) {
-  const base = configDir
+export function resolveConfigBase(configDir) {
+  return configDir
     ? resolve(configDir)
     : process.env.GEMINI_CONFIG_DIR
       ? resolve(process.env.GEMINI_CONFIG_DIR)
       : join(homedir(), '.gemini', 'config');
-  return join(base, 'sidecars', SIDECAR_ID, 'sidecar.json');
 }
 
 export function resolveTargetPluginDir(configDir) {
-  const base = configDir
-    ? resolve(configDir)
-    : process.env.GEMINI_CONFIG_DIR
-      ? resolve(process.env.GEMINI_CONFIG_DIR)
-      : join(homedir(), '.gemini', 'config');
-  return join(base, 'plugins', 'gemini-cat');
+  return join(resolveConfigBase(configDir), 'plugins', 'gemini-cat');
+}
+
+export function resolveTargetSidecarPath(configDir) {
+  return join(resolveTargetPluginDir(configDir), 'sidecars', PLUGIN_SIDECAR_FOLDER, 'sidecar.json');
+}
+
+export function removeLegacyStandaloneSidecar(configDir) {
+  const legacyDir = join(resolveConfigBase(configDir), 'sidecars', SIDECAR_ID);
+  if (existsSync(legacyDir)) {
+    try {
+      rmSync(legacyDir, { recursive: true, force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 export function syncGlobalPluginBundle(repoRoot = DEFAULT_REPO_ROOT, configDir = '') {
@@ -65,7 +77,7 @@ export function syncGlobalPluginBundle(repoRoot = DEFAULT_REPO_ROOT, configDir =
   const targetPluginDir = resolveTargetPluginDir(configDir);
   const rootPosix = toPosixPath(resolve(repoRoot));
 
-  mkdirSync(join(targetPluginDir, 'sidecars', 'gemini_cat_nest'), { recursive: true });
+  mkdirSync(join(targetPluginDir, 'sidecars', PLUGIN_SIDECAR_FOLDER), { recursive: true });
   mkdirSync(join(targetPluginDir, 'skills', 'cat-nest'), { recursive: true });
   mkdirSync(join(targetPluginDir, 'skills', 'xingxi'), { recursive: true });
 
@@ -103,13 +115,8 @@ export function syncGlobalPluginBundle(repoRoot = DEFAULT_REPO_ROOT, configDir =
   };
   writeFileSync(join(targetPluginDir, 'mcp_config.json'), JSON.stringify(mcpObj, null, 2) + '\n', { encoding: 'utf-8' });
 
-  // Write bundled sidecar.json inside plugins/gemini-cat/sidecars/gemini_cat_nest/
-  const sidecarJson = JSON.stringify(buildSidecarConfig(repoRoot), null, 2) + '\n';
-  writeFileSync(
-    join(targetPluginDir, 'sidecars', 'gemini_cat_nest', 'sidecar.json'),
-    sidecarJson,
-    { encoding: 'utf-8' },
-  );
+  // Clean up legacy standalone ~/.gemini/config/sidecars/gemini-cat-nest so only the plugin-bound sidecar appears
+  removeLegacyStandaloneSidecar(configDir);
 
   return targetPluginDir;
 }
