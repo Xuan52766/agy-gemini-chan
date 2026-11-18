@@ -89,16 +89,30 @@ export function syncGlobalPluginBundle(repoRoot = DEFAULT_REPO_ROOT, configDir =
     }
   }
 
-  // Write global-safe hooks.json pointing to repoRoot hooks (which strictly check ensureInProjectScope)
+  // Write thin ESM forwarder stubs + relative hooks.json so Antigravity does not mangle quoted Windows paths
+  const hookNames = ['session-start.mjs', 'pre-invocation.mjs', 'post-tool-use.mjs', 'stop.mjs'];
+  const hooksDir = join(targetPluginDir, 'hooks');
+  mkdirSync(hooksDir, { recursive: true });
+  for (const name of hookNames) {
+    const targetHrefExpr = JSON.stringify(`${rootPosix}/hooks/${name}`);
+    const stubSource = [
+      '// Thin forwarder for global plugin execution -> resolves to repo hook regardless of CWD',
+      "import { pathToFileURL } from 'node:url';",
+      `await import(pathToFileURL(${targetHrefExpr}).href);`,
+      '',
+    ].join('\n');
+    writeFileSync(join(hooksDir, name), stubSource, { encoding: 'utf-8' });
+  }
+
   const hooksObj = {
     'gemini-cat': {
-      SessionStart: [{ type: 'command', command: `node "${rootPosix}/hooks/session-start.mjs"`, timeout: 10 }],
-      PreInvocation: [{ type: 'command', command: `node "${rootPosix}/hooks/pre-invocation.mjs"`, timeout: 10 }],
+      SessionStart: [{ type: 'command', command: 'node hooks/session-start.mjs', timeout: 10 }],
+      PreInvocation: [{ type: 'command', command: 'node hooks/pre-invocation.mjs', timeout: 10 }],
       PostToolUse: [{
         matcher: '*',
-        hooks: [{ type: 'command', command: `node "${rootPosix}/hooks/post-tool-use.mjs"`, timeout: 5 }],
+        hooks: [{ type: 'command', command: 'node hooks/post-tool-use.mjs', timeout: 5 }],
       }],
-      Stop: [{ type: 'command', command: `node "${rootPosix}/hooks/stop.mjs"`, timeout: 15 }],
+      Stop: [{ type: 'command', command: 'node hooks/stop.mjs', timeout: 15 }],
     },
   };
   writeFileSync(join(targetPluginDir, 'hooks.json'), JSON.stringify(hooksObj, null, 2) + '\n', { encoding: 'utf-8' });

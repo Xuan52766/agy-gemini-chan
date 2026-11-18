@@ -56,6 +56,7 @@ export function registerProjectConversation(
     lastInputStepIndex = undefined,
     injectedPersonaHash = undefined,
     hasInjectedStaticRules = undefined,
+    hasInjectedStartupContext = undefined,
   } = {},
   root = getProjectRoot(),
 ) {
@@ -80,6 +81,7 @@ export function registerProjectConversation(
       lastInputStepIndex: Number.isFinite(lastInputStepIndex) ? lastInputStepIndex : -1,
       injectedPersonaHash: typeof injectedPersonaHash === 'string' ? injectedPersonaHash : '',
       hasInjectedStaticRules: Boolean(hasInjectedStaticRules),
+      hasInjectedStartupContext: Boolean(hasInjectedStartupContext),
       transcriptPath: transcriptPath || '',
       modelName: modelName || '',
       turnCount: 0,
@@ -97,6 +99,7 @@ export function registerProjectConversation(
     if (Number.isFinite(lastInputStepIndex)) entry.lastInputStepIndex = lastInputStepIndex;
     if (typeof injectedPersonaHash === 'string') entry.injectedPersonaHash = injectedPersonaHash;
     if (typeof hasInjectedStaticRules === 'boolean') entry.hasInjectedStaticRules = hasInjectedStaticRules;
+    if (typeof hasInjectedStartupContext === 'boolean') entry.hasInjectedStartupContext = hasInjectedStartupContext;
   }
   data.activeConversationId = String(conversationId);
   writeJsonAtomic(sessionsFile(root), data);

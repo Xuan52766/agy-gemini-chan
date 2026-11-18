@@ -104,21 +104,17 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
     }, env);
     assert.deepEqual(outOfScope, {});
 
-    // Inside gemini_cat: SessionStart injects Xingxi Card + Recent Diary + Mood Guide + Nest state
+    // Inside gemini_cat: SessionStart initializes archive/session & returns `{}` (Antigravity 2.0 drops SessionStart injectSteps),
+    // while Turn 1 PreInvocation performs the guaranteed one-time startup injection (Persona + Xingxi Card + Diaries + Mood Guide + Rules)
+    mutatePersona('create', { name: '初始測試人設', text: 'INITIAL_PERSONA_TEXT', activate: true }, REPO_ROOT);
     const startRes = runHook('hooks/session-start.mjs', {
       conversationId: 'cat-conv-1',
       workspacePaths: [REPO_ROOT],
       cwd: REPO_ROOT,
     }, env);
-    const startInject = startRes.injectSteps?.[0]?.systemMessage?.systemMessage || '';
-    assert.match(startInject, /貓窩/);
-    assert.match(startInject, /每天都要一起道早安/);
-    assert.match(startInject, /測試完貓窩超開心/);
-    assert.match(startInject, /mood_update/);
-    assert.match(startInject, /對話內長期記憶提醒/);
-    assert.match(startInject, /remember/);
+    assert.deepEqual(startRes, {});
 
-    // Turn 1 PreInvocation drains Cat Nest pet action + injects memory rule + avoids duplicate on invocationNum=2
+    // Turn 1 PreInvocation injects Persona + Xingxi Card + Recent Diary + Mood Guide + Memory Rule + Cat Nest action, and avoids duplicate on invocationNum=2
     const pre1 = runHook('hooks/pre-invocation.mjs', {
       conversationId: 'cat-conv-1',
       workspacePaths: [REPO_ROOT],
@@ -127,8 +123,14 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
       lastUserInput: '<USER_REQUEST>\n早安！現在心情怎麼樣？\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nlocal time\n</ADDITIONAL_METADATA>',
     }, env);
     const pre1Msg = pre1.injectSteps?.[0]?.systemMessage?.systemMessage || '';
+    assert.match(pre1Msg, /INITIAL_PERSONA_TEXT/);
+    assert.match(pre1Msg, /貓窩/);
+    assert.match(pre1Msg, /每天都要一起道早安/);
+    assert.match(pre1Msg, /測試完貓窩超開心/);
+    assert.match(pre1Msg, /mood_update/);
     assert.match(pre1Msg, /摸了摸你的頭/);
     assert.match(pre1Msg, /對話內長期記憶提醒/);
+    assert.match(pre1Msg, /remember/);
     const traceAfterPre1 = JSON.parse(readFileSync(join(dataDir, 'fish-memory', 'store.json'), 'utf8')).traces;
     assert.equal(traceAfterPre1[traceAfterPre1.length - 1].query, '早安！現在心情怎麼樣？');
 
@@ -168,7 +170,7 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
     }, env);
     const pre2Text = preTurn2.injectSteps?.[0]?.systemMessage?.systemMessage || '';
     assert.match(pre2Text, /主人溫柔道早安/);
-    assert.doesNotMatch(pre2Text, /對話內長期記憶提醒|對話內心情自評|貓窩狀態/);
+    assert.doesNotMatch(pre2Text, /INITIAL_PERSONA_TEXT|星汐長期記憶卡|對話內長期記憶提醒|對話內心情自評|貓窩即時狀態|貓窩狀態/);
 
     // Changing persona mid-conversation triggers a one-time persona re-injection on next turn
     mutatePersona('create', { name: '新切換人設', text: 'UPDATED_PERSONA_TEXT', activate: true }, REPO_ROOT);
@@ -711,6 +713,23 @@ test('setup-sidecar script writes portable forward-slash config safely without c
     assert.equal(written.command, 'node');
     assert.equal(written.has_web_ui, true);
     assert.match(written.args[0], /\/sidecar\/main\.mjs$/);
+
+    // Global plugin hooks.json must use relative stub paths (never quoted Windows paths) & stubs execute cleanly from plugin dir
+    const globalHooksPath = join(created.pluginDir, 'hooks.json');
+    const globalHooksRaw = readFileSync(globalHooksPath, 'utf-8');
+    assert.doesNotMatch(globalHooksRaw, /\\"|[A-Za-z]:[/\\]/);
+    const globalHooks = JSON.parse(globalHooksRaw)['gemini-cat'];
+    assert.equal(globalHooks.SessionStart[0].command, 'node hooks/session-start.mjs');
+    assert.equal(globalHooks.PreInvocation[0].command, 'node hooks/pre-invocation.mjs');
+    assert.equal(globalHooks.PostToolUse[0].hooks[0].command, 'node hooks/post-tool-use.mjs');
+    assert.equal(globalHooks.Stop[0].command, 'node hooks/stop.mjs');
+    const stubRun = spawnSync(process.execPath, ['hooks/pre-invocation.mjs'], {
+      cwd: created.pluginDir,
+      input: JSON.stringify({ conversationId: 'ext-check', workspacePaths: ['C:\\other'] }),
+      encoding: 'utf-8',
+    });
+    assert.equal(stubRun.status, 0, stubRun.stderr);
+    assert.deepEqual(JSON.parse((stubRun.stdout || '{}').trim() || '{}'), {});
 
     const second = setupSidecar({ repoRoot: REPO_ROOT, configDir: cfgDir });
     assert.equal(second.ok, true);

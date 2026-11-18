@@ -2,6 +2,16 @@
 
 本專案採用語意化版本控制（[Semantic Versioning](https://semver.org/)），版本號同步維護於 [package.json](./package.json)、[.agents/plugins/gemini-cat/plugin.json](./.agents/plugins/gemini-cat/plugin.json) 與 [mcp/server.mjs](./mcp/server.mjs)。
 
+## [1.2.1] - 2026-11-18
+
+### 問題修正（Fixed）
+- **修正新對話未收到人設、星汐記憶卡與近期日記的問題**（`hooks/session-start.mjs`、`hooks/pre-invocation.mjs`、`core/bridge.mjs`）：
+  - 經實機對話紀錄驗證，Antigravity 2.0 並不會將 `SessionStart` 回傳的 `injectSteps` 插入對話軌跡中；原先 `session-start.mjs` 又提前標記了 `injectedPersonaHash`，導致第 1 輪 `PreInvocation` 誤判已注入而跳過人設。
+  - 現改為由 `SessionStart` 僅負責初始化星汐檔案、登記專案對話狀態（不預先鎖定 `injectedPersonaHash`）與更新貓窩活動狀態；改由每個對話第 1 輪 `PreInvocation`（含缺少 `hasInjectedStartupContext` 的舊對話補救）保證注入 **人設＋星汐記憶卡＋近 3 日日記＋重要核心記憶＋心情基底＋貓窩即時狀態與工具規則**，後續輪次依然只注入動態差量，維持零膨脹 Token 最佳化。
+- **修正全域外掛 `hooks.json` 在 Windows 路徑含引號導致外部工作區報錯問題**（`scripts/setup-sidecar.mjs`）：
+  - Antigravity 執行全域外掛（`~/.gemini/config/plugins/gemini-cat/hooks.json`）時會將命令參數視為相對於外掛目錄的路徑，造成 `node "F:/..."` 被拼成無效模組路徑並報 `Cannot find module`。
+  - `npm run setup`（`setup-sidecar.mjs`）現在會在外掛目錄下生成輕量 ESM 轉發腳本（`hooks/*.mjs`）並於 `hooks.json` 使用無引號相對路徑 `node hooks/*.mjs`，同時保留嚴格的 `ensureInProjectScope` 專案邊界防護，於其他工作區可無錯安靜略過。
+
 ## [1.2.0] - 2026-11-18
 
 ### 架構與體驗升級（Added & Changed）

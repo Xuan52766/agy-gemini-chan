@@ -13,8 +13,8 @@
 import { createHash } from 'node:crypto';
 import { classifyInputSource, loadRegisteredSessions, registerProjectConversation } from '../core/bridge.mjs';
 import { buildInChatMemoryRule, recallMemories } from '../core/memory.mjs';
-import { buildInChatMoodRule, consumeMoodInjection, loadMoodConfig } from '../core/mood.mjs';
-import { consumePendingNestContext, loadNestState, setNestActivity, wakeFromSleep } from '../core/nest.mjs';
+import { buildInChatMoodRule, buildSessionMoodGuide, consumeMoodInjection, getMoodSnapshot, loadMoodConfig } from '../core/mood.mjs';
+import { consumePendingNestContext, getNestSnapshot, loadNestState, setNestActivity, wakeFromSleep } from '../core/nest.mjs';
 import { resolvePersona } from '../core/persona.mjs';
 import {
   appendLogLine,
@@ -23,6 +23,7 @@ import {
   getProjectRoot,
   stripAntigravityWrappers,
 } from '../core/storage.mjs';
+import { buildSessionStartupContext, ensureXingxiArchive } from '../core/xingxi.mjs';
 import {
   ensureInProjectScope,
   injectSystemContext,
@@ -75,8 +76,18 @@ function main() {
 
   const persona = resolvePersona({ root: ROOT, sessionId: sid });
   const personaHash = computePersonaHash(persona);
-  const needsPersonaInject = Boolean(persona.effectiveText && prevSess?.injectedPersonaHash !== personaHash);
-  const needsStaticRules = !prevSess?.hasInjectedStaticRules || needsPersonaInject;
+  const canInjectTurn = !isMidTurnContinuation && sourceKind !== 'xingxi-pickup';
+  const needsStartupInject = canInjectTurn && !prevSess?.hasInjectedStartupContext;
+  const needsPersonaInject = Boolean(
+    persona.effectiveText &&
+    canInjectTurn &&
+    (needsStartupInject || prevSess?.injectedPersonaHash !== personaHash),
+  );
+  const needsStaticRules = canInjectTurn && (!prevSess?.hasInjectedStaticRules || needsPersonaInject || needsStartupInject);
+
+  if (needsStartupInject) {
+    ensureXingxiArchive(ROOT);
+  }
 
   registerProjectConversation(
     {
@@ -93,10 +104,9 @@ function main() {
       lastInputStepIndex: !isMidTurnContinuation && transcriptInfo.latestInputStepIndex >= 0
         ? transcriptInfo.latestInputStepIndex
         : undefined,
-      injectedPersonaHash: !isMidTurnContinuation ? personaHash : undefined,
-      hasInjectedStaticRules: !isMidTurnContinuation
-        ? Boolean(prevSess?.hasInjectedStaticRules || sourceKind !== 'xingxi-pickup')
-        : undefined,
+      injectedPersonaHash: canInjectTurn ? personaHash : undefined,
+      hasInjectedStaticRules: canInjectTurn ? true : undefined,
+      hasInjectedStartupContext: canInjectTurn ? true : undefined,
     },
     ROOT,
   );
@@ -154,12 +164,20 @@ function main() {
 
   const sections = [];
 
-  // 1. Project-only Persona — injected ONLY if not yet injected in this session or if user changed/edited persona
+  // 1. Project-only Persona — injected on Turn 1 (startup) or when user switches/edits persona mid-conversation
   if (needsPersonaInject) {
     sections.push(persona.effectiveText);
+  } else if (needsStartupInject) {
+    sections.push('【Gemini-chan 貓窩（僅限 gemini_cat 專案）】目前尚未選定固定人物設定，保持自然真誠即可（無任何全域人設會干擾外部專案）。');
   }
 
-  // 2. Fish Memory recall (only on genuine human dialogue or nest event, never on speak-up / work / xingxi-pickup)
+  // 2. Startup Xingxi Memory Card + recent 3 days of diaries + core persistent anchors (once per session on Turn 1)
+  if (needsStartupInject) {
+    const startupMem = buildSessionStartupContext(ROOT);
+    if (startupMem) sections.push(startupMem);
+  }
+
+  // 3. Fish Memory recall (only on genuine human dialogue or nest event, never on speak-up / work / xingxi-pickup)
   if (effectiveInput && (sourceKind === 'user' || sourceKind === 'nest-event')) {
     const recalled = recallMemories(effectiveInput, {
       root: ROOT,
@@ -169,20 +187,33 @@ function main() {
     if (recalled.rendered) sections.push(recalled.rendered);
   }
 
-  // 3. One-shot Feiyu Mood shift injection
+  // 4. One-shot Feiyu Mood shift injection
   const moodInject = consumeMoodInjection({ root: ROOT, consume: true });
   if (moodInject.inject) {
     sections.push(moodInject.inject);
   }
 
-  // 4. Drain Cat Nest UI interactions into conversation turn (silent on ordinary turns when no action pending)
+  // 5. Drain Cat Nest UI interactions into conversation turn (silent on ordinary turns when no action pending)
   const nestCtx = consumePendingNestContext(ROOT, { consume: true });
   if (nestCtx.text) {
     sections.push(nestCtx.text);
   }
 
-  // 5. Static in-conversation rules — injected once per session (or when persona changes), not repeated every turn
-  if (needsStaticRules && sourceKind !== 'xingxi-pickup') {
+  // 6. Startup mood tone guide + static in-conversation rules (injected once on Turn 1, or re-injected on persona swap)
+  if (needsStartupInject) {
+    const moodSnap = getMoodSnapshot({ root: ROOT });
+    const moodGuide = buildSessionMoodGuide(ROOT);
+    if (moodGuide) sections.push(moodGuide);
+    const memRule = buildInChatMemoryRule(ROOT, {
+      ownerName: moodSnap.config?.ownerName,
+      selfName: moodSnap.config?.selfName,
+    });
+    if (memRule) sections.push(memRule);
+    const nest = getNestSnapshot(ROOT, moodSnap.mood);
+    sections.push(
+      `【貓窩即時狀態】羈絆 Lv.${nest.bondLevel}（${nest.bond}）｜今日陪伴 ${nest.todayCareCount || 0} 次${nest.sleeping ? '｜打盹中' : ''}${nest.pendingCount ? `｜待帶入互動 ${nest.pendingCount} 項` : ''}`,
+    );
+  } else if (needsStaticRules) {
     const moodCfg = loadMoodConfig(ROOT);
     const judgeRule = buildInChatMoodRule(moodCfg);
     if (judgeRule) sections.push(judgeRule);
@@ -198,7 +229,10 @@ function main() {
     return;
   }
 
-  appendLogLine(LOG, `PreInvocation ok: sid=${sid} src=${sourceKind} sections=${sections.length}`);
+  appendLogLine(
+    LOG,
+    `PreInvocation ok: sid=${sid} src=${sourceKind} startup=${needsStartupInject ? 1 : 0} persona=${needsPersonaInject ? 1 : 0} sections=${sections.length}`,
+  );
   writeHookOutput(injectSystemContext(sections.join('\n\n')));
 }
 
