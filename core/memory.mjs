@@ -11,7 +11,15 @@
  */
 
 import { join } from 'node:path';
-import { clampNum, getDataPaths, localDayKey, readJsonSafe, writeJsonAtomic } from './storage.mjs';
+import {
+  clampNum,
+  getDataPaths,
+  localDayKey,
+  normalizeCustomPrompt,
+  readJsonSafe,
+  renderPromptTemplate,
+  writeJsonAtomic,
+} from './storage.mjs';
 import {
   buildRarityTable,
   isSubstantiveClue,
@@ -48,7 +56,15 @@ export const DEFAULT_MEMORY_POLICY = {
   factCap: 1,
   ownerPronoun: 'ta',
   selfPronoun: '我',
+  inChatRulePrompt: '',
 };
+
+export function buildDefaultMemoryRuleTemplate() {
+  return [
+    '【對話內長期記憶提醒（今日剩餘額度 {{left}}/{{dailyQuota}}）】這一輪如果出現值得長期記住的事（{{ownerName}}的喜好／禁忌／作息、明確約定、身體狀態或重要里程碑），請直接安靜呼叫 `remember` 記下來——**不用等對方特地提醒**，也不要在回覆裡說「我記住了」。日常純寒暄與一次性流水瑣事不用記。',
+    '寫法規範：一條一件事；自稱用「{{selfPronoun}}」，{{ownerCall}}{{selfGuard}}；不要寫「今天／昨天」（時間交給系統）；若屬狀態更新（如作息、住處、計畫變更），請加填 `factKey`（如「{{ownerPronoun}}.作息」）或 `supersedes`。',
+  ].join('\n');
+}
 
 const TIME_CUES = [
   { re: /今天|今日/, from: 0, to: 0 },
@@ -102,6 +118,7 @@ export function normalizePolicy(raw) {
     factCap: Math.round(clampNum(m.factCap, 0, 5, DEFAULT_MEMORY_POLICY.factCap)),
     ownerPronoun: String(m.ownerPronoun || DEFAULT_MEMORY_POLICY.ownerPronoun).trim().slice(0, 12) || 'ta',
     selfPronoun: String(m.selfPronoun || DEFAULT_MEMORY_POLICY.selfPronoun).trim().slice(0, 12) || '我',
+    inChatRulePrompt: normalizeCustomPrompt(m.inChatRulePrompt, buildDefaultMemoryRuleTemplate()),
   };
 }
 
@@ -572,11 +589,18 @@ export function buildInChatMemoryRule(root, { now = Date.now(), ownerName = '', 
   const me = policy.selfPronoun || '我';
   const selfText = String(selfName || '').trim();
   const left = Math.max(0, policy.dailyQuota - todayCount);
+  const template = policy.inChatRulePrompt || buildDefaultMemoryRuleTemplate();
 
-  return [
-    `【對話內長期記憶提醒（今日剩餘額度 ${left}/${policy.dailyQuota}）】這一輪如果出現值得長期記住的事（${ownerText || '對方'}的喜好／禁忌／作息、明確約定、身體狀態或重要里程碑），請直接安靜呼叫 \`remember\` 記下來——**不用等對方特地提醒**，也不要在回覆裡說「我記住了」。日常純寒暄與一次性流水瑣事不用記。`,
-    `寫法規範：一條一件事；自稱用「${me}」，${ownerCall}${selfText ? `（寫入時避免用第三人稱「${selfText}」自稱）` : ''}；不要寫「今天／昨天」（時間交給系統）；若屬狀態更新（如作息、住處、計畫變更），請加填 \`factKey\`（如「${ownerPronoun}.作息」）或 \`supersedes\`。`,
-  ].join('\n');
+  return renderPromptTemplate(template, {
+    left,
+    dailyQuota: policy.dailyQuota,
+    ownerName: ownerText || '對方',
+    ownerPronoun,
+    ownerCall,
+    selfPronoun: me,
+    selfName: selfText,
+    selfGuard: selfText ? `（寫入時避免用第三人稱「${selfText}」自稱）` : '',
+  });
 }
 
 /**
@@ -836,6 +860,7 @@ export function getMemorySnapshot(root, now = Date.now()) {
   active.sort((a, b) => Date.parse(b.createdAt || b.at || 0) - Date.parse(a.createdAt || a.at || 0));
   return {
     policy,
+    defaultRuleTemplate: buildDefaultMemoryRuleTemplate(),
     activeCount: active.length,
     archivedCount: archived.length,
     active: active.slice(0, 120),

@@ -611,7 +611,7 @@ export function consumePendingNestContext(root, { consume = true, now = Date.now
   if (state.sleeping) {
     lines.push('【睡覺狀態表現準則】你現在正閉著眼睛在貓窩裡睡覺，並沒有清醒地坐起來聊天；若這輪收到撫摸／抱抱／晚安或剛蓋被子入睡，請只用半夢半醒、迷糊帶濃濃困意的短句夢囈應聲（切勿突然表現得精力充沛、問東問西或把話題打開），也不要寫 `*動作*` 或 `（動作旁白）`。');
   } else if (events.length) {
-    lines.push('請用自然聊天口吻順口帶過這個互動（如撒嬌、道謝或開心回應等），直接像傳訊息一樣對話，不要穿插 `*動作*` 或 `（動作旁白）`，也不要像唸系統日誌那樣照本宣科。');
+    lines.push('（帶著這份貓窩互動的心情自然接著聊就好，不用把系統字眼唸出來。）');
   }
 
   if (dirty) {

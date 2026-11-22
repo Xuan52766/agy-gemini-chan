@@ -98,7 +98,7 @@ export function normalizeText(s) {
 /**
  * FMM greedy longest-match dictionary segmentation with single-character fallback
  * plus `dsh-fish-memory` v1.6.2 proper-noun sliding window (`補專名`: 2..4 char
- * windows across consecutive non-dictionary single characters such as 「糯鯨」「奈奈」).
+ * windows across consecutive non-dictionary single characters such as 「星礫」「雲喵」).
  */
 export function tokenize(s, root) {
   const dict = loadChineseDict(root);

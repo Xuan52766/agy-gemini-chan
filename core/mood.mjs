@@ -15,7 +15,15 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { clampNum, getDataPaths, localDayKey, readJsonSafe, writeJsonAtomic } from './storage.mjs';
+import {
+  clampNum,
+  getDataPaths,
+  localDayKey,
+  normalizeCustomPrompt,
+  readJsonSafe,
+  renderPromptTemplate,
+  writeJsonAtomic,
+} from './storage.mjs';
 
 export const MOOD_STEP_DIVISOR = 3;
 export const DIM_HALF_LIFE_MIN = 90;
@@ -62,6 +70,7 @@ export const INJECT_MODES = ['off', 'label', 'event'];
 export const DEFAULT_MOOD_CONFIG = {
   enabled: true,
   autoJudge: true,
+  innerThoughtEnabled: true,
   judgeMode: 'hybrid', // 'hybrid' (in-conversation AI via mood_update + Stop local fallback) | 'in_chat_only' | 'local'
   slotId: 'gemini-cat-main',
   selfName: 'Gemini-chan',
@@ -77,7 +86,24 @@ export const DEFAULT_MOOD_CONFIG = {
   sigMood: 3,
   sigDim: 5,
   injectPerDay: 6,
+  injectUnlimited: false,
+  changesPerDay: 0, // 0 = unlimited numeric mood changes per day
+  stepDivisor: MOOD_STEP_DIVISOR,
+  inChatRulePrompt: '',
 };
+
+export function buildDefaultMoodRulePrompt(cfg = DEFAULT_MOOD_CONFIG) {
+  const owner = cfg?.ownerName || '主人';
+  const selfName = cfg?.selfName || 'Gemini-chan';
+  const selfPronoun = cfg?.selfPronoun || '我';
+  const thoughtActive = cfg?.innerThoughtEnabled !== false;
+  const thoughtPart = thoughtActive
+    ? `\n- 只要這輪心裡有感觸、小得意、心疼、替對方掛心、睏意或沒直接說出口的吐槽，請順手填寫 \`innerThought\`（用「${selfPronoun}」第一人稱、貼合${selfName}人設口氣寫真實心裡話；只顯示於貓窩心情小劇場卡片，絕對不要印進聊天回覆），即使 \`moodDelta\` 為 \`0\` 也能單獨留下內心想法。`
+    : '';
+  return `【對話內心情自評與內心小劇場（免外部 API）】透過 MCP \`call_mcp_tool\`（Server: \`"gemini-cat_companion"\`, Tool: \`"mood_update"\`）安靜記錄你的心情波動與內心想法：
+- 參數格式：\`{"subject":"owner"|"self","moodDelta":-10..10,"dims":{"happy":0,"calm":0,"sweet":0,"heartache":0,"worry":0,"sad":0,"jealous":0,"angry":0},"reason":"過去式簡短原因"${thoughtActive ? ',"innerThought":"第一人稱真實心裡獨白"' : ''}}\`${thoughtPart}
+- 純技術除錯、極短無感應聲或聊外人八卦（\`other\`）可省略不叫（背景 Stop 鉤子僅做基礎數值兜底，不會寫內心獨白）；回覆正文嚴禁提到數值、工具名稱或動作旁白。`;
+}
 
 function configPath(root) {
   return join(getDataPaths(root).moodDir, 'config.json');
@@ -98,6 +124,7 @@ export function loadMoodConfig(root) {
   const merged = { ...DEFAULT_MOOD_CONFIG, ...raw };
   merged.enabled = merged.enabled !== false;
   merged.autoJudge = merged.autoJudge !== false;
+  merged.innerThoughtEnabled = merged.innerThoughtEnabled !== false;
   const rawMode = String(merged.judgeMode || 'hybrid');
   merged.judgeMode = ['hybrid', 'in_chat_only', 'local'].includes(rawMode)
     ? rawMode
@@ -111,18 +138,31 @@ export function loadMoodConfig(root) {
   merged.injectConfidence = clampNum(Math.round(merged.injectConfidence), 0, 100, 60);
   merged.sigMood = clampNum(Math.round(merged.sigMood), 1, 30, 3);
   merged.sigDim = clampNum(Math.round(merged.sigDim), 1, 100, 5);
-  merged.injectPerDay = clampNum(Math.round(merged.injectPerDay), 0, 50, 6);
+  merged.injectPerDay = clampNum(Math.round(merged.injectPerDay), 0, 500, 6);
+  merged.injectUnlimited = Boolean(merged.injectUnlimited);
+  merged.changesPerDay = clampNum(Math.round(merged.changesPerDay), 0, 500, 0);
+  merged.stepDivisor = clampNum(Math.round(merged.stepDivisor), 1, 5, MOOD_STEP_DIVISOR);
   merged.selfName = String(merged.selfName || 'Gemini-chan').trim().slice(0, 24) || 'Gemini-chan';
   merged.ownerName = String(merged.ownerName || '主人').trim().slice(0, 24) || '主人';
   merged.selfPronoun = String(merged.selfPronoun || '我').trim().slice(0, 8) || '我';
   merged.selfAliases = String(merged.selfAliases || '').trim().slice(0, 120);
   merged.ownerAliases = String(merged.ownerAliases || '').trim().slice(0, 120);
+  merged.inChatRulePrompt = normalizeCustomPrompt(
+    merged.inChatRulePrompt,
+    buildDefaultMoodRulePrompt(merged),
+  );
   return merged;
 }
 
 export function saveMoodConfig(patch, root) {
   const current = loadMoodConfig(root);
   const next = { ...current, ...(patch || {}) };
+  if (patch && Object.hasOwn(patch, 'inChatRulePrompt')) {
+    next.inChatRulePrompt = normalizeCustomPrompt(
+      patch.inChatRulePrompt,
+      buildDefaultMoodRulePrompt(next),
+    );
+  }
   writeJsonAtomic(configPath(root), next);
   return loadMoodConfig(root);
 }
@@ -147,9 +187,12 @@ function emptyMoodState(base = 70, now = Date.now()) {
     lastInjectedText: '',
     lastInjectedAt: 0,
     saidAt: [],
+    changedAt: [],
     timeline: [],
     lastTurnHash: '',
     lastInChatUpdateAt: 0,
+    lastInnerThought: '',
+    lastInnerThoughtAt: 0,
   };
 }
 
@@ -253,6 +296,9 @@ export function loadMoodState({ slotId, root, now = Date.now(), persist = true }
   state.dims = { ...emptyDims(), ...(state.dims || {}) };
   if (!Array.isArray(state.timeline)) state.timeline = [];
   if (!Array.isArray(state.saidAt)) state.saidAt = [];
+  if (!Array.isArray(state.changedAt)) state.changedAt = [];
+  state.lastInnerThought = String(state.lastInnerThought || '');
+  state.lastInnerThoughtAt = Number(state.lastInnerThoughtAt || 0);
   decayMoodState(state, cfg.moodBase, now, cfg.decayHalfHours);
   if (persist) writeJsonAtomic(p, state);
   return state;
@@ -266,6 +312,9 @@ export function saveMoodState(state, { slotId, root } = {}) {
   }
   if (Array.isArray(state.saidAt) && state.saidAt.length > 200) {
     state.saidAt = state.saidAt.slice(-200);
+  }
+  if (Array.isArray(state.changedAt) && state.changedAt.length > 500) {
+    state.changedAt = state.changedAt.slice(-500);
   }
   writeJsonAtomic(p, state);
   return state;
@@ -296,19 +345,38 @@ export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDiv
         : 0;
     }
   }
-  const reason = String(delta?.reason || '').trim().slice(0, 120);
+  const innerThought = (cfg.innerThoughtEnabled && (source === 'chat-ai' || source === 'tool'))
+    ? String(delta?.innerThought ?? delta?.thought ?? '').trim().slice(0, 600)
+    : '';
+  const rawReason = String(delta?.reason || '').trim().slice(0, 120);
+  const reason = rawReason || (innerThought ? innerThought.slice(0, 80) : '');
   const confidence = clampNum(Math.round(Number(delta?.confidence ?? 75)), 0, 100, 75);
+
+  const today = localDayKey(now);
+  const changesToday = (state.changedAt || []).filter((t) => localDayKey(t) === today).length;
+  const changeCapReached = !bypassDivisor && cfg.changesPerDay > 0 && changesToday >= cfg.changesPerDay;
+  if (changeCapReached) {
+    rawMoodDelta = 0;
+    for (const [k] of DIMS) dimsDelta[k] = 0;
+  }
 
   const atTop = state.mood >= 85 && rawMoodDelta > 0;
   const atBottom = state.mood <= 40 && rawMoodDelta < 0;
   const factor = (atTop || atBottom) ? 0.5 : 1;
-  const moodStep = bypassDivisor
-    ? Math.round(rawMoodDelta * factor)
-    : Math.round((rawMoodDelta * factor) / MOOD_STEP_DIVISOR);
+  const divisor = clampNum(Math.round(Number(cfg.stepDivisor ?? MOOD_STEP_DIVISOR)), 1, 5, MOOD_STEP_DIVISOR);
+  const moodStep = changeCapReached
+    ? 0
+    : bypassDivisor
+      ? Math.round(rawMoodDelta * factor)
+      : Math.round((rawMoodDelta * factor) / divisor);
 
   const anyDim = DIMS.some(([k]) => dimsDelta[k] !== 0);
-  if (moodStep === 0 && !anyDim) {
-    return { applied: false, state };
+  if (moodStep === 0 && !anyDim && !innerThought) {
+    return {
+      applied: false,
+      ...(changeCapReached ? { capped: true, changesToday, cap: cfg.changesPerDay } : {}),
+      state,
+    };
   }
 
   let significant = Math.abs(rawMoodDelta) >= cfg.sigMood
@@ -318,8 +386,11 @@ export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDiv
   for (const [k] of DIMS) {
     state.dims[k] = clampNum((Number(state.dims[k]) || 0) + dimsDelta[k], 0, 100, 0);
   }
+  if (!bypassDivisor && (moodStep !== 0 || anyDim)) {
+    state.changedAt = [...(state.changedAt || []), now].slice(-500);
+  }
 
-  if (!significant) {
+  if (!significant && (moodStep !== 0 || anyDim)) {
     state.sinceInject = Number(state.sinceInject || 0) + Math.abs(rawMoodDelta);
     if (state.sinceInject >= cfg.sigMood) {
       significant = true;
@@ -336,6 +407,10 @@ export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDiv
   if (source === 'chat-ai' || source === 'tool') {
     state.lastInChatUpdateAt = now;
   }
+  if (innerThought) {
+    state.lastInnerThought = innerThought;
+    state.lastInnerThoughtAt = now;
+  }
 
   state.timeline.push({
     at: now,
@@ -343,6 +418,7 @@ export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDiv
     delta: moodStep,
     rawDelta: rawMoodDelta,
     reason,
+    ...(innerThought ? { innerThought } : {}),
     conf: confidence,
     kind: source,
     dims: Object.fromEntries(DIMS.map(([k]) => [k, Math.round(state.dims[k])])),
@@ -350,7 +426,13 @@ export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDiv
   });
 
   saveMoodState(state, { slotId, root });
-  return { applied: true, moodStep, significant, state };
+  return {
+    applied: true,
+    moodStep,
+    significant,
+    ...(changeCapReached ? { cappedNumeric: true } : {}),
+    state,
+  };
 }
 
 function relativeMoodTime(ms, now = Date.now()) {
@@ -393,8 +475,12 @@ export function renderMoodLine(state, cfg, now = Date.now()) {
  */
 export function buildInChatMoodRule(cfg) {
   if (!cfg.enabled || cfg.judgeMode === 'local') return '';
-  const owner = cfg.ownerName || '主人';
-  return `【對話內心情自評（免外部 API）】僅當本輪出現與${owner}或你自己直接相關的**明確情緒事件**（被深切關心/誇讚/哄好/完成大事，或${owner}明顯疲憊/受委屈/卡關/吃醋）時，才安靜呼叫 \`mood_update\`（含 \`subject: "owner"|"self"\`、moodDelta -10..+10、dims、過去式簡短 reason）；日常寒暄、小幅波動、純技術問答或聊外人八卦（\`other\`）**請勿呼叫工具**（背景 Stop 鉤子會自動零消耗兜底），也不要在回覆裡提到數值或工具名稱。`;
+  const template = cfg.inChatRulePrompt || buildDefaultMoodRulePrompt(cfg);
+  return renderPromptTemplate(template, {
+    ownerName: cfg.ownerName || '主人',
+    selfName: cfg.selfName || 'Gemini-chan',
+    selfPronoun: cfg.selfPronoun || '我',
+  });
 }
 
 export function buildSessionMoodGuide(root, now = Date.now()) {
@@ -445,7 +531,7 @@ export function consumeMoodInjection({ root, slotId, consume = true, now = Date.
 
   const today = localDayKey(now);
   const saidToday = (state.saidAt || []).filter((t) => localDayKey(t) === today).length;
-  if (saidToday >= cfg.injectPerDay) {
+  if (!cfg.injectUnlimited && saidToday >= cfg.injectPerDay) {
     return { status: 'blocked', text: '', saidToday, cap: cfg.injectPerDay, state, inject: '' };
   }
 
@@ -657,6 +743,7 @@ export function getMoodSnapshot({ root, slotId, now = Date.now() } = {}) {
   const preview = consumeMoodInjection({ root, slotId, consume: false, now });
   const today = localDayKey(now);
   const saidToday = (state.saidAt || []).filter((t) => localDayKey(t) === today).length;
+  const changesToday = (state.changedAt || []).filter((t) => localDayKey(t) === today).length;
 
   return {
     config: { ...cfg },
@@ -672,12 +759,26 @@ export function getMoodSnapshot({ root, slotId, now = Date.now() } = {}) {
     emoji: moodEmoji(state.mood),
     dims: DIMS.map(([k, label]) => ({ key: k, label, value: Math.round(Number(state.dims?.[k] || 0)) })),
     lastReason: state.lastReason,
+    lastInnerThought: String(state.lastInnerThought || ''),
+    lastInnerThoughtAt: Number(state.lastInnerThoughtAt || 0),
     lastConfidence: state.lastConfidence,
     updatedAt: state.updatedAt,
     lastInChatUpdateAt: state.lastInChatUpdateAt || 0,
+    defaultRulePrompt: buildDefaultMoodRulePrompt(cfg),
     minor: state.minor,
     saidToday,
-    injectQuota: { said: saidToday, cap: cfg.injectPerDay, left: Math.max(0, cfg.injectPerDay - saidToday) },
+    changesToday,
+    injectQuota: {
+      said: saidToday,
+      cap: cfg.injectPerDay,
+      unlimited: Boolean(cfg.injectUnlimited),
+      left: cfg.injectUnlimited ? 999 : Math.max(0, cfg.injectPerDay - saidToday),
+    },
+    changeQuota: {
+      count: changesToday,
+      cap: cfg.changesPerDay,
+      unlimited: cfg.changesPerDay === 0,
+    },
     injectPreview: {
       state: preview.status,
       text: preview.text,

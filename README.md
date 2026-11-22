@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Antigravity 2.0 專案限定 AI 伴侶與互動貓窩系統</strong><br/>
-  <span>版本：<code>v1.2.1</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a></span>
+  <span>版本：<code>v1.4.3</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a></span>
 </p>
 
 ---
@@ -29,9 +29,9 @@
 | :--- | :--- | :--- |
 | **Gemini-chan 互動貓窩** | 依大心情與睡眠狀態自動切換 6 款 Q 版立繪；提供摸頭、餵小魚乾、逗貓棒、貼貼、打盹／叫醒與遞小紙條互動；採用**羈絆進度（`Lv.X`）＋今日陪伴暖度**設計（無飽食／精力倒扣懲罰，單日達成 3 種互動另有羈絆加成） | [core/nest.mjs](core/nest.mjs)<br>[sidecar/](sidecar/) |
 | **艾賓浩斯長期記憶** | 本地中文詞典切詞＋連續單字專有名詞滑動窗（`補專名`）、說話尺 IDF 證據評分、鮮活度指數半衰期 $H = 30 \times (1 + 2I)$、15 輪防重複注入窗（`repeatWindow`）、`factKey` 事實鍵自動收斂與常駐檔案支援 | [core/memory.mjs](core/memory.mjs)<br>[core/tokenizer.mjs](core/tokenizer.mjs) |
-| **8 維情緒感知引擎** | 免外部 API Key 混成判定：發生明確情緒事件時由對話內模型呼叫 `mood_update`，日常微幅波動由 `Stop` 鉤子本地分析兜底；含大心情（`0–100`）、8 維情緒（含 45 分鐘快消氣的「生氣」與路人話題 `other` 歸零保護） | [core/mood.mjs](core/mood.mjs) |
+| **8 維情緒與內心獨白** | 免外部 API Key 混成判定：發生明確情緒事件或感觸時由對話內模型呼叫 `mood_update`（支援第一人稱「內心小劇場」`innerThought` 顯示於貓窩，不印入聊天泡泡）；含大心情（`0–100`）、8 維情緒與可編輯提示詞 | [core/mood.mjs](core/mood.mjs) |
 | **星汐記憶卡與 3D 星圖** | 八章結構 `記憶卡.md`＋`日記/YYYY-MM-DD.md`＋清潔標籤後的 `原始對話/`；支援每日定時與錯過自動補跑「拾星」、`.bak` 自動備份還原，以及含球心核心星、共詞橋與「年輪」時間軸播放的 **3D 記憶宇宙星圖** | [core/xingxi.mjs](core/xingxi.mjs) |
-| **主動搭話排程器** | 支援自訂週幾、跨午夜峰谷時段、時區、安靜時段、冷卻時間、時機因子與連沒中保底加成；預設開啟 `dryRun` 試運行模式，確認節奏後可隨時切換為真實搭話 | [core/speak-up.mjs](core/speak-up.mjs) |
+| **自主預約＋波動搭話排程** | 支援自然語言對話預約（`speak_up_plan` 單次／多筆時刻表、固定時段 ± 隨機波動節律）與傳統峰谷擲骰自由雙開關；含對話進行中防打擾順延、安靜時段、打盹自動喚醒與多組可編輯提示詞 | [core/speak-up.mjs](core/speak-up.mjs) |
 | **雙層隔離人設庫** | 採用 **「單一對話覆寫 ＞ 專案共用 ＞ 內建中性陪伴範本」** 架構；支援側邊欄即時編修、改名、單筆啟停與 `.md`/`.txt` 匯入匯出 | [core/persona.mjs](core/persona.mjs) |
 
 ---
@@ -113,9 +113,10 @@ npm run setup
 | `xingxi_append` | 將長期要點追加至 `記憶卡.md` 第 1～8 章（自動去重與備份；第 2 章支援防縮水整章合併） |
 | `xingxi_diary` | 寫入或追加指定日期的日記（`日記/YYYY-MM-DD.md`）並推進整理進度 |
 | `xingxi_pickup` | 從本專案對話紀錄切出當日原始對話素材與記憶／心情摘要，供拾星歸檔使用 |
-| `mood_status` | 讀取目前大心情、8 維情緒、貓窩羈絆進度／今日陪伴與生效人設摘要 |
-| `mood_update` | 於發生明確情緒轉折時記錄心情與 8 維情緒變化（支援 `subject: owner \| self \| other \| none`） |
+| `mood_status` | 讀取目前大心情、8 維情緒、最近內心想法、貓窩羈絆進度與目前搭話時刻表 |
+| `mood_update` | 於發生情緒波動或感觸時記錄心情、8 維情緒與第一人稱內心獨白 `innerThought`（支援 `subject: owner \| self \| other \| none`） |
 | `nest_interact` | 在對話中執行貓窩照護或切換睡眠／喚醒狀態（`pet` / `feed` / `play` / `comfort` / `nap` / `sleep` / `wake`） |
+| `speak_up_plan` | 依自然語言或自我心意排定單次／一串搭話預約時間、固定基準時間 ± 隨機波動節律，或即時調整開關與安靜時段 |
 
 ---
 
