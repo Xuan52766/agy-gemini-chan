@@ -1028,3 +1028,101 @@ test('setup-sidecar script writes portable forward-slash config safely without c
     rmSync(cfgDir, { recursive: true, force: true });
   }
 });
+
+test('v1.4.4 sidecar routes & frontend guards: readonly GET /api/state, /api/version, test endpoint guard, strict sync-history, and trace XSS esc', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gemini-cat-sidecar-sec-'));
+  try {
+    const routes = {};
+    const router = {
+      page(path, fn) { routes[`PAGE ${path}`] = fn; },
+      api(path, fn, method = 'GET') { routes[`${method} ${path}`] = fn; },
+    };
+    class FakeResponse {
+      constructor(body, opts = {}) { this.body = body; this.status = opts.status || 200; }
+    }
+    registerSidecarRoutes(router, FakeResponse, { root });
+
+    // SEC-04: GET /api/state MUST NOT write data/runtime/sessions.json
+    const sessionsPath = join(root, 'data', 'runtime', 'sessions.json');
+    const stRes = await routes['GET /api/state']({
+      workspaceUris: [root],
+      conversationId: 'probe-readonly-conv',
+    });
+    assert.equal(stRes.ok, true);
+    assert.equal(stRes.inProject, true);
+    assert.equal(existsSync(sessionsPath), false);
+
+    // PERF-01: GET /api/version tracks data file mtime updates cleanly
+    const v1 = await routes['GET /api/version']({ workspaceUris: [root], conversationId: 'c1' });
+    assert.equal(v1.ok, true);
+    assert.ok(typeof v1.version === 'string' && v1.version.length > 0);
+
+    // POST /api/context registers session and bumps /api/version
+    const ctxRes = await routes['POST /api/context']({ workspaceUris: [root], conversationId: 'conv-1' });
+    assert.equal(ctxRes.ok, true);
+    assert.equal(existsSync(sessionsPath), true);
+    const v2 = await routes['GET /api/version']({ workspaceUris: [root], conversationId: 'c1' });
+    assert.notEqual(v2.version, v1.version);
+
+    // SEC-03: /api/telegram/test rejects filePath & mismatched chatId when bound+locked (when getMe mocked/bypassed isn't needed for error check? Wait: test-me hits network if botToken set; check app/source guards or mock global fetch temporarily)
+    saveTelegramConfig({
+      enabled: true,
+      botToken: '123456:TESTTOKEN_ABCDEFGHIJKLMNOP',
+      allowedChatId: '7777',
+      lockSingleChat: true,
+    }, root);
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const payload = String(url).includes('/getMe')
+        ? { ok: true, result: { username: 'gemcat_test_bot', first_name: 'GemCat' } }
+        : { ok: true, result: { message_id: 99 } };
+      return {
+        ok: true,
+        status: 200,
+        async text() { return JSON.stringify(payload); },
+        async json() { return payload; },
+      };
+    };
+    try {
+      const fileTest = await routes['POST /api/telegram/test']({ sendTest: true, filePath: join(root, 'foo.txt') });
+      assert.equal(fileTest.ok, false);
+      assert.match(fileTest.error, /禁止指定本機檔案/);
+
+      const wrongChat = await routes['POST /api/telegram/test']({ sendTest: true, chatId: '8888' });
+      assert.equal(wrongChat.ok, false);
+      assert.match(wrongChat.error, /安全鎖定/);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+
+    // MISC-03: /api/telegram/sync-history does NOT fall back to another session when requested conversationId is missing
+    const txOther = join(root, 'other-tx.jsonl');
+    writeFileSync(txOther, JSON.stringify({ type: 'SYSTEM_MESSAGE', content: '[TELEGRAM_INCOMING]\n時間：10:00\n訊息內容：\n別的對話' }) + '\n', 'utf-8');
+    writeFileSync(sessionsPath, JSON.stringify({
+      activeConversationId: 'conv-other',
+      sessions: [{ conversationId: 'conv-other', transcriptPath: txOther }],
+    }), 'utf-8');
+    const badSync = await routes['POST /api/telegram/sync-history']({ conversationId: 'nonexistent-conv' });
+    assert.equal(badSync.ok, false);
+    assert.equal(badSync.imported, 0);
+
+    // SEC-02 & UX guards in frontend assets
+    const appJs = readFileSync(join(REPO_ROOT, 'sidecar/app.js'), 'utf-8');
+    const html = readFileSync(join(REPO_ROOT, 'sidecar/index.html'), 'utf-8');
+    const css = readFileSync(join(REPO_ROOT, 'sidecar/styles.css'), 'utf-8');
+    assert.match(appJs, /\$\{esc\(r\.omission\)\}.*\$\{esc\(r\.P\)\}.*\$\{esc\(r\.text\)\}/);
+    assert.match(appJs, /&#39;/);
+    assert.match(appJs, /function showToast/);
+    assert.match(appJs, /async function withBusy/);
+    assert.match(appJs, /function confirmBtnAction/);
+    assert.match(appJs, /beforeunload/);
+    assert.match(appJs, /MutationObserver/);
+    assert.match(html, /id="toast"/);
+    assert.match(html, /id="pol-dirty-bar"/);
+    assert.match(css, /prefers-reduced-motion:\s*reduce/);
+    assert.match(css, /\.btn-confirm-armed/);
+    assert.match(css, /\.scope-pill\.offline/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

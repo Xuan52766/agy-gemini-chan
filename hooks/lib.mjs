@@ -48,15 +48,15 @@ export function ensureInProjectScope(payload, root = getProjectRoot()) {
  */
 export function isSidecarInputStep(step) {
   if (step?.type !== 'SYSTEM_MESSAGE' || typeof step.content !== 'string') return false;
-  const c = step.content.trim();
+  const c = step.content.trimStart();
   if (!c || c.startsWith('<SYSTEM_MESSAGE>')) return false;
   return (
-    c.includes('[SPEAK_UP_INTERNAL]') ||
-    c.includes('<speak-up>') ||
-    c.includes('[XINGXI_AUTO_PICKUP]') ||
-    c.includes('[CAT_NEST_EVENT]') ||
-    c.includes('[TELEGRAM_INCOMING]') ||
-    c.includes('[YOUTUBE_PATROL]')
+    c.startsWith('[SPEAK_UP_INTERNAL]') ||
+    c.startsWith('<speak-up>') ||
+    c.startsWith('[XINGXI_AUTO_PICKUP]') ||
+    c.startsWith('[CAT_NEST_EVENT]') ||
+    c.startsWith('[TELEGRAM_INCOMING]') ||
+    c.startsWith('[YOUTUBE_PATROL]')
   );
 }
 

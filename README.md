@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Antigravity 2.0 專案限定 AI 伴侶與互動貓窩系統</strong><br/>
-  <span>版本：<code>v1.4.3</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a></span>
+  <span>版本：<code>v1.4.4</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">授權條款</a></span>
 </p>
 
 ---
@@ -33,6 +33,7 @@
 | **星汐記憶卡與 3D 星圖** | 八章結構 `記憶卡.md`＋`日記/YYYY-MM-DD.md`＋清潔標籤後的 `原始對話/`；支援每日定時與錯過自動補跑「拾星」、`.bak` 自動備份還原，以及含球心核心星、共詞橋與「年輪」時間軸播放的 **3D 記憶宇宙星圖** | [core/xingxi.mjs](core/xingxi.mjs) |
 | **自主預約＋波動搭話排程** | 支援自然語言對話預約（`speak_up_plan` 單次／多筆時刻表、固定時段 ± 隨機波動節律）與傳統峰谷擲骰自由雙開關；含對話進行中防打擾順延、安靜時段、打盹自動喚醒與多組可編輯提示詞 | [core/speak-up.mjs](core/speak-up.mjs) |
 | **雙層隔離人設庫** | 採用 **「單一對話覆寫 ＞ 專案共用 ＞ 內建中性陪伴範本」** 架構；支援側邊欄即時編修、改名、單筆啟停與 `.md`/`.txt` 匯入匯出 | [core/persona.mjs](core/persona.mjs) |
+| **Telegram 雙向橋接** | 透過原生 Long Polling（免公網 IP／免開埠）串接手機訊息與檔案收發；預設啟用**單一帳號綁定鎖**、配對失敗冷卻、私鑰／設定檔防外洩與電腦對話活躍自動靜音 | [core/telegram.mjs](core/telegram.mjs) |
 
 ---
 
@@ -163,6 +164,13 @@ flowchart LR
 
 核心模組皆使用相對路徑動態解析專案根目錄；搬移資料夾後，只需在新的目錄下執行一次 `node scripts/setup-sidecar.mjs --force` 更新 Sidecar 路徑即可。
 </details>
+
+---
+
+## Telegram 遠端連線安全建議
+
+- 建議維持「**鎖定單一帳號綁定（`lockSingleChat`）**」開啟；首次以 `/bind <配對碼>` 完成綁定後，系統會拒絕第二支 Telegram 帳號加入，且配對碼連續輸入錯誤 5 次會鎖定該來源 15 分鐘。
+- 檔案外傳預設封鎖 `.env`、`*.pem`／`*.key`／`id_rsa*`／`credentials*.json`、`data/` 下的設定與憑證、`runtime/`、`.git/` 與 symlink 逃逸路徑；若無需在手機端接收 AI 回覆附帶的專案檔案連結，可在側邊欄「TG」分頁關閉「自動夾帶回覆提及的本機檔案」。
 
 ---
 

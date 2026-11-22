@@ -224,6 +224,12 @@ input[type="checkbox"] {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 
+.scope-pill.offline {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
 /* Standby Warning */
 .standby-banner {
   display: flex;
@@ -597,6 +603,17 @@ input[type="checkbox"] {
   bottom: -1px;
   height: 2px;
   border-block-end: 2px solid var(--accent);
+}
+
+.tab-btn.has-dirty::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--warn);
 }
 
 /* Tab Panels */
@@ -1391,8 +1408,61 @@ button:disabled {
 
 .prompt-hint {
   margin: 4px 0 0;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--fg-muted);
+}
+
+[aria-busy="true"] {
+  opacity: 0.65;
+  pointer-events: none;
+  cursor: progress;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+#app.is-standby #nest-stage .care-btn,
+#app.is-standby .panels-wrap :is(input, select, textarea, button):disabled {
+  opacity: 0.56;
+}
+
+.btn-confirm-armed {
+  color: #fff !important;
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 90;
+  max-width: min(92vw, 380px);
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: var(--fg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.toast.error {
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+  color: var(--danger);
+}
+
+.toast.ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  color: var(--ok);
+}
+
+.toast.hidden {
+  display: none;
 }
 
 @media (max-width: 400px) {
@@ -1405,5 +1475,13 @@ button:disabled {
   }
   .field-grid-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

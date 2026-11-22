@@ -10,17 +10,19 @@
  *   blocking secrets (`data/telegram/config.json`, `runtime/`, `.git/`, `.system_generated/`, `.env`).
  */
 
+import { randomInt } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   clampNum,
@@ -30,6 +32,8 @@ import {
   localDayKey,
   normalizePathOrUri,
   readJsonSafe,
+  updateJsonLocked,
+  withFileLockSync,
   writeJsonAtomic,
 } from './storage.mjs';
 
@@ -131,7 +135,7 @@ export function guessMimeType(filePath = '') {
   return MIME_BY_EXT[ext] || 'application/octet-stream';
 }
 
-function parseChatIdSet(allowedChatId = '') {
+export function parseChatIdSet(allowedChatId = '') {
   return new Set(
     String(allowedChatId || '')
       .split(/[\s,，;]+/)
@@ -250,16 +254,29 @@ export function generateTelegramPairCode(root = getProjectRoot(), now = Date.now
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+    code += chars[randomInt(chars.length)];
   }
   const expiresAt = now + 10 * 60_000;
   saveTelegramConfig({ pairCode: code, pairCodeExpiresAt: expiresAt }, root);
   return { blocked: false, pairCode: code, pairCodeExpiresAt: expiresAt };
 }
 
-export function loadTelegramState(root = getProjectRoot()) {
-  const { statePath } = tgPaths(root);
-  const raw = readJsonSafe(statePath, null);
+function normalizeBindFailures(rawMap) {
+  if (!rawMap || typeof rawMap !== 'object' || Array.isArray(rawMap)) return {};
+  const entries = Object.entries(rawMap).slice(-30);
+  const out = {};
+  for (const [k, v] of entries) {
+    if (!k || !v || typeof v !== 'object') continue;
+    out[String(k).slice(0, 64)] = {
+      count: Math.max(0, Math.round(Number(v.count || 0))),
+      firstAt: Number(v.firstAt || 0),
+      lockedUntil: Number(v.lockedUntil || 0),
+    };
+  }
+  return out;
+}
+
+function normalizeTelegramStateObject(raw) {
   if (!raw || typeof raw !== 'object') {
     return {
       lastUpdateId: 0,
@@ -274,6 +291,7 @@ export function loadTelegramState(root = getProjectRoot()) {
       recentMcpSentFiles: [],
       chatHistory: [],
       logs: [],
+      bindFailures: {},
     };
   }
   return {
@@ -289,26 +307,32 @@ export function loadTelegramState(root = getProjectRoot()) {
     recentMcpSentFiles: Array.isArray(raw.recentMcpSentFiles) ? raw.recentMcpSentFiles.slice(-30) : [],
     chatHistory: Array.isArray(raw.chatHistory) ? raw.chatHistory.slice(-40) : [],
     logs: Array.isArray(raw.logs) ? raw.logs.slice(-50) : [],
+    bindFailures: normalizeBindFailures(raw.bindFailures),
   };
 }
 
+export function loadTelegramState(root = getProjectRoot()) {
+  const { statePath } = tgPaths(root);
+  const raw = readJsonSafe(statePath, null);
+  return normalizeTelegramStateObject(raw);
+}
+
 export function saveTelegramState(state, root = getProjectRoot()) {
-  const clean = {
-    lastUpdateId: Math.max(0, Math.round(Number(state.lastUpdateId || 0))),
-    botUsername: String(state.botUsername || '').slice(0, 80),
-    botDisplayName: String(state.botDisplayName || '').slice(0, 80),
-    sidecarAliveAt: Number(state.sidecarAliveAt || 0),
-    lastPollAt: Number(state.lastPollAt || 0),
-    lastPollError: String(state.lastPollError || '').slice(0, 240),
-    lastSentAt: Number(state.lastSentAt || 0),
-    lastReceivedAt: Number(state.lastReceivedAt || 0),
-    forwardedTurns: Array.isArray(state.forwardedTurns) ? state.forwardedTurns.slice(-80) : [],
-    recentMcpSentFiles: Array.isArray(state.recentMcpSentFiles) ? state.recentMcpSentFiles.slice(-30) : [],
-    chatHistory: Array.isArray(state.chatHistory) ? state.chatHistory.slice(-40) : [],
-    logs: Array.isArray(state.logs) ? state.logs.slice(-50) : [],
-  };
-  writeJsonAtomic(tgPaths(root).statePath, clean);
-  return clean;
+  const { statePath } = tgPaths(root);
+  return withFileLockSync(statePath, () => {
+    const clean = normalizeTelegramStateObject(state);
+    writeJsonAtomic(statePath, clean);
+    return clean;
+  });
+}
+
+export function updateTelegramStateLocked(root = getProjectRoot(), mutator) {
+  const { statePath } = tgPaths(root);
+  return updateJsonLocked(statePath, {}, (raw) => {
+    const st = normalizeTelegramStateObject(raw);
+    const res = mutator(st);
+    return normalizeTelegramStateObject(res === undefined ? st : res);
+  });
 }
 
 export function appendTelegramChatEntry(
@@ -340,9 +364,9 @@ export function appendTelegramLog(state, text, now = Date.now(), tokenToRedact =
 }
 
 export function touchTelegramSidecarAlive(root = getProjectRoot(), now = Date.now()) {
-  const st = loadTelegramState(root);
-  st.sidecarAliveAt = now;
-  return saveTelegramState(st, root);
+  return updateTelegramStateLocked(root, (st) => {
+    st.sidecarAliveAt = now;
+  });
 }
 
 export function isTelegramSidecarAlive(root = getProjectRoot(), now = Date.now(), maxStaleMs = 35_000) {
@@ -450,57 +474,130 @@ function isPathInsideDir(targetNorm, dirNorm) {
  * - Blocks Telegram token config/state, runtime session secrets, `.env`, `.git`, and `.system_generated`.
  * - Allows `gemini_cat` project root, Antigravity brain artifacts, or explicit `extraSendDirs`.
  */
+const BRAIN_ALLOWED_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp',
+  '.mp4', '.webm', '.mov',
+  '.mp3', '.ogg', '.wav', '.m4a',
+  '.pdf', '.txt', '.md', '.csv',
+]);
+
+function resolveCanonicalRealPath(fsPath) {
+  const abs = resolve(fsPath);
+  try {
+    return normalizePathOrUri(realpathSync.native(abs));
+  } catch {
+    let cur = abs;
+    const tail = [];
+    while (true) {
+      const parent = dirname(cur);
+      if (!parent || parent === cur) break;
+      tail.unshift(basename(cur));
+      cur = parent;
+      try {
+        const realParent = realpathSync.native(cur);
+        return normalizePathOrUri(join(realParent, ...tail));
+      } catch {
+        // Keep walking up until existing ancestor
+      }
+    }
+    return normalizePathOrUri(abs);
+  }
+}
+
 export function isAllowedTelegramSendPath(filePath, root = getProjectRoot(), cfg = loadTelegramConfig(root)) {
   const targetNorm = normalizePathOrUri(filePath);
   if (!targetNorm) return { ok: false, reason: '無效的檔案路徑' };
 
-  const base = basename(targetNorm).toLowerCase();
-  if (base === '.env' || base.startsWith('.env.')) {
-    return { ok: false, reason: '安全封鎖：禁止傳送環境敏感檔' };
+  let rawFs = String(filePath).trim();
+  if (rawFs.startsWith('file://')) {
+    try { rawFs = fileURLToPath(rawFs); } catch { /* keep raw */ }
+  }
+  const absFs = resolve(rawFs);
+  const targetReal = resolveCanonicalRealPath(absFs) || targetNorm;
+  const candidates = targetReal === targetNorm ? [targetNorm] : [targetNorm, targetReal];
+
+  const base = basename(targetReal).toLowerCase();
+  const ext = extname(base).toLowerCase();
+  const blockedFileNames = new Set(['.npmrc', '.pypirc', '.netrc', '.git-credentials']);
+  const blockedKeyExts = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore']);
+  if (
+    base === '.env'
+    || base.startsWith('.env.')
+    || blockedKeyExts.has(ext)
+    || blockedFileNames.has(base)
+    || base === 'id_rsa' || base.startsWith('id_rsa.')
+    || base === 'id_ed25519' || base.startsWith('id_ed25519.')
+    || base === 'id_ecdsa' || base.startsWith('id_ecdsa.')
+    || /^credentials(?:\..+)?\.json$/i.test(base)
+  ) {
+    return { ok: false, reason: '安全封鎖：禁止傳送憑證、私鑰或環境敏感檔' };
   }
 
   const paths = getDataPaths(root);
   const tg = tgPaths(root);
-  const blockedExact = [
+  const dataDirs = [normalizePathOrUri(paths.dataDir), resolveCanonicalRealPath(paths.dataDir)].filter(Boolean);
+  if (base === 'config.json' && dataDirs.some((d) => candidates.some((c) => isPathInsideDir(c, d)))) {
+    return { ok: false, reason: '安全封鎖：禁止傳送貓窩設定與憑證檔' };
+  }
+
+  const blockedExact = new Set([
     normalizePathOrUri(tg.configPath),
+    resolveCanonicalRealPath(tg.configPath),
     normalizePathOrUri(tg.statePath),
+    resolveCanonicalRealPath(tg.statePath),
     normalizePathOrUri(join(paths.runtimeDir, 'sessions.json')),
-  ];
-  if (blockedExact.includes(targetNorm)) {
+    resolveCanonicalRealPath(join(paths.runtimeDir, 'sessions.json')),
+  ].filter(Boolean));
+  if (candidates.some((c) => blockedExact.has(c))) {
     return { ok: false, reason: '安全封鎖：禁止傳送 Telegram Token 或會話敏感設定檔' };
   }
 
   const blockedDirs = [
     normalizePathOrUri(tg.outboxDir),
+    resolveCanonicalRealPath(tg.outboxDir),
     normalizePathOrUri(paths.runtimeDir),
+    resolveCanonicalRealPath(paths.runtimeDir),
     normalizePathOrUri(join(root, '.git')),
-  ];
-  if (blockedDirs.some((d) => isPathInsideDir(targetNorm, d))) {
+    resolveCanonicalRealPath(join(root, '.git')),
+  ].filter(Boolean);
+  if (blockedDirs.some((d) => candidates.some((c) => isPathInsideDir(c, d)))) {
     return { ok: false, reason: '安全封鎖：禁止傳送內部執行期或版本控制檔案' };
   }
 
   const sysGenSeg = process.platform === 'win32' ? '\\.system_generated\\' : '/.system_generated/';
-  if (targetNorm.includes(sysGenSeg)) {
+  if (candidates.some((c) => c.includes(sysGenSeg))) {
     return { ok: false, reason: '安全封鎖：禁止傳送系統內部日誌檔' };
   }
 
-  const allowedRoots = [
-    normalizePathOrUri(root),
-    normalizePathOrUri(tg.inboxDir),
-    normalizePathOrUri(join(homedir(), '.gemini', 'antigravity', 'brain')),
-    ...(Array.isArray(cfg.extraSendDirs) ? cfg.extraSendDirs.map(normalizePathOrUri) : []),
-  ].filter(Boolean);
+  const projectRoots = [normalizePathOrUri(root), resolveCanonicalRealPath(root)].filter(Boolean);
+  const inboxRoots = [normalizePathOrUri(tg.inboxDir), resolveCanonicalRealPath(tg.inboxDir)].filter(Boolean);
+  const brainRaw = join(homedir(), '.gemini', 'antigravity', 'brain');
+  const brainRoots = [normalizePathOrUri(brainRaw), resolveCanonicalRealPath(brainRaw)].filter(Boolean);
+  const extraRoots = Array.isArray(cfg.extraSendDirs)
+    ? cfg.extraSendDirs.flatMap((d) => [normalizePathOrUri(d), resolveCanonicalRealPath(d)]).filter(Boolean)
+    : [];
 
-  if (!allowedRoots.some((dir) => isPathInsideDir(targetNorm, dir))) {
+  // Prevent a symlink inside allowed roots from pointing outside allowed directories
+  const directRoots = [...new Set([...projectRoots, ...inboxRoots, ...extraRoots])];
+  const allAllowedRoots = [...new Set([...directRoots, ...brainRoots])];
+
+  const logicalOk = allAllowedRoots.some((dir) => isPathInsideDir(targetNorm, dir));
+  const realOk = allAllowedRoots.some((dir) => isPathInsideDir(targetReal, dir));
+  if (!logicalOk || !realOk) {
     return { ok: false, reason: '路徑不在允許範圍內（僅限 gemini_cat 專案、生成媒體暫存或自訂開放資料夾）' };
   }
 
-  let fsPath = String(filePath).trim();
-  if (fsPath.startsWith('file://')) {
-    try { fsPath = fileURLToPath(fsPath); } catch { /* keep raw */ }
+  const inDirectRoot = directRoots.some((dir) => isPathInsideDir(targetReal, dir));
+  const inBrainOnly = !inDirectRoot && brainRoots.some((dir) => isPathInsideDir(targetReal, dir));
+  if (inBrainOnly && !BRAIN_ALLOWED_EXTS.has(ext)) {
+    return { ok: false, reason: '安全封鎖：brain 目錄僅允許傳送圖片、音訊、影片或文件產物檔案' };
   }
-  fsPath = resolve(fsPath);
-  return { ok: true, fsPath, normalized: targetNorm };
+
+  let fsPath = absFs;
+  try {
+    if (existsSync(absFs)) fsPath = realpathSync.native(absFs);
+  } catch { /* keep resolved absFs */ }
+  return { ok: true, fsPath, normalized: targetReal };
 }
 
 /**
@@ -818,6 +915,22 @@ export async function telegramDownloadIncomingFile(
   }
 }
 
+/**
+ * Neutralizes internal control markers / Antigravity XML envelope tags inside
+ * external Telegram messages so remote text cannot forge hook modes or prompts.
+ */
+export function neutralizeTelegramMarkers(text = '') {
+  return String(text || '')
+    .replace(
+      /\[(SPEAK_UP_INTERNAL|XINGXI_AUTO_PICKUP|CAT_NEST_EVENT|TELEGRAM_INCOMING|WORK_SCAN|CRON|AUTOMATION|YOUTUBE_PATROL)\]/gi,
+      '［$1］',
+    )
+    .replace(
+      /<(\/?)(speak-up|SYSTEM_MESSAGE|SYSTEM_REMINDER|USER_REQUEST|ADDITIONAL_METADATA|CONTEXT_SUMMARY)/gi,
+      '＜$1$2',
+    );
+}
+
 export function formatTelegramIncomingPrompt({
   text = '',
   files = [],
@@ -833,8 +946,9 @@ export function formatTelegramIncomingPrompt({
     lines.push('（對方夾帶了以下檔案並已下載至本機；需要檢視圖片、音訊或文件內容時可直接用 read_file 開啟路徑；若要主動回傳指定本機檔案或圖片可呼叫 `telegram_send`）');
   }
   lines.push(`時間：${localClockDisplay(now)}`);
-  if (text && String(text).trim()) {
-    lines.push('訊息內容：', String(text).trim());
+  const safeText = neutralizeTelegramMarkers(String(text || '').trim());
+  if (safeText) {
+    lines.push('訊息內容：', safeText);
   }
   if (files.length) {
     lines.push('夾帶檔案：');
@@ -858,8 +972,8 @@ export function formatTelegramIncomingPrompt({
  */
 export function extractTelegramCleanUserText(rawInput = '') {
   let s = String(rawInput || '').trim();
-  if (!s.includes(TELEGRAM_INCOMING_MARKER)) return s;
-  s = s.replace(/\n?<\/SYSTEM_MESSAGE>\s*$/i, '').trim();
+  s = s.replace(/^<SYSTEM_MESSAGE>\s*/i, '').replace(/\n?<\/SYSTEM_MESSAGE>\s*$/i, '').trim();
+  if (!s.startsWith(TELEGRAM_INCOMING_MARKER)) return s;
   const msgIdx = s.indexOf('\n訊息內容：\n');
   if (msgIdx >= 0) {
     let body = s.slice(msgIdx + '\n訊息內容：\n'.length);
@@ -890,10 +1004,10 @@ export async function handleTelegramUpdatesBatch(
 ) {
   if (!Array.isArray(updates) || !updates.length) return { handled: 0 };
   const cfg = loadTelegramConfig(root);
-  const state = loadTelegramState(root);
+  const initialState = loadTelegramState(root);
   const token = cfg.botToken;
 
-  let maxUpdateId = state.lastUpdateId;
+  let maxUpdateId = initialState.lastUpdateId;
   let dispatched = 0;
 
   // Group contiguous updates sharing the same `media_group_id` from the same chat
@@ -935,11 +1049,27 @@ export async function handleTelegramUpdatesBatch(
     // Handle temporary pairing command `/bind <CODE>` or `/start <CODE>` before whitelist check
     const bindMatch = /^(?:\/bind|\/start)\s+([A-Za-z0-9]{4,12})$/i.exec(primaryText);
     if (bindMatch) {
+      const currentFailure = loadTelegramState(root).bindFailures?.[chatId];
+      if (currentFailure && Number(currentFailure.lockedUntil || 0) > now) {
+        updateTelegramStateLocked(root, (st) => {
+          appendTelegramLog(st, `已拒絕配對請求（冷卻鎖定中）：chatId=${chatId}`, now, token);
+        });
+        await telegramSendText(
+          token,
+          chatId,
+          '✗ 連續配對失敗次數過多，請 15 分鐘後再試。',
+          { replyToMessageId: head.message_id, fetchFn },
+        );
+        continue;
+      }
+
       const submitted = bindMatch[1].toUpperCase();
       const validCode = Boolean(cfg.pairCode && cfg.pairCodeExpiresAt > now && submitted === cfg.pairCode.toUpperCase());
       const lockedOut = cfg.lockSingleChat !== false && allowedSet.size > 0 && !allowedSet.has(chatId);
       if (lockedOut) {
-        appendTelegramLog(state, `已拒絕第二支帳號配對（單一帳號鎖定中）：${userLabel}, chatId=${chatId}`, now, token);
+        updateTelegramStateLocked(root, (st) => {
+          appendTelegramLog(st, `已拒絕第二支帳號配對（單一帳號鎖定中）：${userLabel}, chatId=${chatId}`, now, token);
+        });
         await telegramSendText(
           token,
           chatId,
@@ -964,7 +1094,12 @@ export async function handleTelegramUpdatesBatch(
         cfg.pairCode = '';
         cfg.pairCodeExpiresAt = 0;
         allowedSet.add(chatId);
-        appendTelegramLog(state, `配對成功！已綁定 ${userLabel} (chatId=${chatId})`, now, token);
+        updateTelegramStateLocked(root, (st) => {
+          if (st.bindFailures && typeof st.bindFailures === 'object') {
+            delete st.bindFailures[chatId];
+          }
+          appendTelegramLog(st, `配對成功！已綁定 ${userLabel} (chatId=${chatId})`, now, token);
+        });
         await telegramSendText(
           token,
           chatId,
@@ -972,11 +1107,34 @@ export async function handleTelegramUpdatesBatch(
           { replyToMessageId: head.message_id, fetchFn },
         );
       } else {
-        appendTelegramLog(state, `配對失敗：無效或過期配對碼來自 chatId=${chatId}`, now, token);
+        let justLocked = false;
+        updateTelegramStateLocked(root, (st) => {
+          const prev = st.bindFailures?.[chatId];
+          const withinWindow = prev && (now - Number(prev.firstAt || 0)) <= 10 * 60_000;
+          const nextCount = withinWindow ? (Number(prev.count || 0) + 1) : 1;
+          const lockedUntil = nextCount >= 5 ? (now + 15 * 60_000) : 0;
+          justLocked = lockedUntil > now;
+          st.bindFailures = st.bindFailures || {};
+          st.bindFailures[chatId] = {
+            count: nextCount,
+            firstAt: withinWindow ? Number(prev.firstAt || now) : now,
+            lockedUntil,
+          };
+          appendTelegramLog(
+            st,
+            justLocked
+              ? `配對失敗達 ${nextCount} 次，已鎖定 chatId=${chatId} 15 分鐘`
+              : `配對失敗 (${nextCount}/5)：無效或過期配對碼來自 chatId=${chatId}`,
+            now,
+            token,
+          );
+        });
         await telegramSendText(
           token,
           chatId,
-          '✗ 配對碼無效或已過期，請回到電腦貓窩側邊欄的「TG」分頁重新產生一組配對碼。',
+          justLocked
+            ? '✗ 連續配對失敗達 5 次，已暫時鎖定 15 分鐘，請稍後再回到側邊欄重新產生配對碼。'
+            : '✗ 配對碼無效或已過期，請回到電腦貓窩側邊欄的「TG」分頁重新產生一組配對碼。',
           { replyToMessageId: head.message_id, fetchFn },
         );
       }
@@ -984,7 +1142,9 @@ export async function handleTelegramUpdatesBatch(
     }
 
     if (!allowedSet.size || !allowedSet.has(chatId)) {
-      appendTelegramLog(state, `已攔截未授權 Telegram 訊息（來自 ${userLabel}, chatId=${chatId}）`, now, token);
+      updateTelegramStateLocked(root, (st) => {
+        appendTelegramLog(st, `已攔截未授權 Telegram 訊息（來自 ${userLabel}, chatId=${chatId}）`, now, token);
+      });
       continue;
     }
 
@@ -1037,29 +1197,33 @@ export async function handleTelegramUpdatesBatch(
     if (typeof dispatchToConversation === 'function') {
       try {
         await dispatchToConversation(formatted, { chatId, userLabel, files, messageId: head.message_id });
-        state.lastReceivedAt = now;
         dispatched++;
-        appendTelegramChatEntry(
-          state,
-          {
-            dir: 'in',
-            mode: 'telegram',
-            sender: userLabel,
-            text: primaryText,
-            files: files.map((f) => f.originalName),
-          },
-          now,
-          token,
-        );
-        appendTelegramLog(
-          state,
-          `已轉入 Antigravity（${primaryText ? `${primaryText.slice(0, 26)}${primaryText.length > 26 ? '…' : ''}` : ''}${files.length ? ` + ${files.length} 檔` : ''}）`,
-          now,
-          token,
-        );
+        updateTelegramStateLocked(root, (st) => {
+          st.lastReceivedAt = now;
+          appendTelegramChatEntry(
+            st,
+            {
+              dir: 'in',
+              mode: 'telegram',
+              sender: userLabel,
+              text: primaryText,
+              files: files.map((f) => f.originalName),
+            },
+            now,
+            token,
+          );
+          appendTelegramLog(
+            st,
+            `已轉入 Antigravity（${primaryText ? `${primaryText.slice(0, 26)}${primaryText.length > 26 ? '…' : ''}` : ''}${files.length ? ` + ${files.length} 檔` : ''}）`,
+            now,
+            token,
+          );
+        });
       } catch (err) {
         const msgErr = redactToken(err?.message || String(err), token);
-        appendTelegramLog(state, `轉入對話失敗：${msgErr}`, now, token);
+        updateTelegramStateLocked(root, (st) => {
+          appendTelegramLog(st, `轉入對話失敗：${msgErr}`, now, token);
+        });
         await telegramSendText(
           token,
           chatId,
@@ -1070,9 +1234,10 @@ export async function handleTelegramUpdatesBatch(
     }
   }
 
-  state.lastUpdateId = maxUpdateId;
-  state.lastPollAt = now;
-  saveTelegramState(state, root);
+  updateTelegramStateLocked(root, (st) => {
+    st.lastUpdateId = Math.max(Number(st.lastUpdateId || 0), maxUpdateId);
+    st.lastPollAt = now;
+  });
   return { handled: dispatched, lastUpdateId: maxUpdateId };
 }
 
@@ -1099,10 +1264,6 @@ export function maybeQueueTelegramOutgoing({
   const mirrorUserText = (mode === 'user' && cfg.forwardDesktopReplies === true && cfg.forwardDesktopUserMessages !== false)
     ? String(userText || '').trim().slice(0, 4000)
     : '';
-  const state = loadTelegramState(root);
-  if (turnHash && state.forwardedTurns.includes(turnHash)) {
-    return { queued: false, reason: 'duplicate_turn' };
-  }
 
   let shouldForward = false;
   if (mode === 'telegram') shouldForward = cfg.forwardTelegramReplies !== false;
@@ -1115,68 +1276,75 @@ export function maybeQueueTelegramOutgoing({
     return { queued: false, reason: `mode_not_forwarded:${mode}` };
   }
 
-  let silent = false;
-  if (mode !== 'telegram') {
-    const muteInfo = isDesktopActiveMute(root, cfg, state, now, lastDesktopSpeechAt);
-    if (muteInfo.active) {
-      if (cfg.desktopMuteMode !== 'silent') {
-        appendTelegramLog(state, `桌面對話活躍中（剩 ${muteInfo.minsLeft} 分），已略過 ${mode} Telegram 推播`, now, cfg.botToken);
-        if (turnHash) {
-          state.forwardedTurns.push(turnHash);
-          if (state.forwardedTurns.length > 80) state.forwardedTurns = state.forwardedTurns.slice(-80);
+  const { statePath, outboxDir, inboxDir } = tgPaths(root);
+  return withFileLockSync(statePath, () => {
+    const state = loadTelegramState(root);
+    if (turnHash && state.forwardedTurns.includes(turnHash)) {
+      return { queued: false, reason: 'duplicate_turn' };
+    }
+
+    let silent = false;
+    if (mode !== 'telegram') {
+      const muteInfo = isDesktopActiveMute(root, cfg, state, now, lastDesktopSpeechAt);
+      if (muteInfo.active) {
+        if (cfg.desktopMuteMode !== 'silent') {
+          appendTelegramLog(state, `桌面對話活躍中（剩 ${muteInfo.minsLeft} 分），已略過 ${mode} Telegram 推播`, now, cfg.botToken);
+          if (turnHash) {
+            state.forwardedTurns.push(turnHash);
+            if (state.forwardedTurns.length > 80) state.forwardedTurns = state.forwardedTurns.slice(-80);
+          }
+          writeJsonAtomic(statePath, normalizeTelegramStateObject(state));
+          return { queued: false, reason: 'desktop_active_muted' };
         }
-        saveTelegramState(state, root);
-        return { queued: false, reason: 'desktop_active_muted' };
+        silent = true;
       }
-      silent = true;
     }
-  }
 
-  const files = [];
-  if (cfg.autoSendReplyFiles && text) {
-    const inboxNorm = normalizePathOrUri(tgPaths(root).inboxDir);
-    const recentSent = new Set(
-      (state.recentMcpSentFiles || [])
-        .filter((r) => r && (now - Number(r.at || 0)) <= 120_000)
-        .map((r) => normalizePathOrUri(r.path)),
-    );
-    const links = extractMarkdownFileLinks(text);
-    for (const candidate of links) {
-      const check = isAllowedTelegramSendPath(candidate, root, cfg);
-      if (!check.ok || !existsSync(check.fsPath)) continue;
-      if (inboxNorm && isPathInsideDir(check.normalized, inboxNorm)) continue;
-      if (recentSent.has(check.normalized)) continue;
-      files.push(check.fsPath);
+    const files = [];
+    if (cfg.autoSendReplyFiles && text) {
+      const inboxNorm = resolveCanonicalRealPath(inboxDir) || normalizePathOrUri(inboxDir);
+      const recentSent = new Set(
+        (state.recentMcpSentFiles || [])
+          .filter((r) => r && (now - Number(r.at || 0)) <= 120_000)
+          .map((r) => resolveCanonicalRealPath(r.path) || normalizePathOrUri(r.path)),
+      );
+      const links = extractMarkdownFileLinks(text);
+      for (const candidate of links) {
+        const check = isAllowedTelegramSendPath(candidate, root, cfg);
+        if (!check.ok || !existsSync(check.fsPath)) continue;
+        if (inboxNorm && isPathInsideDir(check.normalized, inboxNorm)) continue;
+        if (recentSent.has(check.normalized)) continue;
+        files.push(check.fsPath);
+      }
     }
-  }
 
-  if (!text && !mirrorUserText && !files.length) {
-    return { queued: false, reason: 'empty_output' };
-  }
+    if (!text && !mirrorUserText && !files.length) {
+      return { queued: false, reason: 'empty_output' };
+    }
 
-  const jobId = `tg_${now}_${Math.random().toString(36).slice(2, 8)}`;
-  const { outboxDir } = tgPaths(root);
-  mkdirSync(outboxDir, { recursive: true });
-  writeJsonAtomic(join(outboxDir, `${jobId}.json`), {
-    id: jobId,
-    createdAt: now,
-    attempts: 0,
-    mode,
-    sid,
-    silent,
-    chatIds: [...parseChatIdSet(cfg.allowedChatId)],
-    mirrorUserText,
-    mirrorUserSent: false,
-    text,
-    files,
+    const jobId = `tg_${now}_${Math.random().toString(36).slice(2, 8)}`;
+    mkdirSync(outboxDir, { recursive: true });
+    writeJsonAtomic(join(outboxDir, `${jobId}.json`), {
+      id: jobId,
+      createdAt: now,
+      attempts: 0,
+      mode,
+      sid,
+      silent,
+      chatIds: [...parseChatIdSet(cfg.allowedChatId)],
+      mirrorUserText,
+      mirrorUserSent: false,
+      text,
+      files,
+    });
+
+    if (turnHash) {
+      state.forwardedTurns.push(turnHash);
+      if (state.forwardedTurns.length > 80) state.forwardedTurns = state.forwardedTurns.slice(-80);
+    }
+    writeJsonAtomic(statePath, normalizeTelegramStateObject(state));
+    return { queued: true, jobId, silent, mirroredUser: Boolean(mirrorUserText), fileCount: files.length };
   });
-
-  if (turnHash) {
-    state.forwardedTurns.push(turnHash);
-    if (state.forwardedTurns.length > 80) state.forwardedTurns = state.forwardedTurns.slice(-80);
-  }
-  saveTelegramState(state, root);
-  return { queued: true, jobId, silent, mirroredUser: Boolean(mirrorUserText), fileCount: files.length };
 }
 
 const activeOutboxFlushes = new Set();
@@ -1208,7 +1376,8 @@ export async function flushTelegramOutbox(
     return { sent: 0, remaining: files.length };
   }
 
-  const state = loadTelegramState(root);
+  const pendingChatEntries = [];
+  const pendingLogs = [];
   let sentCount = 0;
 
   for (const fname of files) {
@@ -1256,7 +1425,7 @@ export async function flushTelegramOutbox(
           for (const fp of job.files) {
             const fr = await telegramSendFile(token, cid, fp, { root, cfg, silent: Boolean(job.silent), fetchFn, timeoutMs });
             if (!fr.ok) {
-              appendTelegramLog(state, `附件自動轉傳略過 (${basename(fp)})：${fr.error}`, now, token);
+              pendingLogs.push(`附件自動轉傳略過 (${basename(fp)})：${fr.error}`);
             }
           }
         }
@@ -1266,11 +1435,9 @@ export async function flushTelegramOutbox(
     if (okAll) {
       try { unlinkSync(fpath); } catch { /* ignore */ }
       sentCount++;
-      state.lastSentAt = now;
       if (job.mirrorUserText) {
-        appendTelegramChatEntry(
-          state,
-          {
+        pendingChatEntries.push({
+          entry: {
             dir: 'in',
             mode: 'desktop-mirror',
             sender: '你（電腦端）',
@@ -1278,14 +1445,12 @@ export async function flushTelegramOutbox(
             files: [],
             silent: Boolean(job.silent),
           },
-          now,
-          token,
-        );
+          at: now,
+        });
       }
       if (job.text || (Array.isArray(job.files) && job.files.length)) {
-        appendTelegramChatEntry(
-          state,
-          {
+        pendingChatEntries.push({
+          entry: {
             dir: 'out',
             mode: job.mode || 'telegram',
             sender: 'Gemini 貓貓',
@@ -1293,22 +1458,17 @@ export async function flushTelegramOutbox(
             files: Array.isArray(job.files) ? job.files.map((fp) => basename(fp)) : [],
             silent: Boolean(job.silent),
           },
-          now + (job.mirrorUserText ? 1 : 0),
-          token,
-        );
+          at: now + (job.mirrorUserText ? 1 : 0),
+        });
       }
-      appendTelegramLog(
-        state,
+      pendingLogs.push(
         `已${job.silent ? '靜音' : ''}轉發${job.mirrorUserText ? '電腦提問+' : ''}回覆到 Telegram（${job.text ? `${job.text.slice(0, 22)}${job.text.length > 22 ? '…' : ''}` : ''}${job.files?.length ? ` + ${job.files.length} 檔` : ''}）`,
-        now,
-        token,
       );
     } else {
       job.attempts = Number(job.attempts || 0) + 1;
       if (mirrorSentThisPass && job.mirrorUserText) {
-        appendTelegramChatEntry(
-          state,
-          {
+        pendingChatEntries.push({
+          entry: {
             dir: 'in',
             mode: 'desktop-mirror',
             sender: '你（電腦端）',
@@ -1316,21 +1476,30 @@ export async function flushTelegramOutbox(
             files: [],
             silent: Boolean(job.silent),
           },
-          now,
-          token,
-        );
+          at: now,
+        });
       }
       if (job.attempts >= 5) {
         try { unlinkSync(fpath); } catch { /* ignore */ }
-        appendTelegramLog(state, `Telegram 發送重試達上限已放棄：${lastErr}`, now, token);
+        pendingLogs.push(`Telegram 發送重試達上限已放棄：${lastErr}`);
       } else {
         writeJsonAtomic(fpath, job);
-        appendTelegramLog(state, `Telegram 發送失敗（將重試 ${job.attempts}/5）：${lastErr}`, now, token);
+        pendingLogs.push(`Telegram 發送失敗（將重試 ${job.attempts}/5）：${lastErr}`);
       }
     }
   }
 
-  saveTelegramState(state, root);
+  if (sentCount > 0 || pendingChatEntries.length || pendingLogs.length) {
+    updateTelegramStateLocked(root, (st) => {
+      if (sentCount > 0) st.lastSentAt = now;
+      for (const item of pendingChatEntries) {
+        appendTelegramChatEntry(st, item.entry, item.at, token);
+      }
+      for (const msg of pendingLogs) {
+        appendTelegramLog(st, msg, now, token);
+      }
+    });
+  }
   let remaining = 0;
   try { remaining = readdirSync(outboxDir).filter((f) => f.endsWith('.json')).length; } catch { /* ignore */ }
   return { sent: sentCount, remaining };
@@ -1343,12 +1512,12 @@ export async function flushTelegramOutbox(
  * Records an MCP `telegram_send` file transfer so `Stop` hook doesn't duplicate-send it.
  */
 export function recordTelegramMcpSentFile(root = getProjectRoot(), filePath, now = Date.now()) {
-  const norm = normalizePathOrUri(filePath);
+  const norm = resolveCanonicalRealPath(filePath) || normalizePathOrUri(filePath);
   if (!norm) return;
-  const state = loadTelegramState(root);
-  state.recentMcpSentFiles.push({ at: now, path: norm });
-  state.lastSentAt = now;
-  saveTelegramState(state, root);
+  updateTelegramStateLocked(root, (st) => {
+    st.recentMcpSentFiles.push({ at: now, path: norm });
+    st.lastSentAt = now;
+  });
 }
 
 export async function pollTelegramOnce(
@@ -1363,26 +1532,26 @@ export async function pollTelegramOnce(
   const res = await telegramGetUpdates(cfg.botToken, state.lastUpdateId + 1, { timeoutSec, fetchFn });
   if (!res.ok) {
     const errText = redactToken(res.description || 'getUpdates 失敗', cfg.botToken);
-    const stNow = loadTelegramState(root);
-    stNow.lastPollAt = now;
-    stNow.lastPollError = errText;
-    appendTelegramLog(stNow, `輪詢錯誤：${errText}`, now, cfg.botToken);
-    saveTelegramState(stNow, root);
+    updateTelegramStateLocked(root, (stNow) => {
+      stNow.lastPollAt = now;
+      stNow.lastPollError = errText;
+      appendTelegramLog(stNow, `輪詢錯誤：${errText}`, now, cfg.botToken);
+    });
     return { ok: false, error: errText };
   }
 
   if (state.lastPollError) {
-    const stClear = loadTelegramState(root);
-    stClear.lastPollError = '';
-    saveTelegramState(stClear, root);
+    updateTelegramStateLocked(root, (stClear) => {
+      stClear.lastPollError = '';
+    });
   }
 
   const updates = Array.isArray(res.result) ? res.result : [];
   if (!updates.length) {
-    const stQuiet = loadTelegramState(root);
-    stQuiet.lastPollAt = now;
-    stQuiet.lastPollError = '';
-    saveTelegramState(stQuiet, root);
+    updateTelegramStateLocked(root, (stQuiet) => {
+      stQuiet.lastPollAt = now;
+      stQuiet.lastPollError = '';
+    });
     return { ok: true, updates: 0 };
   }
 
@@ -1403,12 +1572,8 @@ export async function pollTelegramOnce(
 export function syncTelegramHistoryFromTranscript(root = getProjectRoot(), transcriptPath = '') {
   const pathStr = String(transcriptPath || '').trim();
   if (!pathStr || !existsSync(pathStr)) {
-    return { ok: false, imported: 0, error: '找不到目前對話的 transcript 紀錄檔' };
+    return { ok: false, imported: 0, error: '找不到指定對話的 transcript 紀錄檔' };
   }
-  const state = loadTelegramState(root);
-  const existingKeys = new Set(
-    (state.chatHistory || []).map((e) => `${e.dir}|${String(e.text || '').slice(0, 80)}`),
-  );
 
   let lines;
   try {
@@ -1417,39 +1582,39 @@ export function syncTelegramHistoryFromTranscript(root = getProjectRoot(), trans
     return { ok: false, imported: 0, error: err?.message || '讀取 transcript 失敗' };
   }
 
+  const parsedEntries = [];
   let awaitingReply = false;
-  let imported = 0;
   for (const raw of lines) {
     let step;
     try { step = JSON.parse(raw); } catch { continue; }
     const content = typeof step?.content === 'string' ? step.content : '';
+    const unwrappedContent = content.replace(/^<SYSTEM_MESSAGE>\s*/i, '').trimStart();
     const ts = step?.created_at ? (Date.parse(step.created_at) || Date.now()) : Date.now();
-    if (step?.type === 'SYSTEM_MESSAGE' && content.includes(TELEGRAM_INCOMING_MARKER)) {
+    if (step?.type === 'SYSTEM_MESSAGE' && unwrappedContent.startsWith(TELEGRAM_INCOMING_MARKER)) {
       const cleanIn = extractTelegramCleanUserText(content);
-      const key = `in|${cleanIn.slice(0, 80)}`;
-      if (cleanIn && !existingKeys.has(key)) {
-        existingKeys.add(key);
-        state.chatHistory.push({
-          at: ts,
-          time: localClockDisplay(ts),
-          dir: 'in',
-          mode: 'telegram',
-          sender: '主人（Telegram）',
-          text: cleanIn.slice(0, 1200),
-          files: [],
-          silent: false,
+      if (cleanIn) {
+        parsedEntries.push({
+          key: `in|${cleanIn.slice(0, 80)}`,
+          entry: {
+            at: ts,
+            time: localClockDisplay(ts),
+            dir: 'in',
+            mode: 'telegram',
+            sender: '主人（Telegram）',
+            text: cleanIn.slice(0, 1200),
+            files: [],
+            silent: false,
+          },
         });
-        imported++;
       }
       awaitingReply = true;
       continue;
     }
     if (awaitingReply && step?.type === 'PLANNER_RESPONSE' && content.trim()) {
       const cleanOut = content.trim();
-      const key = `out|${cleanOut.slice(0, 80)}`;
-      if (!existingKeys.has(key)) {
-        existingKeys.add(key);
-        state.chatHistory.push({
+      parsedEntries.push({
+        key: `out|${cleanOut.slice(0, 80)}`,
+        entry: {
           at: ts,
           time: localClockDisplay(ts),
           dir: 'out',
@@ -1458,9 +1623,8 @@ export function syncTelegramHistoryFromTranscript(root = getProjectRoot(), trans
           text: cleanOut.slice(0, 1200),
           files: [],
           silent: false,
-        });
-        imported++;
-      }
+        },
+      });
       awaitingReply = false;
       continue;
     }
@@ -1469,9 +1633,23 @@ export function syncTelegramHistoryFromTranscript(root = getProjectRoot(), trans
     }
   }
 
-  if (imported > 0) {
-    state.chatHistory.sort((a, b) => Number(a.at || 0) - Number(b.at || 0));
-    saveTelegramState(state, root);
-  }
-  return { ok: true, imported, total: state.chatHistory.length };
+  let imported = 0;
+  let total = 0;
+  updateTelegramStateLocked(root, (st) => {
+    const existingKeys = new Set(
+      (st.chatHistory || []).map((e) => `${e.dir}|${String(e.text || '').slice(0, 80)}`),
+    );
+    for (const item of parsedEntries) {
+      if (!existingKeys.has(item.key)) {
+        existingKeys.add(item.key);
+        st.chatHistory.push(item.entry);
+        imported++;
+      }
+    }
+    if (imported > 0) {
+      st.chatHistory.sort((a, b) => Number(a.at || 0) - Number(b.at || 0));
+    }
+    total = Math.min(40, st.chatHistory.length);
+  });
+  return { ok: true, imported, total };
 }

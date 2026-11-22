@@ -22,6 +22,7 @@ import {
   normalizeCustomPrompt,
   readJsonSafe,
   renderPromptTemplate,
+  withFileLockSync,
   writeJsonAtomic,
 } from './storage.mjs';
 
@@ -283,30 +284,21 @@ export function decayMoodState(state, base = 70, now = Date.now(), halfHours = 1
   return state;
 }
 
-export function loadMoodState({ slotId, root, now = Date.now(), persist = true } = {}) {
-  const cfg = loadMoodConfig(root);
-  const id = slotId || cfg.slotId;
-  const p = statePath(id, root);
-  let state = existsSync(p) ? readJsonSafe(p, null) : null;
-  if (!state || typeof state !== 'object') {
-    state = emptyMoodState(cfg.moodBase, now);
-    if (persist) writeJsonAtomic(p, state);
-    return state;
+function normalizeLoadedMoodState(raw, cfg, now = Date.now()) {
+  if (!raw || typeof raw !== 'object') {
+    return { state: emptyMoodState(cfg.moodBase, now), created: true };
   }
+  const state = raw;
   state.dims = { ...emptyDims(), ...(state.dims || {}) };
   if (!Array.isArray(state.timeline)) state.timeline = [];
   if (!Array.isArray(state.saidAt)) state.saidAt = [];
   if (!Array.isArray(state.changedAt)) state.changedAt = [];
   state.lastInnerThought = String(state.lastInnerThought || '');
   state.lastInnerThoughtAt = Number(state.lastInnerThoughtAt || 0);
-  decayMoodState(state, cfg.moodBase, now, cfg.decayHalfHours);
-  if (persist) writeJsonAtomic(p, state);
-  return state;
+  return { state, created: false };
 }
 
-export function saveMoodState(state, { slotId, root } = {}) {
-  const cfg = loadMoodConfig(root);
-  const p = statePath(slotId || cfg.slotId, root);
+function capMoodArrays(state) {
   if (Array.isArray(state.timeline) && state.timeline.length > 120) {
     state.timeline = state.timeline.slice(-120);
   }
@@ -316,123 +308,191 @@ export function saveMoodState(state, { slotId, root } = {}) {
   if (Array.isArray(state.changedAt) && state.changedAt.length > 500) {
     state.changedAt = state.changedAt.slice(-500);
   }
-  writeJsonAtomic(p, state);
   return state;
+}
+
+export function loadMoodState({ slotId, root, now = Date.now(), persist = true } = {}) {
+  const cfg = loadMoodConfig(root);
+  const id = slotId || cfg.slotId;
+  const p = statePath(id, root);
+
+  const readAndDecay = () => {
+    const raw = existsSync(p) ? readJsonSafe(p, null) : null;
+    const { state, created } = normalizeLoadedMoodState(raw, cfg, now);
+    if (!created) {
+      const prevAnchor = Number(state.lastDecayAt || state.updatedAt || now);
+      decayMoodState(state, cfg.moodBase, now, cfg.decayHalfHours);
+      const decayed = Number(state.lastDecayAt || 0) !== prevAnchor;
+      return { state, shouldWrite: decayed };
+    }
+    return { state, shouldWrite: true };
+  };
+
+  if (!persist) {
+    return readAndDecay().state;
+  }
+
+  return withFileLockSync(p, () => {
+    const { state, shouldWrite } = readAndDecay();
+    if (shouldWrite) {
+      capMoodArrays(state);
+      writeJsonAtomic(p, state);
+    }
+    return state;
+  });
+}
+
+export function saveMoodState(state, { slotId, root } = {}) {
+  const cfg = loadMoodConfig(root);
+  const p = statePath(slotId || cfg.slotId, root);
+  return withFileLockSync(p, () => {
+    capMoodArrays(state);
+    writeJsonAtomic(p, state);
+    return state;
+  });
+}
+
+export function markMoodTurnHash(turnHash, { slotId, root, now = Date.now() } = {}) {
+  if (!turnHash) return null;
+  const cfg = loadMoodConfig(root);
+  const p = statePath(slotId || cfg.slotId, root);
+  return withFileLockSync(p, () => {
+    const raw = existsSync(p) ? readJsonSafe(p, null) : null;
+    const { state } = normalizeLoadedMoodState(raw, cfg, now);
+    state.lastTurnHash = String(turnHash);
+    capMoodArrays(state);
+    writeJsonAtomic(p, state);
+    return state;
+  });
 }
 
 /**
  * Applies a judged or interactive delta with tail saturation (`>=85` / `<=40` halved),
  * `MOOD_STEP_DIVISOR = 3`, and minor-accumulation tracking (`sinceInject`).
  */
-export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDivisor = false, now = Date.now() } = {}) {
+export function applyMoodDelta(delta, { root, slotId, source = 'chat', bypassDivisor = false, turnHash = '', now = Date.now() } = {}) {
   const cfg = loadMoodConfig(root);
-  const state = loadMoodState({ slotId, root, now, persist: false });
+  const id = slotId || cfg.slotId;
+  const p = statePath(id, root);
 
-  const subject = ['owner', 'self', 'other', 'none'].includes(delta?.subject) ? delta.subject : '';
-  const isBystanderOrGossip = subject === 'other' || subject === 'none';
+  return withFileLockSync(p, () => {
+    const raw = existsSync(p) ? readJsonSafe(p, null) : null;
+    const { state } = normalizeLoadedMoodState(raw, cfg, now);
+    decayMoodState(state, cfg.moodBase, now, cfg.decayHalfHours);
 
-  let rawMoodDelta = clampNum(Math.round(Number(delta?.moodDelta) || 0), -15, 15, 0);
-  const dimsDelta = emptyDims();
-  for (const [k] of DIMS) {
-    dimsDelta[k] = clampNum(Math.round(Number(delta?.dims?.[k]) || 0), -15, 15, 0);
-  }
-  // dsh-feiyu-mood v0.9.6: third-party / bystander topics ('other' | 'none') never pull companion mood
-  if (isBystanderOrGossip) {
-    rawMoodDelta = 0;
+    const subject = ['owner', 'self', 'other', 'none'].includes(delta?.subject) ? delta.subject : '';
+    const isBystanderOrGossip = subject === 'other' || subject === 'none';
+
+    let rawMoodDelta = clampNum(Math.round(Number(delta?.moodDelta) || 0), -15, 15, 0);
+    const dimsDelta = emptyDims();
     for (const [k] of DIMS) {
-      dimsDelta[k] = (k === 'calm' || k === 'happy')
-        ? clampNum(dimsDelta[k], 0, 1, 0)
-        : 0;
+      dimsDelta[k] = clampNum(Math.round(Number(delta?.dims?.[k]) || 0), -15, 15, 0);
     }
-  }
-  const innerThought = (cfg.innerThoughtEnabled && (source === 'chat-ai' || source === 'tool'))
-    ? String(delta?.innerThought ?? delta?.thought ?? '').trim().slice(0, 600)
-    : '';
-  const rawReason = String(delta?.reason || '').trim().slice(0, 120);
-  const reason = rawReason || (innerThought ? innerThought.slice(0, 80) : '');
-  const confidence = clampNum(Math.round(Number(delta?.confidence ?? 75)), 0, 100, 75);
+    // dsh-feiyu-mood v0.9.6: third-party / bystander topics ('other' | 'none') never pull companion mood
+    if (isBystanderOrGossip) {
+      rawMoodDelta = 0;
+      for (const [k] of DIMS) {
+        dimsDelta[k] = (k === 'calm' || k === 'happy')
+          ? clampNum(dimsDelta[k], 0, 1, 0)
+          : 0;
+      }
+    }
+    const innerThought = (cfg.innerThoughtEnabled && (source === 'chat-ai' || source === 'tool'))
+      ? String(delta?.innerThought ?? delta?.thought ?? '').trim().slice(0, 600)
+      : '';
+    const rawReason = String(delta?.reason || '').trim().slice(0, 120);
+    const reason = rawReason || (innerThought ? innerThought.slice(0, 80) : '');
+    const confidence = clampNum(Math.round(Number(delta?.confidence ?? 75)), 0, 100, 75);
 
-  const today = localDayKey(now);
-  const changesToday = (state.changedAt || []).filter((t) => localDayKey(t) === today).length;
-  const changeCapReached = !bypassDivisor && cfg.changesPerDay > 0 && changesToday >= cfg.changesPerDay;
-  if (changeCapReached) {
-    rawMoodDelta = 0;
-    for (const [k] of DIMS) dimsDelta[k] = 0;
-  }
+    const today = localDayKey(now);
+    const changesToday = (state.changedAt || []).filter((t) => localDayKey(t) === today).length;
+    const changeCapReached = !bypassDivisor && cfg.changesPerDay > 0 && changesToday >= cfg.changesPerDay;
+    if (changeCapReached) {
+      rawMoodDelta = 0;
+      for (const [k] of DIMS) dimsDelta[k] = 0;
+    }
 
-  const atTop = state.mood >= 85 && rawMoodDelta > 0;
-  const atBottom = state.mood <= 40 && rawMoodDelta < 0;
-  const factor = (atTop || atBottom) ? 0.5 : 1;
-  const divisor = clampNum(Math.round(Number(cfg.stepDivisor ?? MOOD_STEP_DIVISOR)), 1, 5, MOOD_STEP_DIVISOR);
-  const moodStep = changeCapReached
-    ? 0
-    : bypassDivisor
-      ? Math.round(rawMoodDelta * factor)
-      : Math.round((rawMoodDelta * factor) / divisor);
+    const atTop = state.mood >= 85 && rawMoodDelta > 0;
+    const atBottom = state.mood <= 40 && rawMoodDelta < 0;
+    const factor = (atTop || atBottom) ? 0.5 : 1;
+    const divisor = clampNum(Math.round(Number(cfg.stepDivisor ?? MOOD_STEP_DIVISOR)), 1, 5, MOOD_STEP_DIVISOR);
+    const moodStep = changeCapReached
+      ? 0
+      : bypassDivisor
+        ? Math.round(rawMoodDelta * factor)
+        : Math.round((rawMoodDelta * factor) / divisor);
 
-  const anyDim = DIMS.some(([k]) => dimsDelta[k] !== 0);
-  if (moodStep === 0 && !anyDim && !innerThought) {
+    const anyDim = DIMS.some(([k]) => dimsDelta[k] !== 0);
+    if (moodStep === 0 && !anyDim && !innerThought) {
+      if (turnHash) {
+        state.lastTurnHash = String(turnHash);
+        capMoodArrays(state);
+        writeJsonAtomic(p, state);
+      }
+      return {
+        applied: false,
+        ...(changeCapReached ? { capped: true, changesToday, cap: cfg.changesPerDay } : {}),
+        state,
+      };
+    }
+
+    let significant = Math.abs(rawMoodDelta) >= cfg.sigMood
+      || DIMS.some(([k]) => Math.abs(dimsDelta[k]) >= cfg.sigDim);
+
+    state.mood = clampNum(state.mood + moodStep, cfg.moodFloor, 100, state.mood);
+    for (const [k] of DIMS) {
+      state.dims[k] = clampNum((Number(state.dims[k]) || 0) + dimsDelta[k], 0, 100, 0);
+    }
+    if (!bypassDivisor && (moodStep !== 0 || anyDim)) {
+      state.changedAt = [...(state.changedAt || []), now].slice(-500);
+    }
+
+    if (!significant && (moodStep !== 0 || anyDim)) {
+      state.sinceInject = Number(state.sinceInject || 0) + Math.abs(rawMoodDelta);
+      if (state.sinceInject >= cfg.sigMood) {
+        significant = true;
+      }
+    }
+
+    state.minor = !significant;
+    state.kind = source;
+    state.lastReason = reason || state.lastReason;
+    state.lastConfidence = confidence;
+    state.lastNotedMood = state.mood;
+    state.updatedAt = now;
+    state.lastDecayAt = now;
+    if (turnHash) state.lastTurnHash = String(turnHash);
+    if (source === 'chat-ai' || source === 'tool') {
+      state.lastInChatUpdateAt = now;
+    }
+    if (innerThought) {
+      state.lastInnerThought = innerThought;
+      state.lastInnerThoughtAt = now;
+    }
+
+    state.timeline.push({
+      at: now,
+      mood: Math.round(state.mood),
+      delta: moodStep,
+      rawDelta: rawMoodDelta,
+      reason,
+      ...(innerThought ? { innerThought } : {}),
+      conf: confidence,
+      kind: source,
+      dims: Object.fromEntries(DIMS.map(([k]) => [k, Math.round(state.dims[k])])),
+      dimsDelta,
+    });
+
+    capMoodArrays(state);
+    writeJsonAtomic(p, state);
     return {
-      applied: false,
-      ...(changeCapReached ? { capped: true, changesToday, cap: cfg.changesPerDay } : {}),
+      applied: true,
+      moodStep,
+      significant,
+      ...(changeCapReached ? { cappedNumeric: true } : {}),
       state,
     };
-  }
-
-  let significant = Math.abs(rawMoodDelta) >= cfg.sigMood
-    || DIMS.some(([k]) => Math.abs(dimsDelta[k]) >= cfg.sigDim);
-
-  state.mood = clampNum(state.mood + moodStep, cfg.moodFloor, 100, state.mood);
-  for (const [k] of DIMS) {
-    state.dims[k] = clampNum((Number(state.dims[k]) || 0) + dimsDelta[k], 0, 100, 0);
-  }
-  if (!bypassDivisor && (moodStep !== 0 || anyDim)) {
-    state.changedAt = [...(state.changedAt || []), now].slice(-500);
-  }
-
-  if (!significant && (moodStep !== 0 || anyDim)) {
-    state.sinceInject = Number(state.sinceInject || 0) + Math.abs(rawMoodDelta);
-    if (state.sinceInject >= cfg.sigMood) {
-      significant = true;
-    }
-  }
-
-  state.minor = !significant;
-  state.kind = source;
-  state.lastReason = reason || state.lastReason;
-  state.lastConfidence = confidence;
-  state.lastNotedMood = state.mood;
-  state.updatedAt = now;
-  state.lastDecayAt = now;
-  if (source === 'chat-ai' || source === 'tool') {
-    state.lastInChatUpdateAt = now;
-  }
-  if (innerThought) {
-    state.lastInnerThought = innerThought;
-    state.lastInnerThoughtAt = now;
-  }
-
-  state.timeline.push({
-    at: now,
-    mood: Math.round(state.mood),
-    delta: moodStep,
-    rawDelta: rawMoodDelta,
-    reason,
-    ...(innerThought ? { innerThought } : {}),
-    conf: confidence,
-    kind: source,
-    dims: Object.fromEntries(DIMS.map(([k]) => [k, Math.round(state.dims[k])])),
-    dimsDelta,
   });
-
-  saveMoodState(state, { slotId, root });
-  return {
-    applied: true,
-    moodStep,
-    significant,
-    ...(changeCapReached ? { cappedNumeric: true } : {}),
-    state,
-  };
 }
 
 function relativeMoodTime(ms, now = Date.now()) {
@@ -505,48 +565,104 @@ export function buildSessionMoodGuide(root, now = Date.now()) {
  */
 export function consumeMoodInjection({ root, slotId, consume = true, now = Date.now() } = {}) {
   const cfg = loadMoodConfig(root);
-  const state = loadMoodState({ slotId, root, now, persist: false });
+  const id = slotId || cfg.slotId;
+  const p = statePath(id, root);
 
-  if (!cfg.enabled || cfg.injectMode === 'off') {
-    return { status: 'off', text: '', state };
-  }
-  if (state.injectedFor === state.updatedAt) {
-    return {
-      status: 'said',
-      text: state.lastInjectedText || renderMoodLine(state, cfg, now),
-      state,
-      inject: '',
-    };
-  }
-  if (state.minor) {
-    return { status: 'minor', text: '', state, inject: '' };
-  }
-  if (Number(state.lastConfidence) < cfg.injectConfidence) {
+  const evaluate = (persistDecay = false) => {
+    const state = loadMoodState({ slotId: id, root, now, persist: persistDecay });
+
+    if (!cfg.enabled || cfg.injectMode === 'off') {
+      return { status: 'off', text: '', state };
+    }
+    if (state.injectedFor === state.updatedAt) {
+      return {
+        status: 'said',
+        text: state.lastInjectedText || renderMoodLine(state, cfg, now),
+        state,
+        inject: '',
+      };
+    }
+    if (state.minor) {
+      return { status: 'minor', text: '', state, inject: '' };
+    }
+    if (Number(state.lastConfidence) < cfg.injectConfidence) {
+      if (consume) {
+        state.injectedFor = state.updatedAt;
+        capMoodArrays(state);
+        writeJsonAtomic(p, state);
+      }
+      return { status: 'low_confidence', text: '', state, inject: '' };
+    }
+
+    const today = localDayKey(now);
+    const saidToday = (state.saidAt || []).filter((t) => localDayKey(t) === today).length;
+    if (!cfg.injectUnlimited && saidToday >= cfg.injectPerDay) {
+      return { status: 'blocked', text: '', saidToday, cap: cfg.injectPerDay, state, inject: '' };
+    }
+
+    const line = renderMoodLine(state, cfg, now);
+    if (!line) return { status: 'empty', text: '', state, inject: '' };
+
     if (consume) {
       state.injectedFor = state.updatedAt;
-      saveMoodState(state, { slotId, root });
+      state.sinceInject = 0;
+      state.lastInjectedText = line;
+      state.lastInjectedAt = now;
+      state.saidAt = [...(state.saidAt || []), now].slice(-200);
+      capMoodArrays(state);
+      writeJsonAtomic(p, state);
     }
-    return { status: 'low_confidence', text: '', state, inject: '' };
+    return { status: 'pending', text: line, saidToday, cap: cfg.injectPerDay, state, inject: line };
+  };
+
+  if (!consume) {
+    return evaluate(false);
   }
 
-  const today = localDayKey(now);
-  const saidToday = (state.saidAt || []).filter((t) => localDayKey(t) === today).length;
-  if (!cfg.injectUnlimited && saidToday >= cfg.injectPerDay) {
-    return { status: 'blocked', text: '', saidToday, cap: cfg.injectPerDay, state, inject: '' };
-  }
+  return withFileLockSync(p, () => {
+    const raw = existsSync(p) ? readJsonSafe(p, null) : null;
+    const { state } = normalizeLoadedMoodState(raw, cfg, now);
+    decayMoodState(state, cfg.moodBase, now, cfg.decayHalfHours);
 
-  const line = renderMoodLine(state, cfg, now);
-  if (!line) return { status: 'empty', text: '', state, inject: '' };
+    if (!cfg.enabled || cfg.injectMode === 'off') {
+      return { status: 'off', text: '', state };
+    }
+    if (state.injectedFor === state.updatedAt) {
+      return {
+        status: 'said',
+        text: state.lastInjectedText || renderMoodLine(state, cfg, now),
+        state,
+        inject: '',
+      };
+    }
+    if (state.minor) {
+      return { status: 'minor', text: '', state, inject: '' };
+    }
+    if (Number(state.lastConfidence) < cfg.injectConfidence) {
+      state.injectedFor = state.updatedAt;
+      capMoodArrays(state);
+      writeJsonAtomic(p, state);
+      return { status: 'low_confidence', text: '', state, inject: '' };
+    }
 
-  if (consume) {
+    const today = localDayKey(now);
+    const saidToday = (state.saidAt || []).filter((t) => localDayKey(t) === today).length;
+    if (!cfg.injectUnlimited && saidToday >= cfg.injectPerDay) {
+      return { status: 'blocked', text: '', saidToday, cap: cfg.injectPerDay, state, inject: '' };
+    }
+
+    const line = renderMoodLine(state, cfg, now);
+    if (!line) return { status: 'empty', text: '', state, inject: '' };
+
     state.injectedFor = state.updatedAt;
     state.sinceInject = 0;
     state.lastInjectedText = line;
     state.lastInjectedAt = now;
     state.saidAt = [...(state.saidAt || []), now].slice(-200);
-    saveMoodState(state, { slotId, root });
-  }
-  return { status: 'pending', text: line, saidToday, cap: cfg.injectPerDay, state, inject: line };
+    capMoodArrays(state);
+    writeJsonAtomic(p, state);
+    return { status: 'pending', text: line, saidToday, cap: cfg.injectPerDay, state, inject: line };
+  });
 }
 
 /**

@@ -4,13 +4,16 @@
  */
 
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -141,20 +144,119 @@ export function readJsonSafe(filePath, fallback = null) {
   }
 }
 
+const SLEEP_WAIT_ARR = new Int32Array(new SharedArrayBuffer(4));
+
+function sleepSyncMs(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  try {
+    Atomics.wait(SLEEP_WAIT_ARR, 0, 0, Math.round(ms));
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { /* fallback */ }
+  }
+}
+
+function isLockPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
+}
+
 /**
- * Writes UTF-8 text atomically using a unique temporary file + rename.
+ * Acquires an exclusive advisory lock file (`<targetPath>.lock`) synchronously,
+ * evicts stale locks (>10s or dead owner PID), runs `fn()`, and releases only its own token.
+ */
+export function withFileLockSync(targetPath, fn, { timeoutMs = 4000, staleMs = 10_000 } = {}) {
+  const lockPath = `${targetPath}.lock`;
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const payload = JSON.stringify({ pid: process.pid, at: Date.now(), token });
+  const deadline = Date.now() + Math.max(200, timeoutMs);
+  let acquired = false;
+
+  while (!acquired) {
+    try {
+      const fd = openSync(lockPath, 'wx');
+      try {
+        writeSync(fd, payload, null, 'utf-8');
+      } finally {
+        closeSync(fd);
+      }
+      acquired = true;
+      break;
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      try {
+        const st = statSync(lockPath);
+        const age = Date.now() - st.mtimeMs;
+        let deadOwner = false;
+        try {
+          const info = JSON.parse(readFileSync(lockPath, 'utf-8'));
+          if (info && Number.isInteger(info.pid) && !isLockPidAlive(info.pid)) {
+            deadOwner = true;
+          }
+        } catch {
+          // Lock file mid-write or empty; rely on mtime stale check
+        }
+        if (age > staleMs || deadOwner) {
+          try { unlinkSync(lockPath); } catch { /* raced another evictor */ }
+          continue;
+        }
+      } catch {
+        // Lock disappeared between openSync and statSync; retry immediately
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for file lock: ${lockPath}`);
+      }
+      sleepSyncMs(12 + Math.floor(Math.random() * 14));
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    try {
+      const cur = readFileSync(lockPath, 'utf-8');
+      if (!cur || cur.includes(`"token":"${token}"`)) {
+        unlinkSync(lockPath);
+      }
+    } catch {
+      try { if (existsSync(lockPath)) unlinkSync(lockPath); } catch { /* ignore */ }
+    }
+  }
+}
+
+/**
+ * Writes UTF-8 text atomically using a unique temporary file + rename (3x retry).
  */
 export function writeTextAtomic(filePath, content) {
   const dir = dirname(filePath);
   mkdirSync(dir, { recursive: true });
+  const str = String(content ?? '');
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   try {
-    writeFileSync(tmp, String(content ?? ''), { encoding: 'utf-8' });
-    renameSync(tmp, filePath);
-  } catch (err) {
+    writeFileSync(tmp, str, { encoding: 'utf-8' });
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        renameSync(tmp, filePath);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 2) sleepSyncMs(15 * (attempt + 1));
+      }
+    }
+    if (lastErr) throw lastErr;
+  } catch {
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* ignore */ }
-    // Windows fallback if file lock briefly prevented rename
-    writeFileSync(filePath, String(content ?? ''), { encoding: 'utf-8' });
+    // Windows fallback if file lock briefly prevented rename across retries
+    writeFileSync(filePath, str, { encoding: 'utf-8' });
   }
 }
 
@@ -163,6 +265,22 @@ export function writeTextAtomic(filePath, content) {
  */
 export function writeJsonAtomic(filePath, value) {
   writeTextAtomic(filePath, JSON.stringify(value, null, 2) + '\n');
+}
+
+/**
+ * Performs an exclusive locked read-modify-write cycle on a JSON file.
+ */
+export function updateJsonLocked(filePath, defaultValue, mutator, lockOpts = {}) {
+  return withFileLockSync(filePath, () => {
+    const current = readJsonSafe(filePath, defaultValue);
+    const base = (current === defaultValue && defaultValue && typeof defaultValue === 'object')
+      ? structuredClone(defaultValue)
+      : current;
+    const next = mutator(base);
+    const toWrite = next === undefined ? base : next;
+    writeJsonAtomic(filePath, toWrite);
+    return toWrite;
+  }, lockOpts);
 }
 
 /**
@@ -239,11 +357,13 @@ export function statMtimeMs(filePath) {
 
 export function appendLogLine(filePath, line, maxLines = 250) {
   try {
-    const prev = readTextSafe(filePath, '');
-    const lines = prev ? prev.split(/\r?\n/).filter(Boolean) : [];
-    lines.push(`[${localClockDisplay()}] ${String(line || '').trim()}`);
-    const sliced = lines.slice(-maxLines);
-    writeTextAtomic(filePath, sliced.join('\n') + '\n');
+    withFileLockSync(filePath, () => {
+      const prev = readTextSafe(filePath, '');
+      const lines = prev ? prev.split(/\r?\n/).filter(Boolean) : [];
+      lines.push(`[${localClockDisplay()}] ${String(line || '').trim()}`);
+      const sliced = lines.slice(-maxLines);
+      writeTextAtomic(filePath, sliced.join('\n') + '\n');
+    });
   } catch {
     // Logging must never crash host hooks or sidecar
   }

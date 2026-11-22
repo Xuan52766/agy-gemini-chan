@@ -2,12 +2,13 @@
  * @fileoverview Testable HTTP router & static asset server for the `Gemini-chan 貓窩` Sidecar.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   getFullStateSnapshot,
   isVerifiedProjectConversation,
+  loadRegisteredSessions,
   registerProjectConversation,
 } from '../core/bridge.mjs';
 import {
@@ -41,18 +42,19 @@ import {
   appendTelegramLog,
   generateTelegramPairCode,
   loadTelegramConfig,
-  loadTelegramState,
+  parseChatIdSet,
   saveTelegramConfig,
-  saveTelegramState,
   syncTelegramHistoryFromTranscript,
   telegramGetMe,
-  telegramSendFile,
   telegramSendText,
+  updateTelegramStateLocked,
 } from '../core/telegram.mjs';
 import {
+  canonicalSessionKey,
   getDataPaths,
   getProjectRoot,
   isProjectWorkspaceActive,
+  statMtimeMs,
 } from '../core/storage.mjs';
 import {
   appendDiary,
@@ -75,6 +77,48 @@ const MIME = {
   '.jpeg': 'image/jpeg',
   '.json': 'application/json; charset=utf-8',
 };
+
+function parseWorkspaceUrisParam(raw) {
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch { return [raw]; }
+  }
+  return Array.isArray(raw) ? raw : [];
+}
+
+function computeDataVersionToken(root, convId, inProject) {
+  const p = getDataPaths(root);
+  const dirs = [
+    p.runtimeDir,
+    p.nestDir,
+    p.moodDir,
+    p.personaDir,
+    p.memoryDir,
+    p.speakUpDir,
+    p.telegramDir,
+    join(p.telegramDir, 'outbox'),
+    p.xingxiDir,
+    join(p.xingxiDir, 'diary'),
+  ];
+  let maxMtime = 0;
+  let totalEntries = 0;
+  for (const dir of dirs) {
+    const dirM = statMtimeMs(dir);
+    if (dirM > maxMtime) maxMtime = dirM;
+    try {
+      const names = readdirSync(dir);
+      totalEntries += names.length;
+      for (const name of names) {
+        if (!name.endsWith('.json') && !name.endsWith('.md')) continue;
+        const m = statMtimeMs(join(dir, name));
+        if (m > maxMtime) maxMtime = m;
+      }
+    } catch {
+      // Directory may not exist yet
+    }
+  }
+  const bucket = Math.floor(Date.now() / 30_000);
+  return `${Math.round(maxMtime)}:${totalEntries}:${bucket}:${inProject === null ? 'n' : (inProject ? '1' : '0')}:${convId}`;
+}
 
 /**
  * Registers static pages and JSON APIs onto any `SidecarApp`-compatible router (`page`, `api`).
@@ -114,22 +158,27 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
     router.page(`/assets/${name}`, serveStatic(join(assetsDir, name), MIME[ext] || 'application/octet-stream'));
   }
 
-  // Heartbeat / state poll
+  // Lightweight change-detection check for conditional polling
+  router.api('/api/version', (data = {}) => {
+    const workspaceUris = parseWorkspaceUrisParam(data.workspaceUris);
+    const convId = String(data.conversationId || '');
+    const inProject = workspaceUris.length === 0
+      ? null
+      : isProjectWorkspaceActive(workspaceUris, '', root);
+    return {
+      ok: true,
+      inProject,
+      version: computeDataVersionToken(root, convId, inProject),
+    };
+  }, 'GET');
+
+  // Heartbeat / state poll (strictly read-only; session writes occur on POST /api/context or hooks)
   router.api('/api/state', (data = {}) => {
-    const workspaceUris = typeof data.workspaceUris === 'string'
-      ? (() => { try { return JSON.parse(data.workspaceUris); } catch { return [data.workspaceUris]; } })()
-      : (Array.isArray(data.workspaceUris) ? data.workspaceUris : []);
+    const workspaceUris = parseWorkspaceUrisParam(data.workspaceUris);
     const convId = String(data.conversationId || '');
     const inProject = workspaceUris.length === 0
       ? null // Standalone/unknown client context
       : isProjectWorkspaceActive(workspaceUris, '', root);
-
-    if (inProject && convId) {
-      registerProjectConversation(
-        { conversationId: convId, workspacePaths: workspaceUris, sourceKind: 'sidecar' },
-        root,
-      );
-    }
 
     const snapshot = getFullStateSnapshot({ root, sessionId: convId });
     return {
@@ -430,9 +479,9 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
     }
     const me = await telegramGetMe(token);
     if (!me.ok || !me.result) {
-      const stErr = loadTelegramState(root);
-      appendTelegramLog(stErr, `連線測試失敗：${me.description || '無效的 Bot Token'}`, Date.now(), token);
-      saveTelegramState(stErr, root);
+      updateTelegramStateLocked(root, (stErr) => {
+        appendTelegramLog(stErr, `連線測試失敗：${me.description || '無效的 Bot Token'}`, Date.now(), token);
+      });
       return {
         ok: false,
         error: me.description || 'Telegram getMe 失敗',
@@ -440,34 +489,36 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
       };
     }
 
-    const st = loadTelegramState(root);
-    st.botUsername = me.result.username || '';
-    st.botDisplayName = me.result.first_name || '';
-    appendTelegramLog(st, `Bot 驗證成功：@${st.botUsername || st.botDisplayName}`, Date.now(), token);
-    saveTelegramState(st, root);
+    updateTelegramStateLocked(root, (st) => {
+      st.botUsername = me.result.username || '';
+      st.botDisplayName = me.result.first_name || '';
+      appendTelegramLog(st, `Bot 驗證成功：@${st.botUsername || st.botDisplayName}`, Date.now(), token);
+    });
 
     let sent = false;
     let sendError = '';
     if (data.sendTest) {
-      const chatId = String(data.chatId || cfg.allowedChatId || '').split(/[\s,，;]+/).map((s) => s.trim()).filter(Boolean)[0];
-      if (!chatId) {
-        sendError = '尚未綁定允許的 Chat ID，請先產生配對碼或填入 Chat ID';
-      } else if (data.filePath) {
-        const fRes = await telegramSendFile(token, chatId, data.filePath, {
-          root,
-          cfg,
-          caption: data.text || 'Gemini-chan 貓窩 Telegram 傳檔測試',
-        });
-        sent = fRes.ok;
-        sendError = fRes.error || '';
+      if (data.filePath) {
+        sendError = '安全限制：測試端點僅支援純文字連線測試，禁止指定本機檔案路徑';
       } else {
-        const tRes = await telegramSendText(
-          token,
-          chatId,
-          data.text || '喵～這是一則來自電腦端「Gemini-chan 貓窩」的 Telegram 連線測試訊息！',
-        );
-        sent = tRes.ok;
-        sendError = tRes.error || '';
+        const boundSet = parseChatIdSet(cfg.allowedChatId);
+        const requestedChatId = String(data.chatId || '').split(/[\s,，;]+/).map((s) => s.trim()).filter(Boolean)[0] || '';
+        const fallbackBoundId = [...boundSet][0] || '';
+        const chatId = requestedChatId || fallbackBoundId;
+
+        if (!chatId) {
+          sendError = '尚未綁定允許的 Chat ID，請先產生配對碼或填入 Chat ID';
+        } else if (cfg.lockSingleChat !== false && boundSet.size > 0 && !boundSet.has(chatId)) {
+          sendError = '安全鎖定：已鎖定單一帳號，測試訊息僅能傳送至已綁定之 Chat ID';
+        } else {
+          const tRes = await telegramSendText(
+            token,
+            chatId,
+            data.text || '喵～這是一則來自電腦端「Gemini-chan 貓窩」的 Telegram 連線測試訊息！',
+          );
+          sent = tRes.ok;
+          sendError = tRes.error || '';
+        }
       }
     }
 
@@ -483,20 +534,12 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
   router.api('/api/telegram/sync-history', (data = {}) => {
     const sessionsData = getFullStateSnapshot({ root, sessionId: String(data.conversationId || '') });
     const targetSid = String(data.conversationId || sessionsData.activeConversationId || '');
-    const reg = loadRegisteredSessionsCompat(root);
-    const matched = reg.sessions.find((s) => s.conversationId === targetSid) || reg.sessions[reg.sessions.length - 1];
+    const reg = loadRegisteredSessions(root);
+    const targetKey = canonicalSessionKey(targetSid);
+    const matched = targetKey
+      ? reg.sessions.find((s) => canonicalSessionKey(s.conversationId) === targetKey)
+      : null;
     const res = syncTelegramHistoryFromTranscript(root, matched?.transcriptPath || '');
     return { ...res, snapshot: getFullStateSnapshot({ root, sessionId: targetSid }) };
   }, 'POST');
-}
-
-function loadRegisteredSessionsCompat(root) {
-  const { join: j } = { join };
-  const p = j(getDataPaths(root).runtimeDir, 'sessions.json');
-  try {
-    if (!existsSync(p)) return { sessions: [] };
-    return JSON.parse(readFileSync(p, { encoding: 'utf-8' })) || { sessions: [] };
-  } catch {
-    return { sessions: [] };
-  }
 }

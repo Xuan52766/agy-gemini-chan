@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getFullStateSnapshot } from '../core/bridge.mjs';
-import { decayMoodState, loadMoodConfig, loadMoodState, saveMoodState } from '../core/mood.mjs';
+import { loadMoodState } from '../core/mood.mjs';
 import { executeSpeakUpTick, loadSpeakUpConfig } from '../core/speak-up.mjs';
 import {
   flushTelegramOutbox,
@@ -53,12 +53,9 @@ async function start() {
   // Background Speak-Up + Mood passive decay scheduler (runs safely every 60s)
   const tickTimer = setInterval(async () => {
     try {
-      // Passive mood decay refresh
+      // Passive mood decay refresh (locked read-decay-write inside loadMoodState)
       const nowMs = Date.now();
-      const moodCfg = loadMoodConfig(ROOT);
-      const moodState = loadMoodState({ root: ROOT, persist: false });
-      decayMoodState(moodState, moodCfg.moodBase, nowMs, moodCfg.decayHalfHours);
-      saveMoodState(moodState, { root: ROOT });
+      loadMoodState({ root: ROOT, now: nowMs, persist: true });
 
       const spCfg = loadSpeakUpConfig(ROOT);
       const snap = getFullStateSnapshot({ root: ROOT, now: nowMs });

@@ -16,6 +16,7 @@ import {
   getProjectRoot,
   isProjectWorkspaceActive,
   readJsonSafe,
+  updateJsonLocked,
   writeJsonAtomic,
 } from './storage.mjs';
 import { getXingxiSnapshot, XINGXI_PICKUP_MARKER } from './xingxi.mjs';
@@ -69,48 +70,55 @@ export function registerProjectConversation(
   }
 
   const now = Date.now();
-  const data = loadRegisteredSessions(root);
   const key = canonicalSessionKey(conversationId);
-  let entry = data.sessions.find((s) => canonicalSessionKey(s.conversationId) === key);
-  if (!entry) {
-    entry = {
-      conversationId: String(conversationId),
-      firstSeenAt: now,
-      lastSeenAt: now,
-      lastUserSpeechAt: lastUserMessageAt > 0 ? lastUserMessageAt : 0,
-      lastDesktopSpeechAt: lastDesktopMessageAt > 0 ? lastDesktopMessageAt : 0,
-      lastTurnStartAt: turnStartedAt || 0,
-      lastInjectedTurnKey: turnKey || '',
-      lastRawUserInput: typeof lastRawUserInput === 'string' ? lastRawUserInput : '',
-      lastInputStepIndex: Number.isFinite(lastInputStepIndex) ? lastInputStepIndex : -1,
-      injectedPersonaHash: typeof injectedPersonaHash === 'string' ? injectedPersonaHash : '',
-      hasInjectedStaticRules: Boolean(hasInjectedStaticRules),
-      hasInjectedStartupContext: Boolean(hasInjectedStartupContext),
-      injectedRulesHash: typeof injectedRulesHash === 'string' ? injectedRulesHash : '',
-      transcriptPath: transcriptPath || '',
-      modelName: modelName || '',
-      turnCount: 0,
+  let savedEntry = null;
+  updateJsonLocked(sessionsFile(root), { activeConversationId: '', sessions: [] }, (raw) => {
+    const data = {
+      activeConversationId: String(raw?.activeConversationId || ''),
+      sessions: Array.isArray(raw?.sessions) ? raw.sessions.slice() : [],
     };
-    data.sessions.push(entry);
-  } else {
-    entry.conversationId = String(conversationId);
-    entry.lastSeenAt = now;
-    if (transcriptPath) entry.transcriptPath = transcriptPath;
-    if (modelName) entry.modelName = modelName;
-    if (lastUserMessageAt > 0) entry.lastUserSpeechAt = lastUserMessageAt;
-    if (lastDesktopMessageAt > 0) entry.lastDesktopSpeechAt = lastDesktopMessageAt;
-    if (turnStartedAt > 0) entry.lastTurnStartAt = turnStartedAt;
-    if (turnKey) entry.lastInjectedTurnKey = turnKey;
-    if (typeof lastRawUserInput === 'string') entry.lastRawUserInput = lastRawUserInput;
-    if (Number.isFinite(lastInputStepIndex)) entry.lastInputStepIndex = lastInputStepIndex;
-    if (typeof injectedPersonaHash === 'string') entry.injectedPersonaHash = injectedPersonaHash;
-    if (typeof hasInjectedStaticRules === 'boolean') entry.hasInjectedStaticRules = hasInjectedStaticRules;
-    if (typeof hasInjectedStartupContext === 'boolean') entry.hasInjectedStartupContext = hasInjectedStartupContext;
-    if (typeof injectedRulesHash === 'string') entry.injectedRulesHash = injectedRulesHash;
-  }
-  data.activeConversationId = String(conversationId);
-  writeJsonAtomic(sessionsFile(root), data);
-  return entry;
+    let entry = data.sessions.find((s) => canonicalSessionKey(s.conversationId) === key);
+    if (!entry) {
+      entry = {
+        conversationId: String(conversationId),
+        firstSeenAt: now,
+        lastSeenAt: now,
+        lastUserSpeechAt: lastUserMessageAt > 0 ? lastUserMessageAt : 0,
+        lastDesktopSpeechAt: lastDesktopMessageAt > 0 ? lastDesktopMessageAt : 0,
+        lastTurnStartAt: turnStartedAt || 0,
+        lastInjectedTurnKey: turnKey || '',
+        lastRawUserInput: typeof lastRawUserInput === 'string' ? lastRawUserInput : '',
+        lastInputStepIndex: Number.isFinite(lastInputStepIndex) ? lastInputStepIndex : -1,
+        injectedPersonaHash: typeof injectedPersonaHash === 'string' ? injectedPersonaHash : '',
+        hasInjectedStaticRules: Boolean(hasInjectedStaticRules),
+        hasInjectedStartupContext: Boolean(hasInjectedStartupContext),
+        injectedRulesHash: typeof injectedRulesHash === 'string' ? injectedRulesHash : '',
+        transcriptPath: transcriptPath || '',
+        modelName: modelName || '',
+        turnCount: 0,
+      };
+      data.sessions.push(entry);
+    } else {
+      entry.conversationId = String(conversationId);
+      entry.lastSeenAt = now;
+      if (transcriptPath) entry.transcriptPath = transcriptPath;
+      if (modelName) entry.modelName = modelName;
+      if (lastUserMessageAt > 0) entry.lastUserSpeechAt = lastUserMessageAt;
+      if (lastDesktopMessageAt > 0) entry.lastDesktopSpeechAt = lastDesktopMessageAt;
+      if (turnStartedAt > 0) entry.lastTurnStartAt = turnStartedAt;
+      if (turnKey) entry.lastInjectedTurnKey = turnKey;
+      if (typeof lastRawUserInput === 'string') entry.lastRawUserInput = lastRawUserInput;
+      if (Number.isFinite(lastInputStepIndex)) entry.lastInputStepIndex = lastInputStepIndex;
+      if (typeof injectedPersonaHash === 'string') entry.injectedPersonaHash = injectedPersonaHash;
+      if (typeof hasInjectedStaticRules === 'boolean') entry.hasInjectedStaticRules = hasInjectedStaticRules;
+      if (typeof hasInjectedStartupContext === 'boolean') entry.hasInjectedStartupContext = hasInjectedStartupContext;
+      if (typeof injectedRulesHash === 'string') entry.injectedRulesHash = injectedRulesHash;
+    }
+    data.activeConversationId = String(conversationId);
+    savedEntry = entry;
+    return data;
+  });
+  return savedEntry;
 }
 
 /**
@@ -127,12 +135,12 @@ export function isVerifiedProjectConversation(conversationId, root = getProjectR
  * Classifies turn origin (`speak-up` | `xingxi-pickup` | `nest-event` | `telegram` | `work` | `user`).
  */
 export function classifyInputSource(userInput = '') {
-  const s = String(userInput || '');
-  if (s.includes(SPEAK_UP_MARKER) || s.includes('<speak-up>')) return 'speak-up';
-  if (s.includes(XINGXI_PICKUP_MARKER)) return 'xingxi-pickup';
-  if (s.includes(CAT_NEST_EVENT_MARKER)) return 'nest-event';
-  if (s.includes(TELEGRAM_INCOMING_MARKER)) return 'telegram';
-  if (/^\[(WORK_SCAN|CRON|AUTOMATION|YOUTUBE_PATROL)\]/i.test(s.trim())) return 'work';
+  const s = String(userInput || '').trimStart().replace(/^<SYSTEM_MESSAGE>\s*/i, '').trimStart();
+  if (s.startsWith(SPEAK_UP_MARKER) || s.startsWith('<speak-up>')) return 'speak-up';
+  if (s.startsWith(XINGXI_PICKUP_MARKER)) return 'xingxi-pickup';
+  if (s.startsWith(CAT_NEST_EVENT_MARKER)) return 'nest-event';
+  if (s.startsWith(TELEGRAM_INCOMING_MARKER)) return 'telegram';
+  if (/^\[(WORK_SCAN|CRON|AUTOMATION|YOUTUBE_PATROL)\]/i.test(s)) return 'work';
   return 'user';
 }
 

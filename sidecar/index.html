@@ -415,6 +415,7 @@
         <details class="drawer" id="drawer-mem-policy">
           <summary>評分權重、人稱與遺忘策略（原 <code>dsh-fish-memory</code> 完整參數）</summary>
           <div class="drawer-body">
+            <div id="pol-dirty-bar" class="dirty-bar hidden" role="status">有尚未儲存的設定修改</div>
             <label class="check-row" for="pol-enabled">
               <input type="checkbox" id="pol-enabled" />
               <span>啟用長期記憶自動記憶與召回</span>
@@ -1190,6 +1191,8 @@
       </section>
     </main>
   </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <script src="/app.js"></script>
 </body>

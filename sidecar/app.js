@@ -51,26 +51,129 @@
     spriteMotionUntil: 0,
     motionAmp: 0,
     motionPhaseStartMs: 0,
+    lastDataVersion: '',
+    pollFailures: 0,
+    armedConfirm: null,
   };
 
-  const apiFetch = (url, opts = {}) => {
-    if (window.sidecar && typeof window.sidecar.fetch === 'function') {
-      return window.sidecar.fetch(url, opts).then((r) => r.json());
+  let toastTimer = null;
+  function showToast(msg, kind = 'error', ms = 3600) {
+    const el = $('toast');
+    if (!el || !msg) return;
+    el.textContent = String(msg);
+    el.className = `toast ${kind}`;
+    clearTimeout(toastTimer);
+    if (ms > 0) {
+      toastTimer = setTimeout(() => {
+        el.classList.add('hidden');
+      }, ms);
     }
-    return fetch(url, {
-      ...opts,
-      headers: { 'content-type': 'application/json', ...(opts.headers || {}) },
-    }).then((r) => r.json());
-  };
+  }
+
+  async function apiFetch(url, opts = {}, { silent = false } = {}) {
+    const fetcher = (window.sidecar && typeof window.sidecar.fetch === 'function')
+      ? (u, o) => window.sidecar.fetch(u, o)
+      : (u, o) => fetch(u, {
+        ...o,
+        headers: { 'content-type': 'application/json', ...(o.headers || {}) },
+      });
+
+    let r;
+    try {
+      r = await fetcher(url, opts);
+    } catch (err) {
+      const msg = err?.message || '無法連線至貓窩背景服務';
+      if (!silent) showToast(`連線失敗：${msg}`, 'error');
+      throw err;
+    }
+
+    const raw = await r.text();
+    let parsed = null;
+    if (raw) {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        const msg = r.ok ? '伺服器回應格式錯誤' : `HTTP ${r.status} 錯誤`;
+        if (!silent) showToast(msg, 'error');
+        throw new Error(msg);
+      }
+    }
+
+    if (!r.ok) {
+      const msg = parsed?.error || `請求失敗 (HTTP ${r.status})`;
+      if (!silent) showToast(msg, 'error');
+      const err = new Error(msg);
+      err.status = r.status;
+      err.data = parsed;
+      throw err;
+    }
+    return parsed;
+  }
 
   const $ = (id) => document.getElementById(id);
+
+  async function withBusy(btn, fn) {
+    if (!btn) {
+      try { return await fn(); } catch { return null; }
+    }
+    if (btn.dataset.busy === '1' || btn.disabled) return null;
+    const prevDisabled = btn.disabled;
+    btn.dataset.busy = '1';
+    btn.setAttribute('aria-busy', 'true');
+    btn.disabled = true;
+    try {
+      return await fn();
+    } catch {
+      return null;
+    } finally {
+      delete btn.dataset.busy;
+      btn.removeAttribute('aria-busy');
+      if (btn.dataset.standbyDisabled !== '1' && btn.dataset.capDisabled !== '1') {
+        btn.disabled = prevDisabled;
+      }
+    }
+  }
+
+  function disarmConfirm(elOpt = null) {
+    if (!state.armedConfirm) return;
+    clearTimeout(state.armedConfirm.timer);
+    const { origText, btn, selector } = state.armedConfirm;
+    const targetBtn = elOpt || (btn?.isConnected ? btn : (selector ? document.querySelector(selector) : null));
+    if (targetBtn) {
+      targetBtn.textContent = origText;
+      targetBtn.classList.remove('btn-confirm-armed');
+    }
+    state.armedConfirm = null;
+  }
+
+  function confirmBtnAction(btn, confirmKey, selector, fn, armedLabel = '確定？') {
+    if (!btn || btn.dataset.busy === '1') return null;
+    const now = Date.now();
+    if (state.armedConfirm && state.armedConfirm.key === confirmKey && state.armedConfirm.expiresAt > now) {
+      disarmConfirm(btn);
+      return withBusy(btn, fn);
+    }
+    disarmConfirm();
+    const origText = btn.dataset.origLabel || btn.textContent;
+    btn.dataset.origLabel = origText;
+    btn.textContent = armedLabel;
+    btn.classList.add('btn-confirm-armed');
+    const timer = setTimeout(() => {
+      if (state.armedConfirm && state.armedConfirm.key === confirmKey) {
+        disarmConfirm();
+      }
+    }, 3200);
+    state.armedConfirm = { key: confirmKey, origText, btn, selector, timer, expiresAt: now + 3200 };
+    return null;
+  }
 
   function esc(str) {
     return String(str ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function flashMsg(id, msg, durationMs = 3200) {
@@ -87,11 +190,27 @@
   function setDirty(section, flag) {
     state.dirty[section] = Boolean(flag);
     const bar = section === 'mood' ? $('mood-dirty-bar')
+      : section === 'policy' ? $('pol-dirty-bar')
       : section === 'sp' ? $('sp-dirty-bar')
       : section === 'tg' ? $('tg-dirty-bar')
       : null;
     if (bar) bar.classList.toggle('hidden', !state.dirty[section]);
+
+    const tabId = section === 'mood' ? 'tabbtn-mood'
+      : section === 'policy' ? 'tabbtn-memory'
+      : section === 'sp' ? 'tabbtn-speakup'
+      : section === 'tg' ? 'tabbtn-telegram'
+      : '';
+    const tabBtn = tabId ? $(tabId) : null;
+    if (tabBtn) tabBtn.classList.toggle('has-dirty', Boolean(state.dirty[section]));
   }
+
+  window.addEventListener('beforeunload', (e) => {
+    if (Object.values(state.dirty).some(Boolean)) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
 
   function activeConversationId() {
     return window.sidecar?.conversationId || state.snap?.activeConversationId || '';
@@ -108,7 +227,7 @@
     speed: 0.014 + (i % 5) * 0.004,
   }));
 
-  function detectDarkTheme() {
+  function computeDarkThemeNow() {
     try {
       const bg = getComputedStyle(document.body).backgroundColor;
       const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(bg);
@@ -120,6 +239,43 @@
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
   }
 
+  let cachedIsDark = computeDarkThemeNow();
+  const refreshDarkThemeCache = () => { cachedIsDark = computeDarkThemeNow(); };
+  window.matchMedia?.('(prefers-color-scheme: dark)')?.addEventListener?.('change', refreshDarkThemeCache);
+  if (typeof MutationObserver === 'function') {
+    const themeObserver = new MutationObserver(refreshDarkThemeCache);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+    if (document.body) {
+      themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+    }
+  }
+
+  const reducedMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  let prefersReducedMotion = Boolean(reducedMotionQuery?.matches);
+  reducedMotionQuery?.addEventListener?.('change', (e) => { prefersReducedMotion = Boolean(e.matches); });
+
+  function detectDarkTheme() {
+    return cachedIsDark;
+  }
+
+  function drawStaticBgStars() {
+    const w = bgCanvas.width;
+    const h = bgCanvas.height;
+    if (!w || !h) return;
+    const isDark = cachedIsDark;
+    bgCtx.clearRect(0, 0, w, h);
+    const dpr = window.devicePixelRatio || 1;
+    for (const s of bgStars) {
+      const alpha = isDark ? 0.28 : 0.14;
+      bgCtx.fillStyle = isDark
+        ? `rgba(186, 230, 253, ${alpha})`
+        : `rgba(14, 116, 144, ${alpha})`;
+      bgCtx.beginPath();
+      bgCtx.arc(s.x * w, s.y * h, s.r * dpr, 0, Math.PI * 2);
+      bgCtx.fill();
+    }
+  }
+
   function resizeBgCanvas() {
     const stage = $('nest-stage');
     if (!stage) return;
@@ -128,9 +284,11 @@
     const dpr = window.devicePixelRatio || 1;
     bgCanvas.width = Math.round(rect.width * dpr);
     bgCanvas.height = Math.round(rect.height * dpr);
+    if (prefersReducedMotion) drawStaticBgStars();
   }
 
   function activateSpriteMotion(durationMs = 2200) {
+    if (prefersReducedMotion) return;
     const nowMs = performance.now();
     if (state.motionAmp <= 0.05) {
       state.motionPhaseStartMs = nowMs;
@@ -138,12 +296,26 @@
     state.spriteMotionUntil = Math.max(state.spriteMotionUntil, nowMs + durationMs);
   }
 
+  let bgStaticPainted = false;
   function animateStage(nowMs = performance.now()) {
+    if (prefersReducedMotion) {
+      if (!bgStaticPainted) {
+        drawStaticBgStars();
+        bgStaticPainted = true;
+      }
+      const spriteCanvas = $('sprite-canvas');
+      if (spriteCanvas && spriteCanvas.style.transform !== 'none') {
+        spriteCanvas.style.transform = 'none';
+      }
+      return;
+    }
+    bgStaticPainted = false;
+
     const w = bgCanvas.width;
     const h = bgCanvas.height;
     const tSec = nowMs / 1000;
-    if (w && h) {
-      const isDark = detectDarkTheme();
+    if (w && h && !document.hidden) {
+      const isDark = cachedIsDark;
       bgCtx.clearRect(0, 0, w, h);
       const dpr = window.devicePixelRatio || 1;
       for (const s of bgStars) {
@@ -822,7 +994,7 @@
     state.lastStarFrameMs = nowMs;
     const xingxiPanel = $('tab-xingxi');
     if (xingxiPanel && !xingxiPanel.hidden && !document.hidden) {
-      if (!state.isDraggingMap && !state.hoveredStarId) {
+      if (!prefersReducedMotion && !state.isDraggingMap && !state.hoveredStarId) {
         state.mapRotY += dt * 0.018;
       }
       if (state.tlPlaying) {
@@ -835,7 +1007,9 @@
         }
         syncTimelineCut();
       }
-      drawStarMap(null, nowMs);
+      if (!prefersReducedMotion || state.isDraggingMap || state.tlPlaying) {
+        drawStarMap(null, nowMs);
+      }
     }
     requestAnimationFrame(animateStarMapLoop);
   }
@@ -1040,36 +1214,75 @@
     if (warn) warn.classList.toggle('hidden', qStart !== qEnd);
   }
 
+  const STANDBY_ALLOW_IDS = new Set([
+    'mem-search',
+    'mem-show-archived',
+    'mem-test-query',
+    'btn-mem-test',
+    'btn-mem-export',
+    'xx-map-search',
+    'xx-raw-select',
+    'btn-xx-raw-view',
+    'xx-tl-play',
+    'xx-tl-range',
+  ]);
+
   function updateProjectScopeUI() {
     const scopePill = $('scope-pill');
     const banner = $('standby-banner');
     const sendBtn = $('btn-whisper-send');
     const spSendBtn = $('btn-sp-send');
     const pickupBtn = $('btn-xingxi-pickup');
+    const appEl = $('app');
 
-    if (state.inProject === false) {
+    const isOffline = state.pollFailures >= 3;
+    const isStandby = state.inProject === false;
+
+    if (appEl) appEl.classList.toggle('is-standby', isStandby);
+
+    if (isOffline) {
+      scopePill.textContent = '連線中斷（重試中）';
+      scopePill.className = 'scope-pill offline';
+      banner.classList.toggle('hidden', !isStandby);
+    } else if (isStandby) {
       scopePill.textContent = '休眠待機（外部工作區）';
       scopePill.className = 'scope-pill standby';
       banner.classList.remove('hidden');
-      sendBtn.disabled = true;
-      spSendBtn.disabled = true;
-      if (pickupBtn) pickupBtn.disabled = true;
     } else if (state.workspaceUris.length === 0) {
       scopePill.textContent = '本地預覽模式';
       scopePill.className = 'scope-pill active';
       banner.classList.add('hidden');
-      sendBtn.disabled = false;
-      spSendBtn.disabled = false;
-      if (pickupBtn) pickupBtn.disabled = false;
     } else {
       const cid = state.snap?.activeConversationId;
       scopePill.textContent = cid ? `gemini_cat 連線中 (${cid.slice(-6)})` : 'gemini_cat 就緒';
       scopePill.className = 'scope-pill active';
       banner.classList.add('hidden');
-      sendBtn.disabled = false;
-      spSendBtn.disabled = false;
-      if (pickupBtn) pickupBtn.disabled = false;
     }
+
+    const controls = document.querySelectorAll(
+      '#nest-stage button, #nest-stage input, #nest-stage select, #nest-stage textarea, '
+      + '.panels-wrap button, .panels-wrap input, .panels-wrap select, .panels-wrap textarea',
+    );
+    controls.forEach((el) => {
+      if (STANDBY_ALLOW_IDS.has(el.id)) return;
+      const perAct = el.dataset?.perAct;
+      if (perAct === 'toggleFull' || perAct === 'export') return;
+      if (isStandby) {
+        if (!el.disabled) {
+          el.dataset.standbyDisabled = '1';
+          el.disabled = true;
+        }
+      } else if (el.dataset.standbyDisabled === '1') {
+        delete el.dataset.standbyDisabled;
+        if (el.dataset.capDisabled !== '1' && el.dataset.busy !== '1') {
+          el.disabled = false;
+        }
+      }
+    });
+
+    if (sendBtn && !isStandby && sendBtn.dataset.busy !== '1') sendBtn.disabled = false;
+    if (spSendBtn && !isStandby && spSendBtn.dataset.busy !== '1') spSendBtn.disabled = false;
+    if (pickupBtn && !isStandby && pickupBtn.dataset.busy !== '1') pickupBtn.disabled = false;
   }
 
   const lastRenderedHtml = new WeakMap();
@@ -1098,6 +1311,15 @@
         (node) => (node.dataset?.previewId || node.dataset?.scrollId || '') === key,
       );
       if (match) match.scrollTop = top;
+    }
+    if (typeof state !== 'undefined' && state.armedConfirm && state.armedConfirm.expiresAt > Date.now() && state.armedConfirm.selector && typeof el.querySelector === 'function') {
+      const armedEl = el.querySelector(state.armedConfirm.selector);
+      if (armedEl) {
+        armedEl.dataset.origLabel = state.armedConfirm.origText;
+        armedEl.textContent = '確定？';
+        armedEl.classList.add('btn-confirm-armed');
+        state.armedConfirm.btn = armedEl;
+      }
     }
     return true;
   }
@@ -1307,7 +1529,14 @@
       const lim = limits[act];
       const badge = btn.querySelector('.care-badge');
       if (!lim) return;
-      const blocked = lim.cooldownLeftSec > 0 || Boolean(lim.blockedReason);
+      const dailyCap = Number(lim.dailyCap || 0);
+      const dailyUsed = Number(lim.dailyUsed || 0);
+      const dailyCapped = dailyCap > 0 && dailyUsed >= dailyCap;
+      btn.dataset.capDisabled = dailyCapped ? '1' : '';
+      if (btn.dataset.busy !== '1' && btn.dataset.standbyDisabled !== '1') {
+        btn.disabled = dailyCapped;
+      }
+      const blocked = dailyCapped || lim.cooldownLeftSec > 0 || Boolean(lim.blockedReason);
       btn.classList.toggle('on-cooldown', blocked);
       btn.title = lim.blockedReason
         || (lim.cooldownLeftSec > 0 ? `冷卻中，還需 ${lim.cooldownLeftSec} 秒` : `今日已互動 ${lim.dailyUsed}/${lim.dailyCap} 次`);
@@ -1401,10 +1630,10 @@
       setHtmlStable(traceBox, (memory.traces || []).map((tr) => `
         <div class="row-item">
           <div class="row-top">
-            <span>${tr.at ? new Date(tr.at).toLocaleTimeString() : ''} · 問句：「${esc(tr.query)}」</span>
-            <strong>${tr.gateBlocked ? '門檻擋掉' : `命中 ${tr.selectedIds?.length || 0} 條`}</strong>
+            <span>${tr.at ? esc(new Date(tr.at).toLocaleTimeString()) : ''} · 問句：「${esc(tr.query)}」</span>
+            <strong>${tr.gateBlocked ? '門檻擋掉' : `命中 ${Number(tr.selectedIds?.length || 0)} 條`}</strong>
           </div>
-          <div class="row-body">${(tr.rows || []).slice(0, 5).map((r) => `[${r.omission}] P=${r.P} ${r.text}`).join('\n') || '（無候選）'}</div>
+          <div class="row-body">${(tr.rows || []).slice(0, 5).map((r) => `[${esc(r.omission)}] P=${esc(r.P)} ${esc(r.text)}`).join('\n') || '（無候選）'}</div>
         </div>
       `).join('') || '<p class="muted-meta">尚無召回追溯記錄。</p>');
     }
@@ -1741,19 +1970,45 @@
     updateProjectScopeUI();
   }
 
-  async function refreshState() {
+  async function refreshState({ force = false } = {}) {
     try {
       const qs = new URLSearchParams({
         conversationId: window.sidecar?.conversationId || '',
         workspaceUris: JSON.stringify(state.workspaceUris),
       });
-      const res = await apiFetch(`/api/state?${qs.toString()}`, { method: 'GET' });
+      let verToken = '';
+      if (!force && state.hasInitialSnap) {
+        const ver = await apiFetch(`/api/version?${qs.toString()}`, { method: 'GET' }, { silent: true });
+        if (!ver || !ver.ok) throw new Error('version check failed');
+        verToken = String(ver.version || '');
+        const wasOffline = state.pollFailures >= 3;
+        state.pollFailures = 0;
+        const scopeChanged = typeof ver.inProject === 'boolean' && ver.inProject !== state.inProject;
+        if (scopeChanged) state.inProject = ver.inProject;
+        if (verToken && verToken === state.lastDataVersion) {
+          if (wasOffline || scopeChanged) updateProjectScopeUI();
+          return;
+        }
+      }
+
+      const res = await apiFetch(`/api/state?${qs.toString()}`, { method: 'GET' }, { silent: true });
       if (res && res.ok) {
+        state.pollFailures = 0;
+        if (verToken) {
+          state.lastDataVersion = verToken;
+        } else {
+          // Force poll fetches full snapshot; let next version check sync token cleanly
+          const ver = await apiFetch(`/api/version?${qs.toString()}`, { method: 'GET' }, { silent: true }).catch(() => null);
+          state.lastDataVersion = String(ver?.version || '');
+        }
         if (typeof res.inProject === 'boolean') state.inProject = res.inProject;
         renderSnapshot(res);
       }
     } catch {
-      // transient poll errors recover on next tick
+      state.pollFailures += 1;
+      if (state.pollFailures >= 3) {
+        updateProjectScopeUI();
+      }
     }
   }
 
@@ -1826,7 +2081,7 @@
   }
 
   document.querySelectorAll('.care-btn[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => triggerCare(btn.dataset.action));
+    btn.addEventListener('click', () => withBusy(btn, () => triggerCare(btn.dataset.action)));
   });
 
   $('nest-sync-chat').addEventListener('change', async () => {
@@ -1836,32 +2091,40 @@
         syncChatOnCare: $('nest-sync-chat').checked,
         conversationId: activeConversationId(),
       }),
-    });
+    }).catch(() => null);
     if (res?.snapshot) renderSnapshot(res.snapshot);
   });
 
-  $('btn-nest-clear').addEventListener('click', async () => {
+  $('btn-nest-clear').addEventListener('click', () => withBusy($('btn-nest-clear'), async () => {
     const res = await apiFetch('/api/nest/clear-pending', {
       method: 'POST',
       body: JSON.stringify({ conversationId: activeConversationId() }),
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+  }));
 
   $('btn-whisper-queue').addEventListener('click', async () => {
+    const btn = $('btn-whisper-queue');
     const input = $('whisper-input');
     const note = input.value.trim();
-    if (!note) return;
-    const res = await triggerCare('whisper', { note, sendToChat: false });
-    if (!res?.limited) input.value = '';
+    if (!note || btn?.dataset.busy === '1') return;
+    input.value = '';
+    const res = await withBusy(btn, () => triggerCare('whisper', { note, sendToChat: false }));
+    if (!res || res.limited || res.ok === false) {
+      if (!input.value) input.value = note;
+    }
   });
 
   $('btn-whisper-send').addEventListener('click', async () => {
+    const btn = $('btn-whisper-send');
     const input = $('whisper-input');
     const note = input.value.trim();
-    if (!note) return;
-    const res = await triggerCare('whisper', { note, sendToChat: true });
-    if (!res?.limited) input.value = '';
+    if (!note || btn?.dataset.busy === '1') return;
+    input.value = '';
+    const res = await withBusy(btn, () => triggerCare('whisper', { note, sendToChat: true }));
+    if (!res || res.limited || res.ok === false) {
+      if (!input.value) input.value = note;
+    }
   });
 
   $('whisper-input').addEventListener('keydown', (e) => {
@@ -1899,7 +2162,7 @@
     if ($('cfg-mood-perDay')) $('cfg-mood-perDay').disabled = Boolean($('cfg-mood-injectUnlimited').checked);
   });
 
-  $('btn-mood-save').addEventListener('click', async () => {
+  $('btn-mood-save').addEventListener('click', () => withBusy($('btn-mood-save'), async () => {
     const patch = {
       enabled: $('cfg-mood-enabled').checked,
       autoJudge: $('cfg-mood-autoJudge').checked,
@@ -1927,29 +2190,33 @@
     const res = await apiFetch('/api/mood/config', { method: 'POST', body: JSON.stringify(patch) });
     setDirty('mood', false);
     if (res?.snapshot) renderSnapshot(res.snapshot);
-    else await refreshState();
+    else await refreshState({ force: true });
     flashMsg('mood-save-msg', '已儲存心情設定 ✓');
-  });
+  }));
 
-  $('btn-mood-nudge-up').addEventListener('click', async () => {
+  $('btn-mood-nudge-up').addEventListener('click', () => withBusy($('btn-mood-nudge-up'), async () => {
     const res = await apiFetch('/api/mood/delta', {
       method: 'POST',
       body: JSON.stringify({ moodDelta: 3, dims: { happy: 4 }, reason: '側邊欄手動微調開心 (+3)', source: 'manual', bypassDivisor: true }),
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+  }));
 
-  $('btn-mood-nudge-down').addEventListener('click', async () => {
+  $('btn-mood-nudge-down').addEventListener('click', () => withBusy($('btn-mood-nudge-down'), async () => {
     const res = await apiFetch('/api/mood/delta', {
       method: 'POST',
       body: JSON.stringify({ moodDelta: -3, dims: { sad: 3 }, reason: '側邊欄手動微調低落 (-3)', source: 'manual', bypassDivisor: true }),
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+  }));
 
-  $('btn-mood-reset').addEventListener('click', async () => {
-    const res = await apiFetch('/api/mood/reset', { method: 'POST', body: '{}' });
-    if (res?.snapshot) renderSnapshot(res.snapshot);
+  $('btn-mood-reset').addEventListener('click', () => {
+    const btn = $('btn-mood-reset');
+    confirmBtnAction(btn, 'mood-reset', '#btn-mood-reset', async () => {
+      const res = await apiFetch('/api/mood/reset', { method: 'POST', body: '{}' });
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      showToast('已將心情歸零回穩至基準值', 'ok', 2200);
+    });
   });
 
   // ---------- 8. Memory Tab Events ----------
@@ -1982,7 +2249,7 @@
     `).join('');
   });
 
-  $('btn-mem-add').addEventListener('click', async () => {
+  $('btn-mem-add').addEventListener('click', () => withBusy($('btn-mem-add'), async () => {
     const text = $('mem-add-text').value.trim();
     if (!text) return;
     const res = await apiFetch('/api/memory/remember', {
@@ -1998,7 +2265,7 @@
     $('mem-add-text').value = '';
     $('mem-add-key').value = '';
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+  }));
 
   $('mem-search').addEventListener('input', () => {
     if (state.snap?.memory) renderMemoryList(state.snap.memory);
@@ -2024,24 +2291,39 @@
       return;
     }
     if (act === 'saveEdit') {
-      const box = btn.closest('[data-edit-box]');
-      if (!box) return;
-      const text = box.querySelector('.mem-edit-text').value.trim();
-      const factKey = box.querySelector('.mem-edit-key').value.trim();
-      const importance = Number(box.querySelector('.mem-edit-imp').value);
-      const res = await apiFetch('/api/memory/mutate', {
-        method: 'POST',
-        body: JSON.stringify({ action: 'edit', id, text, factKey, importance }),
+      await withBusy(btn, async () => {
+        const box = btn.closest('[data-edit-box]');
+        if (!box) return;
+        const text = box.querySelector('.mem-edit-text').value.trim();
+        const factKey = box.querySelector('.mem-edit-key').value.trim();
+        const importance = Number(box.querySelector('.mem-edit-imp').value);
+        const res = await apiFetch('/api/memory/mutate', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'edit', id, text, factKey, importance }),
+        });
+        if (res?.ok) state.editingMemId = '';
+        if (res?.snapshot) renderSnapshot(res.snapshot);
       });
-      if (res?.ok) state.editingMemId = '';
-      if (res?.snapshot) renderSnapshot(res.snapshot);
       return;
     }
-    const res = await apiFetch('/api/memory/mutate', {
-      method: 'POST',
-      body: JSON.stringify({ action: act, id }),
+    if (act === 'delete') {
+      const sel = `[data-mem-act="delete"][data-mem-id="${CSS.escape(id)}"]`;
+      confirmBtnAction(btn, `mem-del:${id}`, sel, async () => {
+        const res = await apiFetch('/api/memory/mutate', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'delete', id }),
+        });
+        if (res?.snapshot) renderSnapshot(res.snapshot);
+      });
+      return;
+    }
+    await withBusy(btn, async () => {
+      const res = await apiFetch('/api/memory/mutate', {
+        method: 'POST',
+        body: JSON.stringify({ action: act, id }),
+      });
+      if (res?.snapshot) renderSnapshot(res.snapshot);
     });
-    if (res?.snapshot) renderSnapshot(res.snapshot);
   });
 
   $('btn-mem-export').addEventListener('click', () => {
@@ -2100,7 +2382,7 @@
     msgId: 'pol-save-msg',
   });
 
-  $('btn-pol-save').addEventListener('click', async () => {
+  $('btn-pol-save').addEventListener('click', () => withBusy($('btn-pol-save'), async () => {
     const res = await apiFetch('/api/memory/policy', {
       method: 'POST',
       body: JSON.stringify({
@@ -2128,7 +2410,7 @@
     setDirty('policy', false);
     if (res?.snapshot) renderSnapshot(res.snapshot);
     flashMsg('pol-save-msg', '已儲存記憶策略 ✓');
-  });
+  }));
 
   $('btn-pol-reset').addEventListener('click', async () => {
     const res = await apiFetch('/api/memory/mutate', {
@@ -2162,22 +2444,27 @@
     box.textContent = res?.ok ? res.text : (res?.error || '讀取失敗');
   });
 
-  $('xingxi-backups-list').addEventListener('click', async (e) => {
+  $('xingxi-backups-list').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-xx-restore]');
     if (!btn) return;
-    const res = await apiFetch('/api/xingxi/restore', {
-      method: 'POST',
-      body: JSON.stringify({ backup: btn.dataset.xxRestore }),
-    });
-    if (res?.snapshot) renderSnapshot(res.snapshot);
-    if (res?.ok) {
-      $('xingxi-sched-summary').textContent = `已從備份 ${res.restoredFrom} 還原 ${res.file}（原版本已另存備份）。`;
-    } else if (res?.error) {
-      $('xingxi-sched-summary').textContent = `還原失敗：${res.error}`;
-    }
+    const backup = btn.dataset.xxRestore;
+    const sel = `[data-xx-restore="${CSS.escape(backup)}"]`;
+    confirmBtnAction(btn, `xx-restore:${backup}`, sel, async () => {
+      const res = await apiFetch('/api/xingxi/restore', {
+        method: 'POST',
+        body: JSON.stringify({ backup }),
+      });
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      if (res?.ok) {
+        $('xingxi-sched-summary').textContent = `已從備份 ${res.restoredFrom} 還原 ${res.file}（原版本已另存備份）。`;
+        showToast(`已從備份還原 ${res.file}`, 'ok', 2400);
+      } else if (res?.error) {
+        $('xingxi-sched-summary').textContent = `還原失敗：${res.error}`;
+      }
+    }, '確定還原？');
   });
 
-  $('btn-xingxi-save').addEventListener('click', async () => {
+  $('btn-xingxi-save').addEventListener('click', () => withBusy($('btn-xingxi-save'), async () => {
     const target = $('xingxi-chapter').value;
     const text = $('xingxi-entry').value.trim();
     if (!text) return;
@@ -2186,7 +2473,7 @@
       : await apiFetch('/api/xingxi/append', { method: 'POST', body: JSON.stringify({ chapter: target, content: text }) });
     $('xingxi-entry').value = '';
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+  }));
 
   $('btn-xingxi-sched-save').addEventListener('click', async () => {
     const [hh, mm] = String($('xingxi-sched-time').value || '23:30').split(':').map((n) => Number(n));
@@ -2288,20 +2575,30 @@
     return res;
   }
 
-  $('btn-sp-clear-plans')?.addEventListener('click', () => postSpeakUpPlan({ action: 'clear_plans' }));
+  $('btn-sp-clear-plans')?.addEventListener('click', () => {
+    const btn = $('btn-sp-clear-plans');
+    confirmBtnAction(btn, 'sp-clear-plans', '#btn-sp-clear-plans', () => postSpeakUpPlan({ action: 'clear_plans' }));
+  });
 
   $('sp-plans-list')?.addEventListener('click', (e) => {
     const delBtn = e.target.closest('button[data-sp-del-plan]');
-    if (delBtn) postSpeakUpPlan({ action: 'remove', id: delBtn.dataset.spDelPlan });
+    if (!delBtn) return;
+    const id = delBtn.dataset.spDelPlan;
+    const sel = `[data-sp-del-plan="${CSS.escape(id)}"]`;
+    confirmBtnAction(delBtn, `sp-del-plan:${id}`, sel, () => postSpeakUpPlan({ action: 'remove', id }));
   });
 
   $('sp-routines-list')?.addEventListener('click', (e) => {
     const tog = e.target.closest('button[data-sp-toggle-rt]');
-    if (tog) return postSpeakUpPlan({ action: 'toggle_routine', id: tog.dataset.spToggleRt });
+    if (tog) return withBusy(tog, () => postSpeakUpPlan({ action: 'toggle_routine', id: tog.dataset.spToggleRt }));
     const reroll = e.target.closest('button[data-sp-reroll-rt]');
-    if (reroll) return postSpeakUpPlan({ action: 'reroll_routine', id: reroll.dataset.spRerollRt });
+    if (reroll) return withBusy(reroll, () => postSpeakUpPlan({ action: 'reroll_routine', id: reroll.dataset.spRerollRt }));
     const del = e.target.closest('button[data-sp-del-rt]');
-    if (del) return postSpeakUpPlan({ action: 'remove', id: del.dataset.spDelRt });
+    if (del) {
+      const id = del.dataset.spDelRt;
+      const sel = `[data-sp-del-rt="${CSS.escape(id)}"]`;
+      return confirmBtnAction(del, `sp-del-rt:${id}`, sel, () => postSpeakUpPlan({ action: 'remove', id }));
+    }
   });
 
   $('btn-sp-add-routine')?.addEventListener('click', async () => {
@@ -2556,10 +2853,17 @@
       $('per-new-name').focus();
       return;
     }
-    if (state.editingPersonaId && act === 'delete' && id === state.editingPersonaId) {
-      resetPersonaEditor();
+    if (act === 'delete') {
+      const sel = `[data-per-act="delete"][data-per-id="${CSS.escape(id)}"]`;
+      confirmBtnAction(btn, `per-del:${id}`, sel, async () => {
+        if (state.editingPersonaId && id === state.editingPersonaId) {
+          resetPersonaEditor();
+        }
+        await postPersonaMutate({ action: 'delete', id });
+      });
+      return;
     }
-    await postPersonaMutate({ action: act, id });
+    await withBusy(btn, () => postPersonaMutate({ action: act, id }));
   });
 
   // ---------- 11b. Telegram Tab Events ----------
@@ -2595,14 +2899,14 @@
     if (res?.snapshot) renderSnapshot(res.snapshot);
   });
 
-  $('btn-tg-sync-history')?.addEventListener('click', async () => {
+  $('btn-tg-sync-history')?.addEventListener('click', () => withBusy($('btn-tg-sync-history'), async () => {
     const res = await apiFetch('/api/telegram/sync-history', {
       method: 'POST',
       body: JSON.stringify({ conversationId: activeConversationId() }),
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
     flashMsg('tg-save-msg', res?.ok ? `已同步補抓 ${res.imported || 0} 則對話 ✓` : (res?.error || '同步失敗'));
-  });
+  }));
 
   $('tg-allowedChatId')?.addEventListener('input', () => {
     state.tgChatIdEdited = true;
@@ -2613,25 +2917,28 @@
     setDirty('tg', true);
   });
 
-  $('btn-tg-clear-token')?.addEventListener('click', async () => {
-    const res = await apiFetch('/api/telegram/config', {
-      method: 'POST',
-      body: JSON.stringify({ clearToken: true }),
-    });
-    if ($('tg-botToken')) $('tg-botToken').value = '';
-    setDirty('tg', false);
-    if (res?.snapshot) renderSnapshot(res.snapshot);
-    flashMsg('tg-save-msg', '已清除 Bot Token');
+  $('btn-tg-clear-token')?.addEventListener('click', () => {
+    const btn = $('btn-tg-clear-token');
+    confirmBtnAction(btn, 'tg-clear-token', '#btn-tg-clear-token', async () => {
+      const res = await apiFetch('/api/telegram/config', {
+        method: 'POST',
+        body: JSON.stringify({ clearToken: true }),
+      });
+      if ($('tg-botToken')) $('tg-botToken').value = '';
+      setDirty('tg', false);
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      flashMsg('tg-save-msg', '已清除 Bot Token');
+    }, '確定清除？');
   });
 
-  $('btn-tg-gen-pair')?.addEventListener('click', async () => {
+  $('btn-tg-gen-pair')?.addEventListener('click', () => withBusy($('btn-tg-gen-pair'), async () => {
     const res = await apiFetch('/api/telegram/pair-code', { method: 'POST', body: '{}' });
     if (res?.snapshot) renderSnapshot(res.snapshot);
     if (res?.pairCode) flashMsg('tg-test-msg', `配對碼 ${res.pairCode} 已產生（10 分鐘內有效）`);
     else if (res?.error) flashMsg('tg-test-msg', res.error);
-  });
+  }));
 
-  $('btn-tg-test-me')?.addEventListener('click', async () => {
+  $('btn-tg-test-me')?.addEventListener('click', () => withBusy($('btn-tg-test-me'), async () => {
     const typedToken = $('tg-botToken')?.value.trim() || '';
     const res = await apiFetch('/api/telegram/test', {
       method: 'POST',
@@ -2639,9 +2946,9 @@
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
     flashMsg('tg-test-msg', res?.ok ? `驗證成功 @${res.bot?.username || 'Bot'}` : `失敗：${res?.error || '未知錯誤'}`);
-  });
+  }));
 
-  $('btn-tg-send-test')?.addEventListener('click', async () => {
+  $('btn-tg-send-test')?.addEventListener('click', () => withBusy($('btn-tg-send-test'), async () => {
     const typedToken = $('tg-botToken')?.value.trim() || '';
     const chatId = $('tg-allowedChatId')?.value.trim() || '';
     const res = await apiFetch('/api/telegram/test', {
@@ -2650,9 +2957,9 @@
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
     flashMsg('tg-test-msg', res?.sent ? '測試訊息已送達 Telegram ✓' : `失敗：${res?.error || '無法發送'}`);
-  });
+  }));
 
-  $('btn-tg-save')?.addEventListener('click', async () => {
+  $('btn-tg-save')?.addEventListener('click', () => withBusy($('btn-tg-save'), async () => {
     const tokenInput = $('tg-botToken')?.value.trim() || '';
     const chatIdInput = $('tg-allowedChatId')?.value.trim() || '';
     const payload = {
@@ -2687,7 +2994,7 @@
     setDirty('tg', false);
     if (res?.snapshot) renderSnapshot(res.snapshot);
     flashMsg('tg-save-msg', '已儲存 Telegram 設定 ✓');
-  });
+  }));
 
   // ---------- 12. Initialize Workspace Watcher + Poll Loop ----------
   async function init() {
@@ -2698,13 +3005,14 @@
     if (window.sidecar && typeof window.sidecar.getWorkspaceUris === 'function') {
       window.sidecar.onWorkspaceChange(async (uris) => {
         state.workspaceUris = Array.isArray(uris) ? uris : [];
+        state.lastDataVersion = '';
         const res = await apiFetch('/api/context', {
           method: 'POST',
           body: JSON.stringify({
             conversationId: window.sidecar.conversationId || '',
             workspaceUris: state.workspaceUris,
           }),
-        }).catch(() => null);
+        }, { silent: true }).catch(() => null);
         if (res) {
           state.inProject = state.workspaceUris.length === 0 ? null : Boolean(res.inProject);
           if (res.snapshot) renderSnapshot(res.snapshot);
@@ -2713,8 +3021,26 @@
       state.workspaceUris = await window.sidecar.getWorkspaceUris().catch(() => []);
     }
 
-    await refreshState();
-    setInterval(refreshState, 1500);
+    await refreshState({ force: true });
+
+    let pollTimer = null;
+    const scheduleNextPoll = () => {
+      clearTimeout(pollTimer);
+      const delayMs = document.hidden ? 10_000 : 1500;
+      pollTimer = setTimeout(async () => {
+        await refreshState();
+        scheduleNextPoll();
+      }, delayMs);
+    };
+    scheduleNextPoll();
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        refreshState().then(scheduleNextPoll);
+      } else {
+        scheduleNextPoll();
+      }
+    });
   }
 
   init();

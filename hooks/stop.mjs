@@ -17,7 +17,7 @@ import {
   evaluateTurnMood,
   loadMoodConfig,
   loadMoodState,
-  saveMoodState,
+  markMoodTurnHash,
 } from '../core/mood.mjs';
 import { loadNestState, setNestActivity } from '../core/nest.mjs';
 import {
@@ -79,23 +79,23 @@ async function main() {
     if (state.lastTurnHash !== turnHash) {
       if (turnStartAt > 0 && Number(state.lastInChatUpdateAt || 0) >= turnStartAt) {
         // Conversation AI already judged mood via `mood_update` inside this turn — keep it intact!
-        state.lastTurnHash = turnHash;
-        saveMoodState(state, { root: ROOT });
+        markMoodTurnHash(turnHash, { root: ROOT });
         appendLogLine(LOG, `Stop mood kept in-conversation AI judgement: mood=${Math.round(state.mood)}`);
       } else {
         const delta = await evaluateTurnMood(judgeUserInput, assistantText, { root: ROOT, mode });
         if (delta) {
-          const res = applyMoodDelta(delta, { root: ROOT, source: mode === 'speak-up' ? 'speak-up' : 'chat' });
+          const res = applyMoodDelta(delta, {
+            root: ROOT,
+            source: mode === 'speak-up' ? 'speak-up' : 'chat',
+            turnHash,
+          });
           const updated = res.state;
-          updated.lastTurnHash = turnHash;
-          saveMoodState(updated, { root: ROOT });
           appendLogLine(
             LOG,
             `Stop local fallback (${delta.engine || 'local'}, mode=${mode}): delta=${delta.moodDelta} -> mood=${Math.round(updated.mood)} reason=${delta.reason}`,
           );
         } else {
-          state.lastTurnHash = turnHash;
-          saveMoodState(state, { root: ROOT });
+          markMoodTurnHash(turnHash, { root: ROOT });
         }
       }
     }
