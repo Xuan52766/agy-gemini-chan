@@ -1,6 +1,7 @@
 # Personal & runtime companion data (memories, mood states, imported personas, diaries, session logs)
 data/*
 !data/dict/
+/AGENTS.md
 
 # Dependencies, logs & temporary atomic-write files
 node_modules/

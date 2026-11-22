@@ -41,7 +41,8 @@
     editingMemId: '',
     renamingPersonaId: '',
     editingPersonaId: '',
-    dirty: { mood: false, policy: false, sp: false },
+    dirty: { mood: false, policy: false, sp: false, tg: false },
+    tgChatIdEdited: false,
     // Sprite motion triggers strictly on interaction or active conversation
     hasInitialSnap: false,
     seenActivityAt: 0,
@@ -87,6 +88,7 @@
     state.dirty[section] = Boolean(flag);
     const bar = section === 'mood' ? $('mood-dirty-bar')
       : section === 'sp' ? $('sp-dirty-bar')
+      : section === 'tg' ? $('tg-dirty-bar')
       : null;
     if (bar) bar.classList.toggle('hidden', !state.dirty[section]);
   }
@@ -1325,6 +1327,23 @@
 
     // Tab 1: Mood
     $('mood-engine-badge').textContent = mood.judgeLabel || '對話內 AI ＋ 本地兜底';
+    const thoughtCard = $('mood-inner-thought-card');
+    if (thoughtCard) {
+      const thoughtEnabled = mood.config.innerThoughtEnabled !== false;
+      const thoughtText = String(mood.lastInnerThought || '').trim();
+      if (!thoughtEnabled) {
+        $('mood-thought-meta').textContent = '已關閉';
+        $('mood-inner-thought').textContent = '目前已關閉「第一人稱內心獨白」記錄開關（可於下方設定抽屜開啟）。';
+      } else if (thoughtText) {
+        const tsStr = mood.lastInnerThoughtAt ? new Date(mood.lastInnerThoughtAt).toLocaleTimeString() : '剛才';
+        $('mood-thought-meta').textContent = `${tsStr} · 真實心聲`;
+        $('mood-inner-thought').textContent = thoughtText;
+      } else {
+        $('mood-thought-meta').textContent = '等待寫下';
+        $('mood-inner-thought').textContent = '這輪還沒寫下第一人稱內心獨白；當她有真實情緒觸動或感觸時，會把心裡沒說出口的話記在這裡。';
+      }
+    }
+
     setHtmlStable($('mood-dims-grid'), mood.dims.map((d) => `
       <div class="dim-item">
         <div class="dim-head"><span>${esc(d.label)}</span><strong>${d.value}</strong></div>
@@ -1333,11 +1352,15 @@
     `).join(''));
 
     $('mood-inject-state').textContent = `${mood.injectPreview.state}`;
-    $('mood-quota-text').textContent = `今日 ${mood.injectQuota.said} / ${mood.injectQuota.cap}`;
+    const injLimitText = mood.injectQuota.unlimited ? '不限' : String(mood.injectQuota.cap);
+    const chQuota = mood.changeQuota || { count: 0, cap: 0, unlimited: true };
+    const chLimitText = chQuota.unlimited || chQuota.cap === 0 ? '不限' : String(chQuota.cap);
+    $('mood-quota-text').textContent = `提醒 ${mood.injectQuota.said}/${injLimitText} · 變化 ${chQuota.count}/${chLimitText}`;
     $('mood-inject-preview').textContent = mood.injectPreview.text || `（狀態：${mood.injectPreview.state}，暫無待注入句子）`;
 
     setIfClean($('cfg-mood-enabled'), mood.config.enabled !== false, 'mood');
     setIfClean($('cfg-mood-autoJudge'), mood.config.autoJudge !== false, 'mood');
+    setIfClean($('cfg-mood-innerThoughtEnabled'), mood.config.innerThoughtEnabled !== false, 'mood');
     setIfClean($('cfg-mood-judgeMode'), mood.config.judgeMode, 'mood');
     setIfClean($('cfg-mood-injectMode'), mood.config.injectMode, 'mood');
     setIfClean($('cfg-mood-ownerName'), mood.config.ownerName, 'mood');
@@ -1348,10 +1371,15 @@
     setIfClean($('cfg-mood-base'), mood.config.moodBase, 'mood');
     setIfClean($('cfg-mood-floor'), mood.config.moodFloor, 'mood');
     setIfClean($('cfg-mood-halfHours'), mood.config.decayHalfHours, 'mood');
+    setIfClean($('cfg-mood-stepDivisor'), mood.config.stepDivisor ?? 3, 'mood');
     setIfClean($('cfg-mood-conf'), mood.config.injectConfidence, 'mood');
     setIfClean($('cfg-mood-sigMood'), mood.config.sigMood, 'mood');
     setIfClean($('cfg-mood-sigDim'), mood.config.sigDim, 'mood');
+    setIfClean($('cfg-mood-changesPerDay'), mood.config.changesPerDay ?? 0, 'mood');
     setIfClean($('cfg-mood-perDay'), mood.config.injectPerDay, 'mood');
+    setIfClean($('cfg-mood-injectUnlimited'), Boolean(mood.config.injectUnlimited), 'mood');
+    if ($('cfg-mood-perDay')) $('cfg-mood-perDay').disabled = Boolean($('cfg-mood-injectUnlimited')?.checked);
+    setIfClean($('cfg-mood-rulePrompt'), mood.config.inChatRulePrompt || mood.defaultRulePrompt || '', 'mood');
 
     setHtmlStable($('mood-timeline'), (mood.timeline || []).map((t) => `
       <div class="row-item">
@@ -1359,7 +1387,7 @@
           <span>${new Date(t.at).toLocaleTimeString()} · ${esc(t.kind || 'chat')}</span>
           <strong class="tabular">心情 ${t.mood} (${t.delta >= 0 ? `+${t.delta}` : t.delta})</strong>
         </div>
-        <div class="row-body">${esc(t.reason || '無說明')}</div>
+        <div class="row-body">${esc(t.reason || '無說明')}${t.innerThought ? `<div class="thought-note">「${esc(t.innerThought)}」</div>` : ''}</div>
       </div>
     `).join('') || '<p class="muted-meta">還沒有心情變化記錄，在對話裡聊幾句自然會記錄下來。</p>');
 
@@ -1400,6 +1428,7 @@
     setIfClean($('pol-dailyQuota'), memory.policy.dailyQuota, 'policy');
     setIfClean($('pol-repeatWindow'), memory.policy.repeatWindow ?? 15, 'policy');
     setIfClean($('pol-factCap'), memory.policy.factCap ?? 1, 'policy');
+    setIfClean($('pol-rulePrompt'), memory.policy.inChatRulePrompt || memory.defaultRuleTemplate || '', 'policy');
 
     // Tab 3: Xingxi
     $('xingxi-stats-badge').textContent = `${xingxi.stars.length} 顆星 · ${xingxi.fileCount} 檔案`;
@@ -1462,21 +1491,99 @@
 
     // Tab 4: Speak-Up
     const spPrev = speakUp.preview;
-    $('sp-line-badge').textContent = `命中線 ${spPrev.hitLine}%`;
+    const plans = speakUp.state?.plans || [];
+    const routines = speakUp.state?.routines || [];
+    const aiOn = speakUp.config.aiPlanEnabled !== false;
+    const diceOn = speakUp.config.diceEnabled !== false;
+    const modeChip = !speakUp.config.enabled
+      ? '總開關關閉'
+      : aiOn && diceOn
+        ? `AI排程 + 擲骰 ${spPrev.hitLine}%`
+        : aiOn
+          ? `純AI排程 (${plans.length + routines.filter((r) => r.enabled).length}項)`
+          : diceOn
+            ? `純擲骰 ${spPrev.hitLine}%`
+            : '雙模式皆關';
+    $('sp-line-badge').textContent = modeChip;
+
     const spWindowLabel = !spPrev.usePeakValley
       ? '【全天統一命中率】'
       : spPrev.peak
         ? `【峰時 ${spPrev.peakWindowsText || ''}】`
         : '【谷時（非峰時）】';
+    const nextPlanAt = plans[0]?.triggerAt || routines.filter((r) => r.enabled && r.nextTriggerAt > 0).map((r) => r.nextTriggerAt).sort((a, b) => a - b)[0] || 0;
+    const nextStr = nextPlanAt ? ` ｜ 下個預約：${new Date(nextPlanAt).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '';
+    const maxUnans = Number(speakUp.config.maxUnansweredSpontaneous ?? 2);
+    const curUnans = Number(spPrev.unansweredCount ?? speakUp.state?.unansweredCount ?? 0);
+    const unansTag = maxUnans > 0 ? ` ｜ 未回 ${curUnans}/${maxUnans}` : (curUnans > 0 ? ` ｜ 未回 ${curUnans}` : '');
+
+    const silenceBar = $('sp-silence-bar');
+    if (silenceBar) {
+      if (spPrev.isSilenced && spPrev.silentUntil > 0) {
+        silenceBar.classList.remove('hidden');
+        const untilStr = new Date(spPrev.silentUntil).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        $('sp-silence-text').textContent = `自主勿擾中至 ${untilStr}${spPrev.silentReason ? `（${spPrev.silentReason}）` : ''} — 明確提醒仍會準點通知`;
+      } else {
+        silenceBar.classList.add('hidden');
+      }
+    }
+
     $('sp-preview-text').textContent =
-      `${spWindowLabel} 基礎 ${spPrev.baseLine}% × 時機因子 ${spPrev.factor} + 連沒中加成 ${spPrev.bonus}% = 命中線 ${spPrev.hitLine}%`
+      (diceOn
+        ? `${spWindowLabel} 基礎 ${spPrev.baseLine}% × 時機因子 ${spPrev.factor} + 連沒中加成 ${spPrev.bonus}% = 命中線 ${spPrev.hitLine}%`
+        : '傳統隨機擲骰已關閉，僅依 AI 預約時刻表與固定節律執行')
+      + nextStr
+      + unansTag
       + (spPrev.inQuiet ? '（目前在安靜時段內）' : '')
       + (speakUp.config.dryRun ? ' ｜ 試運行模式開啟中' : '');
 
     setIfClean($('sp-enabled'), speakUp.config.enabled, 'sp');
+    setIfClean($('sp-aiPlanEnabled'), aiOn, 'sp');
+    setIfClean($('sp-diceEnabled'), diceOn, 'sp');
     setIfClean($('sp-dryRun'), speakUp.config.dryRun, 'sp');
     setIfClean($('sp-followActive'), speakUp.config.followActive !== false, 'sp');
+    setIfClean($('sp-diceBlockActiveChat'), speakUp.config.diceBlockActiveChat !== false, 'sp');
+    setIfClean($('sp-suppressBeforeReminder'), speakUp.config.suppressDiceBeforeReminder !== false, 'sp');
+    setIfClean($('sp-proactiveCueEnabled'), speakUp.config.proactiveCueEnabled !== false, 'sp');
+    setIfClean($('sp-scheduleTendency'), speakUp.config.scheduleTendency || 'high', 'sp');
     renderSpeakUpTargets(speakUp, snap.verifiedConversations || []);
+
+    const fmtClock = (ms) => new Date(ms).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const dayLabels = ['日', '一', '二', '三', '四', '五', '六'];
+    setHtmlStable($('sp-plans-list'), plans.map((p) => {
+      const kindBadge = p.kind === 'reminder' ? '明確提醒' : '自主決定';
+      const jitterTag = p.jitterMin ? `（原約 ${fmtClock(p.baseAt)} ±${p.jitterMin}m）` : '';
+      return `
+        <div class="row-item">
+          <div class="row-top">
+            <span><span class="pill-kind">${kindBadge}</span> <strong>${esc(fmtClock(p.triggerAt))}</strong> ${esc(jitterTag)}</span>
+            <button type="button" class="btn-mini btn-danger" data-sp-del-plan="${esc(p.id)}">刪除</button>
+          </div>
+          <div class="row-body">${esc(p.label || '預約搭話')}${p.thought ? `<div class="thought-note">「${esc(p.thought)}」</div>` : ''}</div>
+        </div>
+      `;
+    }).join('') || '<p class="muted-meta">目前沒有預約時間；直接在對話裡告訴她「幾分鐘後叫我」或讓她自己安排。</p>');
+
+    $('sp-routines-count').textContent = `${routines.length} 條`;
+    setHtmlStable($('sp-routines-list'), routines.map((r) => {
+      const daysText = (r.days && r.days.length < 7)
+        ? r.days.map((d) => `週${dayLabels[d] ?? d}`).join('、')
+        : '每天';
+      const nextTime = r.nextTriggerAt ? fmtClock(r.nextTriggerAt) : '待排程';
+      return `
+        <div class="row-item">
+          <div class="row-top">
+            <span><strong>${esc(r.timeHHMM)} ±${r.jitterMin}m</strong> · ${esc(daysText)} · 下次 ${esc(nextTime)}</span>
+            <div class="btn-group-compact">
+              <button type="button" class="btn-mini" data-sp-toggle-rt="${esc(r.id)}">${r.enabled ? '停用' : '啟用'}</button>
+              <button type="button" class="btn-mini" data-sp-reroll-rt="${esc(r.id)}" title="在隨機波動範圍內重抽下次時間">重抽</button>
+              <button type="button" class="btn-mini btn-danger" data-sp-del-rt="${esc(r.id)}">刪除</button>
+            </div>
+          </div>
+          <div class="row-body">${esc(r.label || r.timeHHMM)}${r.enabled ? '' : '（已停用）'}${r.thought ? `<div class="thought-note">「${esc(r.thought)}」</div>` : ''}</div>
+        </div>
+      `;
+    }).join('') || '<p class="muted-meta">尚未設定固定波動節律；可用自然語言或點下方新增（如「每天 12:30 ±20 分」）。</p>');
 
     setIfClean($('sp-usePeakValley'), speakUp.config.usePeakValley !== false, 'sp');
     setIfClean($('sp-peakWindows'), speakUp.config.peakWindowsText || '09:00-12:00, 14:00-18:00', 'sp');
@@ -1492,6 +1599,9 @@
     setIfClean($('sp-timezone'), speakUp.config.timezone, 'sp');
     setIfClean($('sp-interval'), speakUp.config.intervalMinutes, 'sp');
     setIfClean($('sp-cooldown'), speakUp.config.cooldownMin, 'sp');
+    setIfClean($('sp-activeGap'), speakUp.config.respectActiveChatGapMin ?? 8, 'sp');
+    setIfClean($('sp-maxUnanswered'), speakUp.config.maxUnansweredSpontaneous ?? 2, 'sp');
+    setIfClean($('sp-reminderSuppressMin'), speakUp.config.suppressBeforeReminderMin ?? 120, 'sp');
     setIfClean($('sp-bonus'), speakUp.config.missBonus, 'sp');
     setIfClean($('sp-cap'), speakUp.config.bonusCap, 'sp');
     setIfClean($('sp-qStart'), speakUp.config.quietStartHour, 'sp');
@@ -1501,14 +1611,16 @@
     setIfClean($('sp-nearFactor'), speakUp.config.nearFactor, 'sp');
     setIfClean($('sp-farMin'), speakUp.config.farThresholdMin, 'sp');
     setIfClean($('sp-farFactor'), speakUp.config.farFactor, 'sp');
+    setIfClean($('sp-rulePrompt'), speakUp.config.inChatRulePrompt || speakUp.defaultInChatRulePrompt || '', 'sp');
     setIfClean($('sp-prompt'), speakUp.config.triggerPrompt, 'sp');
+    setIfClean($('sp-followUpPrompt'), speakUp.config.followUpHintPrompt || speakUp.defaultFollowUpHintPrompt || '', 'sp');
 
     setHtmlStable($('sp-logs'), (speakUp.state.logs || []).map((l) => `
       <div class="row-item">
         <div class="row-top"><span>${esc(l.time)}</span></div>
         <div class="row-body">${esc(l.text)}</div>
       </div>
-    `).join('') || '<p class="muted-meta">尚無擲骰記錄。點上方「演練一次」立即試算。</p>');
+    `).join('') || '<p class="muted-meta">尚無排程與擲骰記錄。點上方「演練擲骰一次」立即試算。</p>');
 
     // Tab 5: Persona (Strictly gemini_cat project-scoped; zero global tier)
     const sourceLabels = {
@@ -1545,6 +1657,87 @@
     }
 
     renderPersonaCatalog(persona);
+
+    // Tab 6: Telegram Bridge
+    const tg = snap.telegram;
+    if (tg) {
+      const tgCfg = tg.config || {};
+      const tgSt = tg.status || {};
+      const badgeText = !tgCfg.enabled
+        ? '未啟用'
+        : !tgCfg.hasBotToken
+          ? '缺 Token'
+          : !tgSt.configured
+            ? '待綁定 Chat ID'
+            : tgSt.lastPollError
+              ? '連線異常'
+              : tgSt.botUsername
+                ? `已連接 @${tgSt.botUsername}`
+                : '運行中';
+      if ($('tg-status-badge')) $('tg-status-badge').textContent = badgeText;
+      if ($('tg-token-hint')) {
+        $('tg-token-hint').textContent = tgCfg.hasBotToken
+          ? `已儲存 Bot Token（${tgCfg.botTokenMasked || '***'}）${tgSt.botUsername ? ` · @${tgSt.botUsername}` : ''}`
+          : '尚未設定 Token；請向 Telegram @BotFather 建立 Bot 後貼上';
+      }
+      const pairBox = $('tg-pair-box');
+      if (pairBox) {
+        if (tgCfg.pairCode && tgCfg.pairCodeExpiresAt > Date.now()) {
+          const minsLeft = Math.max(1, Math.ceil((tgCfg.pairCodeExpiresAt - Date.now()) / 60_000));
+          pairBox.classList.remove('hidden');
+          pairBox.textContent = `臨時配對碼：${tgCfg.pairCode}（剩 ${minsLeft} 分鐘）— 請直接在 Telegram 私訊你的 Bot 傳送：/bind ${tgCfg.pairCode}`;
+        } else {
+          pairBox.classList.add('hidden');
+        }
+      }
+
+      if (!state.tgChatIdEdited && document.activeElement !== $('tg-allowedChatId')) {
+        $('tg-allowedChatId').value = tgCfg.allowedChatId || '';
+      }
+      setIfClean($('tg-lockSingleChat'), tgCfg.lockSingleChat !== false, 'tg');
+      setIfClean($('tg-enabled'), tgCfg.enabled, 'tg');
+      setIfClean($('tg-receiveEnabled'), tgCfg.receiveEnabled !== false, 'tg');
+      setIfClean($('tg-forwardTelegramReplies'), tgCfg.forwardTelegramReplies !== false, 'tg');
+      setIfClean($('tg-forwardDesktopReplies'), Boolean(tgCfg.forwardDesktopReplies), 'tg');
+      setIfClean($('tg-forwardDesktopUserMessages'), tgCfg.forwardDesktopUserMessages !== false, 'tg');
+      setIfClean($('tg-forwardSpeakUp'), tgCfg.forwardSpeakUp !== false, 'tg');
+      setIfClean($('tg-forwardXingxi'), Boolean(tgCfg.forwardXingxi), 'tg');
+      setIfClean($('tg-downloadFiles'), tgCfg.downloadFiles !== false, 'tg');
+      setIfClean($('tg-autoSendReplyFiles'), tgCfg.autoSendReplyFiles !== false, 'tg');
+      setIfClean($('tg-muteWhenDesktopActive'), tgCfg.muteWhenDesktopActive !== false, 'tg');
+      setIfClean($('tg-desktopActiveMuteMin'), tgCfg.desktopActiveMuteMin ?? 15, 'tg');
+      setIfClean($('tg-desktopMuteMode'), tgCfg.desktopMuteMode || 'skip', 'tg');
+      if ($('tg-mute-status-line')) {
+        $('tg-mute-status-line').textContent = tgSt.desktopMuteActive
+          ? `目前電腦對話活躍：Telegram 主動推播暫時${tgCfg.desktopMuteMode === 'silent' ? '靜音送達' : '安靜不打擾'}（剩約 ${tgSt.desktopMuteMinsLeft} 分，或在 Telegram 回覆立即解除）`
+          : (tgCfg.muteWhenDesktopActive === false ? '自動靜音未啟用' : '目前無電腦端靜音鎖定（會正常推播通知）');
+      }
+      setIfClean($('tg-followActive'), tgCfg.followActive !== false, 'tg');
+      setIfClean($('tg-targetConvId'), tgCfg.targetConversationId || '', 'tg');
+      setIfClean($('tg-maxUploadMb'), tgCfg.maxUploadMb ?? 20, 'tg');
+      setIfClean($('tg-extraSendDirs'), Array.isArray(tgCfg.extraSendDirs) ? tgCfg.extraSendDirs.join('\n') : '', 'tg');
+
+      setHtmlStable($('tg-chat-history'), (tg.chatHistory || []).slice().reverse().map((h) => {
+        const who = h.dir === 'out'
+          ? `Gemini 貓貓${h.mode === 'speak-up' ? '（主動）' : ''}${h.silent ? ' 🔕' : ''}`
+          : `${h.sender || '你（Telegram）'}${h.silent ? ' 🔕' : ''}`;
+        const fileTag = Array.isArray(h.files) && h.files.length ? ` [附件: ${h.files.join(', ')}]` : '';
+        return `
+          <div class="row-item">
+            <div class="row-top"><strong>${esc(who)}</strong><span>${esc(h.time)}</span></div>
+            <div class="row-body">${esc(h.text || '')}${esc(fileTag)}</div>
+          </div>
+        `;
+      }).join('') || '<p class="muted-meta">尚無 Telegram 來回對話紀錄；點右上角「從目前對話補同步」可抓回既有紀錄。</p>');
+
+      setHtmlStable($('tg-logs'), (tg.logs || []).map((l) => `
+        <div class="row-item">
+          <div class="row-top"><span>${esc(l.time)}</span></div>
+          <div class="row-body">${esc(l.text)}</div>
+        </div>
+      `).join('') || '<p class="muted-meta">尚無 Telegram 傳訊或傳檔紀錄。</p>');
+    }
+
     updateProjectScopeUI();
   }
 
@@ -1677,14 +1870,40 @@
     $('btn-whisper-queue').click();
   });
 
+  function bindPromptReset(btnId, { apiUrl, payloadFn, textareaId, getDefaultFn, msgId }) {
+    const btn = $(btnId);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const res = await apiFetch(apiUrl, { method: 'POST', body: JSON.stringify(payloadFn()) });
+      const def = getDefaultFn(res?.snapshot || state.snap);
+      const ta = $(textareaId);
+      if (ta && typeof def === 'string') ta.value = def;
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      if (msgId) flashMsg(msgId, '已恢復預設提示詞 ✓');
+    });
+  }
+
   // ---------- 7. Mood Tab Events ----------
   $('drawer-mood-cfg').addEventListener('input', () => setDirty('mood', true));
   $('drawer-mood-cfg').addEventListener('change', () => setDirty('mood', true));
+
+  bindPromptReset('btn-mood-reset-prompt', {
+    apiUrl: '/api/mood/config',
+    payloadFn: () => ({ inChatRulePrompt: '', conversationId: activeConversationId() }),
+    textareaId: 'cfg-mood-rulePrompt',
+    getDefaultFn: (s) => s?.mood?.defaultRulePrompt || '',
+    msgId: 'mood-save-msg',
+  });
+
+  $('cfg-mood-injectUnlimited')?.addEventListener('change', () => {
+    if ($('cfg-mood-perDay')) $('cfg-mood-perDay').disabled = Boolean($('cfg-mood-injectUnlimited').checked);
+  });
 
   $('btn-mood-save').addEventListener('click', async () => {
     const patch = {
       enabled: $('cfg-mood-enabled').checked,
       autoJudge: $('cfg-mood-autoJudge').checked,
+      innerThoughtEnabled: $('cfg-mood-innerThoughtEnabled').checked,
       judgeMode: $('cfg-mood-judgeMode').value,
       injectMode: $('cfg-mood-injectMode').value,
       selfName: $('cfg-mood-selfName').value,
@@ -1695,10 +1914,14 @@
       moodBase: Number($('cfg-mood-base').value),
       moodFloor: Number($('cfg-mood-floor').value),
       decayHalfHours: Number($('cfg-mood-halfHours').value),
+      stepDivisor: Number($('cfg-mood-stepDivisor').value),
       injectPerDay: Number($('cfg-mood-perDay').value),
+      injectUnlimited: Boolean($('cfg-mood-injectUnlimited').checked),
+      changesPerDay: Number($('cfg-mood-changesPerDay').value),
       sigMood: Number($('cfg-mood-sigMood').value),
       sigDim: Number($('cfg-mood-sigDim').value),
       injectConfidence: Number($('cfg-mood-conf').value),
+      inChatRulePrompt: $('cfg-mood-rulePrompt').value,
       conversationId: activeConversationId(),
     };
     const res = await apiFetch('/api/mood/config', { method: 'POST', body: JSON.stringify(patch) });
@@ -1869,6 +2092,14 @@
   });
   $('drawer-mem-policy').addEventListener('change', () => setDirty('policy', true));
 
+  bindPromptReset('btn-mem-reset-prompt', {
+    apiUrl: '/api/memory/policy',
+    payloadFn: () => ({ inChatRulePrompt: '' }),
+    textareaId: 'pol-rulePrompt',
+    getDefaultFn: (s) => s?.memory?.defaultRuleTemplate || '',
+    msgId: 'pol-save-msg',
+  });
+
   $('btn-pol-save').addEventListener('click', async () => {
     const res = await apiFetch('/api/memory/policy', {
       method: 'POST',
@@ -1891,6 +2122,7 @@
         dailyQuota: Number($('pol-dailyQuota').value),
         repeatWindow: Number($('pol-repeatWindow')?.value ?? 15),
         factCap: Number($('pol-factCap')?.value ?? 1),
+        inChatRulePrompt: $('pol-rulePrompt').value,
       }),
     });
     setDirty('policy', false);
@@ -1999,6 +2231,35 @@
     return [...new Set([...checked, ...manual])];
   }
 
+  const INSTANT_SP_SWITCHES = {
+    'sp-enabled': 'enabled',
+    'sp-aiPlanEnabled': 'aiPlanEnabled',
+    'sp-diceEnabled': 'diceEnabled',
+    'sp-dryRun': 'dryRun',
+    'sp-diceBlockActiveChat': 'diceBlockActiveChat',
+    'sp-suppressBeforeReminder': 'suppressDiceBeforeReminder',
+    'sp-proactiveCueEnabled': 'proactiveCueEnabled',
+  };
+  for (const [elId, cfgKey] of Object.entries(INSTANT_SP_SWITCHES)) {
+    $(elId)?.addEventListener('change', async () => {
+      const res = await apiFetch('/api/speak-up/config', {
+        method: 'POST',
+        body: JSON.stringify({ [cfgKey]: $(elId).checked }),
+      });
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+    });
+  }
+
+  $('sp-scheduleTendency')?.addEventListener('change', async () => {
+    const res = await apiFetch('/api/speak-up/config', {
+      method: 'POST',
+      body: JSON.stringify({ scheduleTendency: $('sp-scheduleTendency').value }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+  });
+
+  $('btn-sp-clear-silence')?.addEventListener('click', () => postSpeakUpPlan({ action: 'clear_silence' }));
+
   $('sp-followActive').addEventListener('change', async () => {
     const followActive = $('sp-followActive').checked;
     $('sp-targets-wrap').classList.toggle('hidden', followActive);
@@ -2018,15 +2279,90 @@
     if (res?.snapshot) renderSnapshot(res.snapshot);
   });
 
+  async function postSpeakUpPlan(body) {
+    const res = await apiFetch('/api/speak-up/plan', {
+      method: 'POST',
+      body: JSON.stringify({ ...body, conversationId: activeConversationId() }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    return res;
+  }
+
+  $('btn-sp-clear-plans')?.addEventListener('click', () => postSpeakUpPlan({ action: 'clear_plans' }));
+
+  $('sp-plans-list')?.addEventListener('click', (e) => {
+    const delBtn = e.target.closest('button[data-sp-del-plan]');
+    if (delBtn) postSpeakUpPlan({ action: 'remove', id: delBtn.dataset.spDelPlan });
+  });
+
+  $('sp-routines-list')?.addEventListener('click', (e) => {
+    const tog = e.target.closest('button[data-sp-toggle-rt]');
+    if (tog) return postSpeakUpPlan({ action: 'toggle_routine', id: tog.dataset.spToggleRt });
+    const reroll = e.target.closest('button[data-sp-reroll-rt]');
+    if (reroll) return postSpeakUpPlan({ action: 'reroll_routine', id: reroll.dataset.spRerollRt });
+    const del = e.target.closest('button[data-sp-del-rt]');
+    if (del) return postSpeakUpPlan({ action: 'remove', id: del.dataset.spDelRt });
+  });
+
+  $('btn-sp-add-routine')?.addEventListener('click', async () => {
+    const timeHHMM = $('sp-new-rt-time')?.value || '12:30';
+    const jitterMin = Number($('sp-new-rt-jitter')?.value ?? 20);
+    const label = $('sp-new-rt-label')?.value.trim() || '';
+    const thought = $('sp-new-rt-thought')?.value.trim() || '';
+    const days = [...document.querySelectorAll('#sp-new-rt-days input[data-day]:checked')].map((cb) => Number(cb.dataset.day));
+    const res = await postSpeakUpPlan({
+      action: 'add_routine',
+      timeHHMM,
+      jitterMin,
+      label: label || `每日 ${timeHHMM} 左右`,
+      thought,
+      days,
+    });
+    if (res?.ok) {
+      if ($('sp-new-rt-label')) $('sp-new-rt-label').value = '';
+      if ($('sp-new-rt-thought')) $('sp-new-rt-thought').value = '';
+      flashMsg('sp-save-msg', '已新增固定波動節律 ✓');
+    }
+  });
+
+  function isInstantSpeakUpTarget(el) {
+    if (!el) return true;
+    if (Object.hasOwn(INSTANT_SP_SWITCHES, el.id) || el.id === 'sp-followActive' || el.id === 'sp-scheduleTendency') return true;
+    if (el.classList?.contains('sp-target-cb')) return true;
+    return Boolean($('drawer-sp-add-routine')?.contains(el));
+  }
+
   $('tab-speakup').addEventListener('input', (e) => {
-    if (e.target.id === 'sp-followActive' || e.target.classList.contains('sp-target-cb')) return;
+    if (isInstantSpeakUpTarget(e.target)) return;
     setDirty('sp', true);
     if (e.target.id === 'sp-qStart' || e.target.id === 'sp-qEnd') updateSpeakUpQuietWarning();
   });
 
   $('tab-speakup').addEventListener('change', (e) => {
-    if (e.target.id === 'sp-followActive' || e.target.classList.contains('sp-target-cb')) return;
+    if (isInstantSpeakUpTarget(e.target)) return;
     setDirty('sp', true);
+  });
+
+  bindPromptReset('btn-sp-reset-rule', {
+    apiUrl: '/api/speak-up/config',
+    payloadFn: () => ({ inChatRulePrompt: '' }),
+    textareaId: 'sp-rulePrompt',
+    getDefaultFn: (s) => s?.speakUp?.defaultInChatRulePrompt || '',
+    msgId: 'sp-save-msg',
+  });
+  bindPromptReset('btn-sp-reset-prompt', {
+    apiUrl: '/api/speak-up/config',
+    payloadFn: () => ({ triggerPrompt: state.snap?.speakUp?.defaultTriggerPrompt || '晃過來瞄一眼。想到什麼好玩的、想吐槽的事，或單純冒個泡就隨手丟一兩句。' }),
+    textareaId: 'sp-prompt',
+    getDefaultFn: (s) => s?.speakUp?.defaultTriggerPrompt || '晃過來瞄一眼。想到什麼好玩的、想吐槽的事，或單純冒個泡就隨手丟一兩句。',
+    msgId: 'sp-save-msg',
+  });
+  bindPromptReset('btn-sp-reset-followup', {
+    apiUrl: '/api/speak-up/config',
+    payloadFn: () => ({ followUpHintPrompt: '' }),
+    textareaId: 'sp-followUpPrompt',
+    getDefaultFn: (s) => s?.speakUp?.defaultFollowUpHintPrompt || '',
+    msgId: 'sp-save-msg',
   });
 
   $('btn-sp-save').addEventListener('click', async () => {
@@ -2036,8 +2372,14 @@
       method: 'POST',
       body: JSON.stringify({
         enabled: $('sp-enabled').checked,
+        aiPlanEnabled: $('sp-aiPlanEnabled').checked,
+        diceEnabled: $('sp-diceEnabled').checked,
         dryRun: $('sp-dryRun').checked,
         followActive: $('sp-followActive').checked,
+        diceBlockActiveChat: $('sp-diceBlockActiveChat').checked,
+        suppressDiceBeforeReminder: $('sp-suppressBeforeReminder').checked,
+        proactiveCueEnabled: $('sp-proactiveCueEnabled').checked,
+        scheduleTendency: $('sp-scheduleTendency').value,
         targetConversations: collectSelectedTargets(),
         usePeakValley: $('sp-usePeakValley').checked,
         peakDays,
@@ -2046,6 +2388,9 @@
         valleyHitLine: Number($('sp-valley').value),
         intervalMinutes: Number($('sp-interval').value),
         cooldownMin: Number($('sp-cooldown').value),
+        respectActiveChatGapMin: Number($('sp-activeGap').value),
+        maxUnansweredSpontaneous: Number($('sp-maxUnanswered').value),
+        suppressBeforeReminderMin: Number($('sp-reminderSuppressMin').value),
         missBonus: Number($('sp-bonus').value),
         bonusCap: Number($('sp-cap').value),
         quietStartHour: Number($('sp-qStart').value),
@@ -2055,7 +2400,9 @@
         farThresholdMin: Number($('sp-farMin').value),
         farFactor: Number($('sp-farFactor').value),
         timezone: $('sp-timezone').value.trim(),
+        inChatRulePrompt: $('sp-rulePrompt').value,
         triggerPrompt: $('sp-prompt').value,
+        followUpHintPrompt: $('sp-followUpPrompt').value,
       }),
     });
     setDirty('sp', false);
@@ -2081,6 +2428,11 @@
 
   $('btn-sp-reset-streak').addEventListener('click', async () => {
     const res = await apiFetch('/api/speak-up/reset-streak', { method: 'POST', body: '{}' });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+  });
+
+  $('btn-sp-reset-unanswered')?.addEventListener('click', async () => {
+    const res = await apiFetch('/api/speak-up/reset-unanswered', { method: 'POST', body: '{}' });
     if (res?.snapshot) renderSnapshot(res.snapshot);
   });
 
@@ -2208,6 +2560,133 @@
       resetPersonaEditor();
     }
     await postPersonaMutate({ action: act, id });
+  });
+
+  // ---------- 11b. Telegram Tab Events ----------
+  const INSTANT_TG_SWITCHES = {
+    'tg-lockSingleChat': 'lockSingleChat',
+    'tg-enabled': 'enabled',
+    'tg-receiveEnabled': 'receiveEnabled',
+    'tg-forwardTelegramReplies': 'forwardTelegramReplies',
+    'tg-forwardDesktopReplies': 'forwardDesktopReplies',
+    'tg-forwardDesktopUserMessages': 'forwardDesktopUserMessages',
+    'tg-forwardSpeakUp': 'forwardSpeakUp',
+    'tg-forwardXingxi': 'forwardXingxi',
+    'tg-downloadFiles': 'downloadFiles',
+    'tg-autoSendReplyFiles': 'autoSendReplyFiles',
+    'tg-muteWhenDesktopActive': 'muteWhenDesktopActive',
+    'tg-followActive': 'followActive',
+  };
+  for (const [elId, cfgKey] of Object.entries(INSTANT_TG_SWITCHES)) {
+    $(elId)?.addEventListener('change', async () => {
+      const res = await apiFetch('/api/telegram/config', {
+        method: 'POST',
+        body: JSON.stringify({ [cfgKey]: $(elId).checked }),
+      });
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+    });
+  }
+
+  $('tg-desktopMuteMode')?.addEventListener('change', async () => {
+    const res = await apiFetch('/api/telegram/config', {
+      method: 'POST',
+      body: JSON.stringify({ desktopMuteMode: $('tg-desktopMuteMode').value }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+  });
+
+  $('btn-tg-sync-history')?.addEventListener('click', async () => {
+    const res = await apiFetch('/api/telegram/sync-history', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId: activeConversationId() }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    flashMsg('tg-save-msg', res?.ok ? `已同步補抓 ${res.imported || 0} 則對話 ✓` : (res?.error || '同步失敗'));
+  });
+
+  $('tg-allowedChatId')?.addEventListener('input', () => {
+    state.tgChatIdEdited = true;
+  });
+
+  $('tab-telegram')?.addEventListener('input', (e) => {
+    if (e.target && (Object.hasOwn(INSTANT_TG_SWITCHES, e.target.id) || e.target.id === 'tg-desktopMuteMode')) return;
+    setDirty('tg', true);
+  });
+
+  $('btn-tg-clear-token')?.addEventListener('click', async () => {
+    const res = await apiFetch('/api/telegram/config', {
+      method: 'POST',
+      body: JSON.stringify({ clearToken: true }),
+    });
+    if ($('tg-botToken')) $('tg-botToken').value = '';
+    setDirty('tg', false);
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    flashMsg('tg-save-msg', '已清除 Bot Token');
+  });
+
+  $('btn-tg-gen-pair')?.addEventListener('click', async () => {
+    const res = await apiFetch('/api/telegram/pair-code', { method: 'POST', body: '{}' });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    if (res?.pairCode) flashMsg('tg-test-msg', `配對碼 ${res.pairCode} 已產生（10 分鐘內有效）`);
+    else if (res?.error) flashMsg('tg-test-msg', res.error);
+  });
+
+  $('btn-tg-test-me')?.addEventListener('click', async () => {
+    const typedToken = $('tg-botToken')?.value.trim() || '';
+    const res = await apiFetch('/api/telegram/test', {
+      method: 'POST',
+      body: JSON.stringify({ botToken: typedToken, sendTest: false }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    flashMsg('tg-test-msg', res?.ok ? `驗證成功 @${res.bot?.username || 'Bot'}` : `失敗：${res?.error || '未知錯誤'}`);
+  });
+
+  $('btn-tg-send-test')?.addEventListener('click', async () => {
+    const typedToken = $('tg-botToken')?.value.trim() || '';
+    const chatId = $('tg-allowedChatId')?.value.trim() || '';
+    const res = await apiFetch('/api/telegram/test', {
+      method: 'POST',
+      body: JSON.stringify({ botToken: typedToken, chatId, sendTest: true }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    flashMsg('tg-test-msg', res?.sent ? '測試訊息已送達 Telegram ✓' : `失敗：${res?.error || '無法發送'}`);
+  });
+
+  $('btn-tg-save')?.addEventListener('click', async () => {
+    const tokenInput = $('tg-botToken')?.value.trim() || '';
+    const chatIdInput = $('tg-allowedChatId')?.value.trim() || '';
+    const payload = {
+      followActive: $('tg-followActive')?.checked !== false,
+      targetConversationId: $('tg-targetConvId')?.value.trim() || '',
+      maxUploadMb: Number($('tg-maxUploadMb')?.value ?? 20),
+      extraSendDirs: $('tg-extraSendDirs')?.value || '',
+      enabled: Boolean($('tg-enabled')?.checked),
+      lockSingleChat: $('tg-lockSingleChat')?.checked !== false,
+      receiveEnabled: $('tg-receiveEnabled')?.checked !== false,
+      forwardTelegramReplies: $('tg-forwardTelegramReplies')?.checked !== false,
+      forwardDesktopReplies: Boolean($('tg-forwardDesktopReplies')?.checked),
+      forwardDesktopUserMessages: $('tg-forwardDesktopUserMessages')?.checked !== false,
+      forwardSpeakUp: $('tg-forwardSpeakUp')?.checked !== false,
+      forwardXingxi: Boolean($('tg-forwardXingxi')?.checked),
+      downloadFiles: $('tg-downloadFiles')?.checked !== false,
+      autoSendReplyFiles: $('tg-autoSendReplyFiles')?.checked !== false,
+      muteWhenDesktopActive: $('tg-muteWhenDesktopActive')?.checked !== false,
+      desktopActiveMuteMin: Number($('tg-desktopActiveMuteMin')?.value ?? 15),
+      desktopMuteMode: $('tg-desktopMuteMode')?.value || 'skip',
+    };
+    if (state.tgChatIdEdited || chatIdInput) {
+      payload.allowedChatId = chatIdInput;
+    }
+    if (tokenInput) payload.botToken = tokenInput;
+    const res = await apiFetch('/api/telegram/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if ($('tg-botToken')) $('tg-botToken').value = '';
+    state.tgChatIdEdited = false;
+    setDirty('tg', false);
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    flashMsg('tg-save-msg', '已儲存 Telegram 設定 ✓');
   });
 
   // ---------- 12. Initialize Workspace Watcher + Poll Loop ----------

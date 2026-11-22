@@ -32,9 +32,23 @@ import { mutatePersona } from '../core/persona.mjs';
 import {
   executeSpeakUpRoll,
   loadSpeakUpConfig,
+  mutateSpeakUpPlan,
   resetSpeakUpStreak,
+  resetSpeakUpUnanswered,
   saveSpeakUpConfig,
 } from '../core/speak-up.mjs';
+import {
+  appendTelegramLog,
+  generateTelegramPairCode,
+  loadTelegramConfig,
+  loadTelegramState,
+  saveTelegramConfig,
+  saveTelegramState,
+  syncTelegramHistoryFromTranscript,
+  telegramGetMe,
+  telegramSendFile,
+  telegramSendText,
+} from '../core/telegram.mjs';
 import {
   getDataPaths,
   getProjectRoot,
@@ -195,7 +209,7 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
           } else if (res.state?.sleeping) {
             msg = `[CAT_NEST_EVENT] （你此刻正在貓窩軟墊上閉著眼熟睡中、還沒被叫醒，主人在側邊欄輕輕對你進行了「${actionLabel}」互動；請務必以半夢半醒、帶著濃濃睡意的小聲夢囈簡短應一兩句就好，切勿表現得像已經完全清醒，也不要寫 *動作* 或 （動作旁白）～）`;
           } else {
-            msg = `[CAT_NEST_EVENT] （主人在側邊欄貓窩對你執行了「${actionLabel}」互動，請直接用自然口語回應主人，不要寫 *動作* 或 （動作旁白）～）`;
+            msg = `[CAT_NEST_EVENT] （主人在側邊欄貓窩點了「${actionLabel}」陪你一下，順著當下氣氛自然應一兩句就好～）`;
           }
           await sendMessageFn(targetId, msg);
           dispatched = true;
@@ -352,8 +366,19 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
     return { ok: true, config: cfg, snapshot: getFullStateSnapshot({ root }) };
   }, 'POST');
 
+  router.api('/api/speak-up/plan', (data = {}) => {
+    const action = String(data.action || 'list').trim();
+    const res = mutateSpeakUpPlan(action, data, root);
+    return { ...res, snapshot: getFullStateSnapshot({ root, sessionId: String(data.conversationId || '') }) };
+  }, 'POST');
+
   router.api('/api/speak-up/reset-streak', () => {
     const st = resetSpeakUpStreak(root);
+    return { ok: true, state: st, snapshot: getFullStateSnapshot({ root }) };
+  }, 'POST');
+
+  router.api('/api/speak-up/reset-unanswered', () => {
+    const st = resetSpeakUpUnanswered(root);
     return { ok: true, state: st, snapshot: getFullStateSnapshot({ root }) };
   }, 'POST');
 
@@ -383,4 +408,95 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
     });
     return { ok: true, result, snapshot: getFullStateSnapshot({ root, sessionId: targetConvId }) };
   }, 'POST');
+
+  // Telegram Bridge endpoints
+  router.api('/api/telegram/config', (data = {}) => {
+    saveTelegramConfig(data, root);
+    const snap = getFullStateSnapshot({ root, sessionId: String(data.conversationId || '') });
+    return { ok: true, telegram: snap.telegram, snapshot: snap };
+  }, 'POST');
+
+  router.api('/api/telegram/pair-code', (data = {}) => {
+    const pair = generateTelegramPairCode(root);
+    const snap = getFullStateSnapshot({ root, sessionId: String(data.conversationId || '') });
+    return { ok: !pair.blocked, ...pair, snapshot: snap };
+  }, 'POST');
+
+  router.api('/api/telegram/test', async (data = {}) => {
+    const cfg = loadTelegramConfig(root);
+    const token = (typeof data.botToken === 'string' && data.botToken.trim()) ? data.botToken.trim() : cfg.botToken;
+    if (!token) {
+      return { ok: false, error: '尚未設定 Telegram Bot Token', snapshot: getFullStateSnapshot({ root }) };
+    }
+    const me = await telegramGetMe(token);
+    if (!me.ok || !me.result) {
+      const stErr = loadTelegramState(root);
+      appendTelegramLog(stErr, `連線測試失敗：${me.description || '無效的 Bot Token'}`, Date.now(), token);
+      saveTelegramState(stErr, root);
+      return {
+        ok: false,
+        error: me.description || 'Telegram getMe 失敗',
+        snapshot: getFullStateSnapshot({ root }),
+      };
+    }
+
+    const st = loadTelegramState(root);
+    st.botUsername = me.result.username || '';
+    st.botDisplayName = me.result.first_name || '';
+    appendTelegramLog(st, `Bot 驗證成功：@${st.botUsername || st.botDisplayName}`, Date.now(), token);
+    saveTelegramState(st, root);
+
+    let sent = false;
+    let sendError = '';
+    if (data.sendTest) {
+      const chatId = String(data.chatId || cfg.allowedChatId || '').split(/[\s,，;]+/).map((s) => s.trim()).filter(Boolean)[0];
+      if (!chatId) {
+        sendError = '尚未綁定允許的 Chat ID，請先產生配對碼或填入 Chat ID';
+      } else if (data.filePath) {
+        const fRes = await telegramSendFile(token, chatId, data.filePath, {
+          root,
+          cfg,
+          caption: data.text || 'Gemini-chan 貓窩 Telegram 傳檔測試',
+        });
+        sent = fRes.ok;
+        sendError = fRes.error || '';
+      } else {
+        const tRes = await telegramSendText(
+          token,
+          chatId,
+          data.text || '喵～這是一則來自電腦端「Gemini-chan 貓窩」的 Telegram 連線測試訊息！',
+        );
+        sent = tRes.ok;
+        sendError = tRes.error || '';
+      }
+    }
+
+    return {
+      ok: data.sendTest ? sent : true,
+      bot: { username: me.result.username || '', firstName: me.result.first_name || '' },
+      sent,
+      error: sendError,
+      snapshot: getFullStateSnapshot({ root }),
+    };
+  }, 'POST');
+
+  router.api('/api/telegram/sync-history', (data = {}) => {
+    const sessionsData = getFullStateSnapshot({ root, sessionId: String(data.conversationId || '') });
+    const targetSid = String(data.conversationId || sessionsData.activeConversationId || '');
+    const reg = loadRegisteredSessionsCompat(root);
+    const matched = reg.sessions.find((s) => s.conversationId === targetSid) || reg.sessions[reg.sessions.length - 1];
+    const res = syncTelegramHistoryFromTranscript(root, matched?.transcriptPath || '');
+    return { ...res, snapshot: getFullStateSnapshot({ root, sessionId: targetSid }) };
+  }, 'POST');
+}
+
+function loadRegisteredSessionsCompat(root) {
+  const { join: j } = { join };
+  const p = j(getDataPaths(root).runtimeDir, 'sessions.json');
+  try {
+    if (!existsSync(p)) return { sessions: [] };
+    return JSON.parse(readFileSync(p, { encoding: 'utf-8' })) || { sessions: [] };
+  } catch {
+    return { sessions: [] };
+  }
 }

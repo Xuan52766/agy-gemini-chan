@@ -9,6 +9,7 @@ import { getMoodSnapshot } from './mood.mjs';
 import { getNestSnapshot, loadNestState } from './nest.mjs';
 import { getPersonaSnapshot } from './persona.mjs';
 import { getSpeakUpSnapshot, SPEAK_UP_MARKER } from './speak-up.mjs';
+import { getTelegramSnapshot, TELEGRAM_INCOMING_MARKER } from './telegram.mjs';
 import {
   canonicalSessionKey,
   getDataPaths,
@@ -20,7 +21,7 @@ import {
 import { getXingxiSnapshot, XINGXI_PICKUP_MARKER } from './xingxi.mjs';
 
 export const CAT_NEST_EVENT_MARKER = '[CAT_NEST_EVENT]';
-export { XINGXI_PICKUP_MARKER };
+export { TELEGRAM_INCOMING_MARKER, XINGXI_PICKUP_MARKER };
 
 function sessionsFile(root) {
   return join(getDataPaths(root).runtimeDir, 'sessions.json');
@@ -50,6 +51,7 @@ export function registerProjectConversation(
     modelName = '',
     sourceKind = 'user',
     lastUserMessageAt = 0,
+    lastDesktopMessageAt = 0,
     turnKey = '',
     turnStartedAt = 0,
     lastRawUserInput = undefined,
@@ -57,6 +59,7 @@ export function registerProjectConversation(
     injectedPersonaHash = undefined,
     hasInjectedStaticRules = undefined,
     hasInjectedStartupContext = undefined,
+    injectedRulesHash = undefined,
   } = {},
   root = getProjectRoot(),
 ) {
@@ -75,6 +78,7 @@ export function registerProjectConversation(
       firstSeenAt: now,
       lastSeenAt: now,
       lastUserSpeechAt: lastUserMessageAt > 0 ? lastUserMessageAt : 0,
+      lastDesktopSpeechAt: lastDesktopMessageAt > 0 ? lastDesktopMessageAt : 0,
       lastTurnStartAt: turnStartedAt || 0,
       lastInjectedTurnKey: turnKey || '',
       lastRawUserInput: typeof lastRawUserInput === 'string' ? lastRawUserInput : '',
@@ -82,6 +86,7 @@ export function registerProjectConversation(
       injectedPersonaHash: typeof injectedPersonaHash === 'string' ? injectedPersonaHash : '',
       hasInjectedStaticRules: Boolean(hasInjectedStaticRules),
       hasInjectedStartupContext: Boolean(hasInjectedStartupContext),
+      injectedRulesHash: typeof injectedRulesHash === 'string' ? injectedRulesHash : '',
       transcriptPath: transcriptPath || '',
       modelName: modelName || '',
       turnCount: 0,
@@ -93,6 +98,7 @@ export function registerProjectConversation(
     if (transcriptPath) entry.transcriptPath = transcriptPath;
     if (modelName) entry.modelName = modelName;
     if (lastUserMessageAt > 0) entry.lastUserSpeechAt = lastUserMessageAt;
+    if (lastDesktopMessageAt > 0) entry.lastDesktopSpeechAt = lastDesktopMessageAt;
     if (turnStartedAt > 0) entry.lastTurnStartAt = turnStartedAt;
     if (turnKey) entry.lastInjectedTurnKey = turnKey;
     if (typeof lastRawUserInput === 'string') entry.lastRawUserInput = lastRawUserInput;
@@ -100,6 +106,7 @@ export function registerProjectConversation(
     if (typeof injectedPersonaHash === 'string') entry.injectedPersonaHash = injectedPersonaHash;
     if (typeof hasInjectedStaticRules === 'boolean') entry.hasInjectedStaticRules = hasInjectedStaticRules;
     if (typeof hasInjectedStartupContext === 'boolean') entry.hasInjectedStartupContext = hasInjectedStartupContext;
+    if (typeof injectedRulesHash === 'string') entry.injectedRulesHash = injectedRulesHash;
   }
   data.activeConversationId = String(conversationId);
   writeJsonAtomic(sessionsFile(root), data);
@@ -117,13 +124,14 @@ export function isVerifiedProjectConversation(conversationId, root = getProjectR
 }
 
 /**
- * Classifies turn origin (`speak-up` | `xingxi-pickup` | `nest-event` | `work` | `user`).
+ * Classifies turn origin (`speak-up` | `xingxi-pickup` | `nest-event` | `telegram` | `work` | `user`).
  */
 export function classifyInputSource(userInput = '') {
   const s = String(userInput || '');
   if (s.includes(SPEAK_UP_MARKER) || s.includes('<speak-up>')) return 'speak-up';
   if (s.includes(XINGXI_PICKUP_MARKER)) return 'xingxi-pickup';
   if (s.includes(CAT_NEST_EVENT_MARKER)) return 'nest-event';
+  if (s.includes(TELEGRAM_INCOMING_MARKER)) return 'telegram';
   if (/^\[(WORK_SCAN|CRON|AUTOMATION|YOUTUBE_PATROL)\]/i.test(s.trim())) return 'work';
   return 'user';
 }
@@ -140,6 +148,7 @@ export function getFullStateSnapshot({ root = getProjectRoot(), sessionId = '', 
   const memory = getMemorySnapshot(root, now);
   const xingxi = getXingxiSnapshot(root);
   const speakUp = getSpeakUpSnapshot(root, activeSession?.lastUserSpeechAt || 0, new Date(now));
+  const telegram = getTelegramSnapshot(root, now);
 
   return {
     projectRoot: root,
@@ -156,6 +165,7 @@ export function getFullStateSnapshot({ root = getProjectRoot(), sessionId = '', 
     memory,
     xingxi,
     speakUp,
+    telegram,
     updatedAt: now,
   };
 }

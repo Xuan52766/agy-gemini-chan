@@ -12,10 +12,17 @@
 
 import { createHash } from 'node:crypto';
 import { classifyInputSource, loadRegisteredSessions, registerProjectConversation } from '../core/bridge.mjs';
-import { buildInChatMemoryRule, recallMemories } from '../core/memory.mjs';
+import { buildInChatMemoryRule, loadMemoryStore, recallMemories } from '../core/memory.mjs';
 import { buildInChatMoodRule, buildSessionMoodGuide, consumeMoodInjection, getMoodSnapshot, loadMoodConfig } from '../core/mood.mjs';
-import { consumePendingNestContext, getNestSnapshot, loadNestState, setNestActivity, wakeFromSleep } from '../core/nest.mjs';
+import { getNestSnapshot, consumePendingNestContext, loadNestState, setNestActivity, wakeFromSleep } from '../core/nest.mjs';
 import { resolvePersona } from '../core/persona.mjs';
+import {
+  buildInChatSpeakUpRule,
+  buildProactivePlanCue,
+  loadSpeakUpConfig,
+  noteUserSpokeForSpeakUp,
+} from '../core/speak-up.mjs';
+import { extractTelegramCleanUserText } from '../core/telegram.mjs';
 import {
   appendLogLine,
   canonicalSessionKey,
@@ -38,6 +45,32 @@ const LOG = `${getDataPaths(ROOT).runtimeDir}/hooks.log`;
 function computePersonaHash(persona) {
   return createHash('sha1')
     .update(`${persona?.source || 'none'}:${persona?.persona?.id || ''}:${persona?.effectiveText || ''}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function computeRulesHash(moodCfg, memPolicy, spCfg) {
+  return createHash('sha1')
+    .update(JSON.stringify([
+      'rules-v4',
+      Boolean(moodCfg?.enabled),
+      moodCfg?.judgeMode || 'hybrid',
+      Boolean(moodCfg?.innerThoughtEnabled),
+      moodCfg?.ownerName || '',
+      moodCfg?.selfName || '',
+      moodCfg?.selfPronoun || '',
+      moodCfg?.inChatRulePrompt || '',
+      Boolean(memPolicy?.enabled),
+      memPolicy?.ownerPronoun || '',
+      memPolicy?.selfPronoun || '',
+      memPolicy?.inChatRulePrompt || '',
+      Boolean(spCfg?.enabled),
+      Boolean(spCfg?.aiPlanEnabled),
+      spCfg?.scheduleTendency || 'high',
+      Boolean(spCfg?.proactiveCueEnabled),
+      spCfg?.respectActiveChatGapMin ?? 8,
+      spCfg?.inChatRulePrompt || '',
+    ]))
     .digest('hex')
     .slice(0, 16);
 }
@@ -76,6 +109,10 @@ function main() {
 
   const persona = resolvePersona({ root: ROOT, sessionId: sid });
   const personaHash = computePersonaHash(persona);
+  const moodCfgNow = loadMoodConfig(ROOT);
+  const memPolicyNow = loadMemoryStore(ROOT).policy;
+  const spCfgNow = loadSpeakUpConfig(ROOT);
+  const rulesHash = computeRulesHash(moodCfgNow, memPolicyNow, spCfgNow);
   const canInjectTurn = !isMidTurnContinuation && sourceKind !== 'xingxi-pickup';
   const needsStartupInject = canInjectTurn && !prevSess?.hasInjectedStartupContext;
   const needsPersonaInject = Boolean(
@@ -83,11 +120,15 @@ function main() {
     canInjectTurn &&
     (needsStartupInject || prevSess?.injectedPersonaHash !== personaHash),
   );
-  const needsStaticRules = canInjectTurn && (!prevSess?.hasInjectedStaticRules || needsPersonaInject || needsStartupInject);
+  const rulesChanged = Boolean(prevSess?.hasInjectedStaticRules && prevSess?.injectedRulesHash !== rulesHash);
+  const needsStaticRules = canInjectTurn && (!prevSess?.hasInjectedStaticRules || needsPersonaInject || needsStartupInject || rulesChanged);
 
   if (needsStartupInject) {
     ensureXingxiArchive(ROOT);
   }
+
+  const isUserTurn = sourceKind === 'user' || sourceKind === 'telegram';
+  const cleanHumanInput = sourceKind === 'telegram' ? extractTelegramCleanUserText(effectiveInput) : effectiveInput;
 
   registerProjectConversation(
     {
@@ -97,7 +138,8 @@ function main() {
       transcriptPath: payload.transcriptPath,
       modelName: payload.modelName,
       sourceKind,
-      lastUserMessageAt: sourceKind === 'user' && !isMidTurnContinuation ? Date.now() : 0,
+      lastUserMessageAt: isUserTurn && !isMidTurnContinuation ? Date.now() : 0,
+      lastDesktopMessageAt: sourceKind === 'user' && !isMidTurnContinuation ? Date.now() : 0,
       turnStartedAt: !isMidTurnContinuation ? Date.now() : 0,
       turnKey: !isMidTurnContinuation ? turnKey : undefined,
       lastRawUserInput: !isMidTurnContinuation && sourceKind === 'user' ? cleanPayloadInput : undefined,
@@ -107,14 +149,19 @@ function main() {
       injectedPersonaHash: canInjectTurn ? personaHash : undefined,
       hasInjectedStaticRules: canInjectTurn ? true : undefined,
       hasInjectedStartupContext: canInjectTurn ? true : undefined,
+      injectedRulesHash: canInjectTurn ? rulesHash : undefined,
     },
     ROOT,
   );
 
+  if (!isMidTurnContinuation && isUserTurn) {
+    noteUserSpokeForSpeakUp(ROOT, Date.now());
+  }
+
   const KEEP_SLEEPING_RE = /^(?:(?:晚安|安安|好夢|你?快睡吧?|先?去睡吧?|繼續睡吧?|回去睡吧?|好好休息吧?|好好睡吧?|乖乖睡吧?|睡吧|睡覺吧?|不要醒|別醒|別起床|不用起來|再睡一下|晚安喵)[，,、！!~～.。…\s]*)+$/i;
   let nestState = loadNestState(ROOT);
   let wokeByChat = false;
-  if (!isMidTurnContinuation && sourceKind === 'user' && nestState.sleeping && !KEEP_SLEEPING_RE.test(effectiveInput.trim())) {
+  if (!isMidTurnContinuation && isUserTurn && nestState.sleeping && !KEEP_SLEEPING_RE.test(cleanHumanInput.trim())) {
     const woke = wakeFromSleep(ROOT, {
       reason: 'user-chat',
       label: '聽到你的聲音揉揉眼醒來，正準備回你話…',
@@ -124,7 +171,7 @@ function main() {
     nestState = woke.state;
   }
 
-  const shortPreview = effectiveInput.replace(/\s+/g, ' ').slice(0, 18);
+  const shortPreview = cleanHumanInput.replace(/\s+/g, ' ').slice(0, 18);
   if (nestState.sleeping) {
     setNestActivity(
       {
@@ -149,9 +196,11 @@ function main() {
               ? '正在悄悄整理今天的美好與星汐記憶卡…'
               : sourceKind === 'nest-event'
                 ? '感受到貓窩裡的互動，正開心地想回應你…'
-                : shortPreview
-                  ? `在想「${shortPreview}${effectiveInput.length > 18 ? '…' : ''}」`
-                  : '在思考要怎麼回覆你…',
+                : sourceKind === 'telegram'
+                  ? (shortPreview ? `收到 Telegram：「${shortPreview}${cleanHumanInput.length > 18 ? '…' : ''}」` : '收到你在 Telegram 傳來的訊息…')
+                  : shortPreview
+                    ? `在想「${shortPreview}${cleanHumanInput.length > 18 ? '…' : ''}」`
+                    : '在思考要怎麼回覆你…',
       },
       ROOT,
     );
@@ -178,11 +227,11 @@ function main() {
   }
 
   // 3. Fish Memory recall (only on genuine human dialogue or nest event, never on speak-up / work / xingxi-pickup)
-  if (effectiveInput && (sourceKind === 'user' || sourceKind === 'nest-event')) {
-    const recalled = recallMemories(effectiveInput, {
+  if (cleanHumanInput && (isUserTurn || sourceKind === 'nest-event')) {
+    const recalled = recallMemories(cleanHumanInput, {
       root: ROOT,
-      recordSample: sourceKind === 'user',
-      saveTrace: sourceKind === 'user',
+      recordSample: isUserTurn,
+      saveTrace: isUserTurn,
     });
     if (recalled.rendered) sections.push(recalled.rendered);
   }
@@ -199,7 +248,7 @@ function main() {
     sections.push(nestCtx.text);
   }
 
-  // 6. Startup mood tone guide + static in-conversation rules (injected once on Turn 1, or re-injected on persona swap)
+  // 6. Startup mood tone guide + static in-conversation rules (injected once on Turn 1, or refreshed on persona / prompt / toggle change)
   if (needsStartupInject) {
     const moodSnap = getMoodSnapshot({ root: ROOT });
     const moodGuide = buildSessionMoodGuide(ROOT);
@@ -209,6 +258,8 @@ function main() {
       selfName: moodSnap.config?.selfName,
     });
     if (memRule) sections.push(memRule);
+    const spRule = buildInChatSpeakUpRule(ROOT);
+    if (spRule) sections.push(spRule);
     const nest = getNestSnapshot(ROOT, moodSnap.mood);
     sections.push(
       `【貓窩即時狀態】羈絆 Lv.${nest.bondLevel}（${nest.bond}）｜今日陪伴 ${nest.todayCareCount || 0} 次${nest.sleeping ? '｜打盹中' : ''}${nest.pendingCount ? `｜待帶入互動 ${nest.pendingCount} 項` : ''}`,
@@ -222,6 +273,14 @@ function main() {
       selfName: moodCfg.selfName,
     });
     if (memRule) sections.push(memRule);
+    const spRule = buildInChatSpeakUpRule(ROOT);
+    if (spRule) sections.push(spRule);
+  }
+
+  // 7. Situational autonomous-scheduling / self-restraint cue on transitional user turns
+  if (canInjectTurn && isUserTurn && !needsStartupInject && !needsStaticRules) {
+    const proactiveCue = buildProactivePlanCue(ROOT, cleanHumanInput, Date.now());
+    if (proactiveCue) sections.push(proactiveCue);
   }
 
   if (!sections.length) {
@@ -231,7 +290,7 @@ function main() {
 
   appendLogLine(
     LOG,
-    `PreInvocation ok: sid=${sid} src=${sourceKind} startup=${needsStartupInject ? 1 : 0} persona=${needsPersonaInject ? 1 : 0} sections=${sections.length}`,
+    `PreInvocation ok: sid=${sid} src=${sourceKind} startup=${needsStartupInject ? 1 : 0} persona=${needsPersonaInject ? 1 : 0} rules=${needsStaticRules ? 1 : 0} sections=${sections.length}`,
   );
   writeHookOutput(injectSystemContext(sections.join('\n\n')));
 }

@@ -2,6 +2,87 @@
 
 本專案採用語意化版本控制（[Semantic Versioning](https://semver.org/)），版本號同步維護於 [package.json](./package.json)、[.agents/plugins/gemini-cat/plugin.json](./.agents/plugins/gemini-cat/plugin.json) 與 [mcp/server.mjs](./mcp/server.mjs)。
 
+## [1.4.3] - 2026-11-21
+
+### 修正（Fixed）
+- **多資料夾工作區隔離強化（`core/storage.mjs`、`.agents/plugins/gemini-cat/rules/AGENTS.md`）**：
+  - `isProjectWorkspaceActive` 改為嚴格檢查非空 `workspaceList` 的**第 1 個（主要）工作區**是否屬於 `gemini_cat`（僅在 `workspaceList` 為空時才退回檢查 `cwd`）。
+  - 當其他專案為主工作區、`gemini_cat` 僅作為第 2 個參考資料夾掛載時（例如 `[dsh_plugin/, gemini_cat/]`），所有 Hooks 保持完全靜默不載入貓貓人設或寫入紀錄，側邊欄亦正確標示外部工作區待機；同步補上 `AGENTS.md` 多資料夾防誤觸規則，防止未經 Hook 注入時誤觸 MCP 工具。
+
+## [1.4.2] - 2026-11-21
+
+### 新增功能（Added）
+- **鏡像電腦端提問＋單一帳號綁定鎖定（`core/telegram.mjs`、`hooks/stop.mjs`、`sidecar/`）**：
+  - **電腦端完整問答同步（`forwardDesktopUserMessages`）**：開啟電腦視窗聊天鏡像時，於 `Stop` hook 依嚴格先後順序把你在 `Antigravity` 送出的提問（`💬 你（電腦端）：...`）與貓貓回覆一併送到 `Telegram` 與側邊欄「TG 來回對話視窗」（遵守 `skip`/`silent` 靜音設定，可獨立開關控制是否附上提問）。
+  - **單一帳號綁定鎖（`lockSingleChat` / 預設開啟）**：完成首次綁定後，自動阻擋任何第二支 `Telegram` 帳號透過 `/bind` 產生或追加綁定，除非在側邊欄手動清空原 `Chat ID` 或關閉鎖定。
+
+## [1.4.1] - 2026-11-21
+
+### 新增與改進（Added & Changed）
+- **電腦端活躍自動靜音 Telegram（`core/telegram.mjs`、`core/bridge.mjs`、`hooks/pre-invocation.mjs`、`hooks/stop.mjs`、`sidecar/`）**：
+  - 在 `Antigravity` 桌面視窗正在對話時，自動於可設定分鐘數內（預設 `15` 分鐘）抑制非 `Telegram` 觸發的推播（包含桌面鏡像、貓貓主動搭話／定時提醒與拾星摘要）。
+  - 支援兩種靜音方式：`不發送（skip）` 完全略過，或 `無聲送達（silent / disable_notification: true）` 低調送達手機不響鈴震動；若主人在窗期內改從 `Telegram` 發言（`lastReceivedAt > lastDesktopSpeechAt`），立刻自動解除靜音，直接從 `Telegram` 發問的回覆亦永遠正常傳回。
+- **Telegram 對話同步視窗與舊紀錄回補（`core/telegram.mjs`、`sidecar/`）**：
+  - 修正真實 `Antigravity` `transcript` 中 `<SYSTEM_MESSAGE>` 尾標截斷與來訊提示詞字眼；於狀態與快照維護最近 `40` 筆雙向來回紀錄（`chatHistory`）。
+  - 於側邊欄「TG」分頁新增「Telegram 來回對話視窗」與一鍵「從目前對話紀錄補抓舊 Telegram 訊息」按鈕（`POST /api/telegram/sync-history` / `syncTelegramHistoryFromTranscript`），讓離線或錯過的手機 ↔ 電腦對話可在側邊欄集中檢視。
+- **介面文案釐清（`sidecar/index.html`）**：
+  - 統一區分「`Telegram 端`／`Antigravity 視窗`／`本機`」，並明確拆清「接收訊息進對話」與「下載附件存檔」的開關責任。
+
+## [1.4.0] - 2026-11-21
+
+### 新增功能（Added）
+- **Telegram 雙向橋接與安全檔案傳輸（`core/telegram.mjs`、`sidecar/`、`hooks/`、`mcp/server.mjs`）**：
+  - **免公網、免額外外部 API 金鑰的雙向轉發**：利用 Node 20+ 原生 `fetch`／`FormData`／`Blob` 以 Long Polling（`getUpdates`）連接 Telegram Bot，並透過 `sidecar_sdk` `sendMessage` 與 `Stop` Hook `outbox` 佇列將手機 Telegram 輸入與貓貓在 Antigravity 內的回覆雙向串接（不卡 15 秒 Hook 逾時）。
+  - **完整雙向圖片與檔案傳輸**：
+    - 傳入（Telegram → 電腦）：支援單張或多圖合輯（`media_group_id`）、文件、音訊、語音與影片自動下載至隔離收件匣 `data/telegram/inbox/YYYY-MM-DD/`，連同文字透過 `[TELEGRAM_INCOMING]` 推進對話，並同步觸發記憶召回、未回計數歸零與睡眠喚醒。
+    - 傳出（電腦 → Telegram）：新增 MCP 工具 `telegram_send`（可主動傳送圖片或檔案），且在回覆包含安全的 `file://` 本機圖片／檔案連結時可自動偵測一併轉傳（`autoSendReplyFiles`），自動避開重發剛上傳的 `inbox` 原檔或同輪 MCP 已傳檔案。
+  - **安全防護、白名單配對與側邊欄控制頁（「TG」分頁）**：
+    - 支援一鍵產生 10 分鐘臨時 6 碼配對指令（`/bind <CODE>`）自動綁定白名單 `allowedChatId`；Bot Token 僅儲存在不進 Git 的 `data/telegram/config.json`，快照與介面全面遮罩不回傳明文。
+    - 嚴格限制可外傳路徑僅限 `gemini_cat` 專案、Antigravity 生成媒體暫存與明確自訂資料夾（永久封鎖設定檔、執行期工作階段、`.env`、`.git` 與內部紀錄檔）。
+    - 新增「TG」側邊欄分頁與可獨立調整開關：總開關、接收轉入、回覆轉回、桌面視窗回覆鏡像、主動搭話推播、每日拾星通知、自動下載與自動回傳附檔。
+
+## [1.3.3] - 2026-11-21
+
+### 新增功能與微調（Added & Changed）
+- **智能不打擾煞車機制與高積極度自主排程（`core/speak-up.mjs`、`hooks/pre-invocation.mjs`、`mcp/server.mjs`、`sidecar/`）**：
+  - **`speak_up_plan` 新增自主勿擾控制（`silence` / `clear_silence` / `silenceUntilTrigger`）**：貓貓在睡前排叫醒提醒、察覺主人正在忙碌或連續未回時，可直接靜悄悄設定勿擾到點，不再發送「我不吵你了」的矛盾提示訊息；明確 `reminder` 到點仍準時觸發。
+  - **擲骰遵守活躍聊天防打擾（`diceBlockActiveChat`）**：防止累積 `missBonus` 在剛聊完幾分鐘內（`< respectActiveChatGapMin`）繞過降權插話。
+  - **待辦／叫醒提醒前自動壓制擲骰（`suppressDiceBeforeReminder`、`suppressBeforeReminderMin`）**：睡前約好早上叫醒、或即將到明確提醒前（預設 `120` 分鐘內），自動壓制中間的隨機擲骰。
+  - **已讀未回連發上限與退避冷卻（`maxUnansweredSpontaneous` / 預設 `2`）**：連發未獲回覆時自動拉長冷卻並於達上限後暫停隨機／自主冒泡，直到主人重新開口發言（`PreInvocation` 自動重設，側邊欄亦提供「重設未回」按鈕）。
+  - **拉高貓貓自主排程積極度（`scheduleTendency`: `high`/`normal`/`low` + `proactiveCueEnabled`）**：預設 `high` 主動傾向搭配轉折語意（去睡／忙別的事／出門／晚點聊等）即時 1 行情境提醒，引導長對話裡也積極運用 `speak_up_plan`（`autonomous` + `silence`）。
+- **說話去 AI 套路與真人口吻優化（`core/speak-up.mjs`、`core/nest.mjs`、`sidecar/routes.mjs`、`.agents/plugins/gemini-cat/rules/AGENTS.md`）**：
+  - 調整主動搭話背景時間線與預設念頭，解除強制報時與二選一猜測起手式；減少貓窩互動的重複感謝收據口吻。
+  - 調整 `saveSpeakUpConfig` 保留未自訂預設範本的動態追蹤（`""`），避免儲存其他設定時鎖死舊版預設提示詞。
+
+## [1.3.2] - 2026-11-21
+
+### 新增功能與微調（Added & Changed）
+- **心情每日變化上限、提醒不限次數與靈敏度除數全面可調**（`core/mood.mjs`、`mcp/server.mjs`、`sidecar/`）：
+  - **每日心情變化次數上限（`changesPerDay` / `#cfg-mood-changesPerDay`）**：預設 `0`（不限次數），可自由設定 `1–500` 限制每天最多幾次數值變動；達上限後仍可記錄第一人稱 `innerThought`（且不阻擋手動 `+3/-3` 微調）。
+  - **每日主動提醒注入上限與無上限開關（`injectPerDay`、`injectUnlimited` / `#cfg-mood-injectUnlimited`）**：提醒上限自原本 `0–50` 擴寬至 `0–500`，並新增「每日主動提醒不限次數」開關。
+  - **變動靈敏度除數（`stepDivisor` / `#cfg-mood-stepDivisor`，1–5，預設 `3`）**：解決原本寫死 `/ 3` 導致對話內給 `moodDelta: ±1` 時被四捨五入吃成 `0`、看起來像心情分數卡住的問題；調成 `1` 即可 `1:1` 立即反映每點情緒起伏。
+
+## [1.3.1] - 2026-11-20
+
+### 問題修正（Fixed）
+- **修正舊有對話未自動刷新 `v1.3.0` 新版規則導致仍呼叫系統 `schedule` 與忽略 `innerThought` 的問題**（`hooks/pre-invocation.mjs`、`core/speak-up.mjs`、`core/mood.mjs`）：
+  - 修正 `PreInvocation` 在遇到升級前已存在、`hasInjectedStaticRules: true` 但尚無 `injectedRulesHash` 的舊對話時，`rulesChanged` 誤判為 `false` 而跳過注入新規則、卻直接覆寫 `injectedRulesHash` 的漏洞；同時更新雜湊基準（`rules-v2`）讓已開啟的既有對話也能在下一輪自動補齊最新指引。
+  - 在 `buildDefaultSpeakUpRulePrompt` 與 `buildDefaultMoodRulePrompt` 明確加入 Lazy MCP（`call_mcp_tool` → `gemini-cat_companion`）參數範例，並明確禁止以系統內建 `schedule` 計時器取代 `speak_up_plan`。
+
+## [1.3.0] - 2026-11-20
+
+### 新增功能（Added）
+- **第一人稱心情「內心小劇場 (`innerThought`)」與專屬呈現卡片**（`core/mood.mjs`、`mcp/server.mjs`、`sidecar/`）：
+  - `mood_update` 新增可選欄位 `innerThought`，讓貓貓依人設口氣在對話內順手記下第一人稱真實心聲（支援即使數值不變動 `moodDelta=0` 時也能純寫心聲；且本地正則兜底與自然衰減絕不偽造第一人稱獨白）。
+  - 側邊欄「心情」分頁上方新增 **「貓貓此刻心裡在想…」** 專屬引述卡，情緒時間線同步呈現每刻心聲，同時維持對話泡泡本身零旁白的一對一聊天體驗。
+- **自然語言主動搭話排程 (`speak_up_plan`)、多時間佇列與固定波動節律**（`core/speak-up.mjs`、`mcp/server.mjs`、`sidecar/`）：
+  - 新增第 12 個 MCP 工具 **`speak_up_plan`**（替代易因重啟消失的系統通用計時器），支援在對話中依自然語言安排 **單次預約（`schedule`）**、**一串批次時間點（`schedule_batch`）**、**固定每日／週幾基準時間 ± 隨機波動半徑（`add_routine` / `update_routine`，如 `12:30 ±20 分` 自動在 `12:10–12:50` 間抽點）**，以及以口語調整開關與安靜時段（`set_config`）。
+  - 明確提醒（`reminder`）與自主關心（`autonomous` / `routine`）自動分流：自主關心遇剛聊完沒多久（`respectActiveChatGapMin`）會智慧順延避免唐突；明確提醒時間到準點觸發。
+  - Sidecar 60 秒輪詢升級為 `executeSpeakUpTick`，優先精準執行到期預約／波動節律。
+- **全模組自由開關與提示詞可編輯微調**（`core/storage.mjs`、`core/mood.mjs`、`core/memory.mjs`、`core/speak-up.mjs`、`hooks/pre-invocation.mjs`、`sidecar/`）：
+  - 新增獨立開關：`cfg-mood-innerThoughtEnabled`（內心獨白開關）、`sp-aiPlanEnabled`（AI 自主預約／波動節律開關）、`sp-diceEnabled`（傳統峰谷隨機擲骰補位開關），搭話支援「雙開混合 / 純 AI 排程 / 純擲骰 / 全關」四種模式自由即時切換。
+  - 心情、記憶、搭話（排程規則、預設念頭、醒來接續提示詞）共 **5 組對話內提示詞** 全面開放於側邊欄直接編輯、即時追蹤預設範本並附一鍵「恢復預設」；`PreInvocation` 透過 `injectedRulesHash` 自動偵測提示詞或開關變動，僅在修改後的下一輪單次重新注入，平時維持 0 膨脹。
+
 ## [1.2.1] - 2026-11-18
 
 ### 問題修正（Fixed）
@@ -23,7 +104,7 @@
   - 保留全部 5 個照護按鈕（摸頭、餵小魚乾、逗貓棒、貼貼、打盹／叫醒）與傳小紙條，移除「吃太飽拒食」與「精力過低拒玩」限制，並將冷卻時間調降至 `5–12` 秒、每日互動額度調升至 `10–15` 次。
   - 新增 **「每日多元陪伴加成」**：單日內達成 **3 種不同照護動作** 時，自動額外獎勵 **羈絆 `+5`**。
 - **同步 `dsh-fish-memory` v1.6.2–v1.6.3 檢索與防重複機制**（`core/tokenizer.mjs`、`core/memory.mjs`、`sidecar/`）：
-  - **專有名詞滑動切詞（`補專名`）**：對連續 2～4 個詞典外單字（如「糯鯨」「奈奈」）自動建立多字詞 token，避免單字過濾時漏掉專有名詞。
+  - **專有名詞滑動切詞（`補專名`）**：對連續 2～4 個詞典外單字（如「星礫」「雲喵」）自動建立多字詞 token，避免單字過濾時漏掉專有名詞。
   - **同條記憶防重複注入窗（`repeatWindow`，預設 `15` 輪）**：剛注入過的記憶在接下來 15 輪使用者對話內不再重複塞入，節省上下文名額與 Token。
   - **常駐檔案單輪上限（`factCap`，預設 `1` 條）與原句嚴格門檻**：`stable_profile` 條目需命中 $\ge 2$ 個實詞（含至少 1 個罕見詞）或單一專有名詞才放行。
   - **同分排序優化（`比召回`）**：當關聯度 `C` 同分（精確至小數第 3 位）時，優先排命中詞數 `hitN` 與命中總字長 `hitLen`。

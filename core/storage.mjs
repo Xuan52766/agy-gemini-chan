@@ -44,6 +44,7 @@ export function getDataPaths(root = getProjectRoot()) {
     xingxiDir: join(dataDir, 'xingxi'),
     speakUpDir: join(dataDir, 'speak-up'),
     nestDir: join(dataDir, 'nest'),
+    telegramDir: join(dataDir, 'telegram'),
     runtimeDir: join(dataDir, 'runtime'),
     assetsDir: join(DEFAULT_ROOT, 'assets', 'geminichan'),
   };
@@ -89,15 +90,21 @@ export function isWithinProject(candidate, expectedRoot = DEFAULT_ROOT) {
 }
 
 /**
- * Checks an array of workspace paths / URIs + optional cwd to ensure at least one
- * authorized path belongs to this `gemini_cat` workspace.
+ * Checks an array of workspace paths / URIs + optional cwd to ensure the primary
+ * (first) workspace path belongs to this `gemini_cat` workspace. Secondary mounted
+ * reference folders (e.g. `[other_project, gemini_cat]`) intentionally stay silent
+ * so companion persona, hooks, and memory never leak into other projects' windows.
+ * Only falls back to `cwd` when `workspaceList` has no non-empty entries.
  */
 export function isProjectWorkspaceActive(workspaceList, cwd, expectedRoot = DEFAULT_ROOT) {
-  const candidates = [];
-  if (Array.isArray(workspaceList)) candidates.push(...workspaceList);
-  else if (typeof workspaceList === 'string' && workspaceList) candidates.push(workspaceList);
-  if (cwd) candidates.push(cwd);
-  return candidates.some((item) => isWithinProject(item, expectedRoot));
+  const normalizedList = Array.isArray(workspaceList)
+    ? workspaceList.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
+    : (typeof workspaceList === 'string' && workspaceList.trim() ? [workspaceList.trim()] : []);
+
+  if (normalizedList.length > 0) {
+    return isWithinProject(normalizedList[0], expectedRoot);
+  }
+  return Boolean(cwd) && isWithinProject(cwd, expectedRoot);
 }
 
 /**
@@ -182,6 +189,26 @@ export function clampNum(val, min, max, fallback = min) {
   const n = Number(val);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * Replaces `{{key}}` placeholders inside editable user prompt templates.
+ */
+export function renderPromptTemplate(template, vars = {}) {
+  return String(template ?? '').replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (full, key) => (
+    Object.hasOwn(vars, key) ? String(vars[key] ?? '') : full
+  ));
+}
+
+/**
+ * Normalizes a customizable prompt field: blank or identical to default collapses to `''`
+ * so unmodified prompts continue tracking future built-in refinements automatically.
+ */
+export function normalizeCustomPrompt(value, defaultRendered = '', maxLen = 4000) {
+  const clean = String(value ?? '').replace(/\r\n/g, '\n').trim().slice(0, maxLen);
+  const def = String(defaultRendered ?? '').replace(/\r\n/g, '\n').trim();
+  if (!clean || (def && clean === def)) return '';
+  return clean;
 }
 
 /**

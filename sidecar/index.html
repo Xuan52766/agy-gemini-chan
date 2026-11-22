@@ -146,6 +146,7 @@
       <button type="button" role="tab" id="tabbtn-xingxi" class="tab-btn" data-tab="xingxi" aria-selected="false" tabindex="-1">星汐</button>
       <button type="button" role="tab" id="tabbtn-speakup" class="tab-btn" data-tab="speakup" aria-selected="false" tabindex="-1">搭話</button>
       <button type="button" role="tab" id="tabbtn-persona" class="tab-btn" data-tab="persona" aria-selected="false" tabindex="-1">人設</button>
+      <button type="button" role="tab" id="tabbtn-telegram" class="tab-btn" data-tab="telegram" aria-selected="false" tabindex="-1" title="Telegram 雙向連接與傳檔">TG</button>
     </nav>
 
     <main class="panels-wrap">
@@ -160,6 +161,14 @@
         </div>
 
         <div id="mood-dims-grid" class="dims-grid" aria-label="8維情緒數值"></div>
+
+        <div class="surface-block" id="mood-inner-thought-card">
+          <div class="block-head">
+            <h3>貓貓此刻心裡在想…</h3>
+            <span id="mood-thought-meta" class="chip">等待寫下</span>
+          </div>
+          <blockquote id="mood-inner-thought" class="thought-quote">這輪還沒寫下第一人稱內心獨白；當她有真實情緒觸動或感觸時，會把想說卻沒直接唸出來的想法寫在這裡。</blockquote>
+        </div>
 
         <div class="surface-block">
           <div class="block-head">
@@ -198,6 +207,10 @@
               <label class="check-row" for="cfg-mood-autoJudge">
                 <input type="checkbox" id="cfg-mood-autoJudge" />
                 <span>每輪自動判斷心情（關閉後不再更新或扣點）</span>
+              </label>
+              <label class="check-row" for="cfg-mood-innerThoughtEnabled">
+                <input type="checkbox" id="cfg-mood-innerThoughtEnabled" />
+                <span>啟用貓貓第一人稱內心獨白（僅顯示於貓窩心情頁，不印進聊天回覆）</span>
               </label>
               <div class="field-grid-2">
                 <div class="field">
@@ -246,7 +259,7 @@
             </div>
 
             <div class="sub-group">
-              <h4>心情曲線與顯著門檻</h4>
+              <h4>心情曲線、靈敏度與每日次數上限</h4>
               <div class="field-grid-2">
                 <div class="field">
                   <label for="cfg-mood-base">基線心情 (30–100)</label>
@@ -261,6 +274,10 @@
                   <input id="cfg-mood-halfHours" type="number" min="1" max="168" />
                 </div>
                 <div class="field">
+                  <label for="cfg-mood-stepDivisor">變動靈敏度除數 (1=全幅 / 3=溫和)</label>
+                  <input id="cfg-mood-stepDivisor" type="number" min="1" max="5" />
+                </div>
+                <div class="field">
                   <label for="cfg-mood-conf">注入可信度門檻 (0–100)</label>
                   <input id="cfg-mood-conf" type="number" min="0" max="100" />
                 </div>
@@ -273,9 +290,29 @@
                   <input id="cfg-mood-sigDim" type="number" min="1" max="100" />
                 </div>
                 <div class="field">
-                  <label for="cfg-mood-perDay">每日最多主動提醒次數</label>
-                  <input id="cfg-mood-perDay" type="number" min="0" max="50" />
+                  <label for="cfg-mood-changesPerDay">每日心情變化上限 (0=不限)</label>
+                  <input id="cfg-mood-changesPerDay" type="number" min="0" max="500" />
                 </div>
+                <div class="field">
+                  <label for="cfg-mood-perDay">每日主動提醒注入上限 (0=停用)</label>
+                  <input id="cfg-mood-perDay" type="number" min="0" max="500" />
+                </div>
+              </div>
+              <label class="check-row compact-top" for="cfg-mood-injectUnlimited">
+                <input type="checkbox" id="cfg-mood-injectUnlimited" />
+                <span>每日主動提醒不限次數（勾選後忽略上方提醒上限）</span>
+              </label>
+            </div>
+
+            <div class="sub-group">
+              <div class="block-head">
+                <h4>對話內心情與內心想法提示詞（可自訂微調）</h4>
+                <button id="btn-mood-reset-prompt" type="button" class="btn-mini">恢復預設</button>
+              </div>
+              <div class="field">
+                <label for="cfg-mood-rulePrompt" class="sr-only">對話內心情判斷提示詞</label>
+                <textarea id="cfg-mood-rulePrompt" rows="4"></textarea>
+                <p class="prompt-hint">可用變數：<code>{{ownerName}}</code>、<code>{{selfName}}</code>、<code>{{selfPronoun}}</code>（清空後儲存也會恢復預設）</p>
               </div>
             </div>
 
@@ -472,6 +509,18 @@
               </div>
             </div>
 
+            <div class="sub-group">
+              <div class="block-head">
+                <h4>對話內長期記憶提醒提示詞（可自訂微調）</h4>
+                <button id="btn-mem-reset-prompt" type="button" class="btn-mini">恢復預設</button>
+              </div>
+              <div class="field">
+                <label for="pol-rulePrompt" class="sr-only">對話內記憶提醒提示詞</label>
+                <textarea id="pol-rulePrompt" rows="4"></textarea>
+                <p class="prompt-hint">可用變數：<code>{{left}}</code>、<code>{{dailyQuota}}</code>、<code>{{ownerName}}</code>、<code>{{ownerPronoun}}</code>、<code>{{selfPronoun}}</code></p>
+              </div>
+            </div>
+
             <div class="action-row-between">
               <button id="btn-pol-reset" type="button" class="btn-secondary">恢復預設參數</button>
               <div class="action-row-end">
@@ -632,43 +681,83 @@
       <section id="tab-speakup" role="tabpanel" aria-labelledby="tabbtn-speakup" class="tab-panel" hidden>
         <div class="sec-head">
           <div>
-            <h2>主動搭話排程與峰谷時段</h2>
-            <p class="sec-sub">定時擲骰決定是否主動冒泡，安全鎖定僅限 <code>gemini_cat</code> 對話。</p>
+            <h2>主動搭話、自主排程與波動節律</h2>
+            <p class="sec-sub">可透過自然語言由貓貓排定一串時間／固定波動節律，也能保留傳統擲骰補位並自由開關。</p>
           </div>
           <span id="sp-line-badge" class="chip tabular">命中線 20%</span>
         </div>
 
         <div id="sp-dirty-bar" class="dirty-bar hidden" role="status">
-          上有尚未儲存的設定修改（勾選目標對話外，其餘數字與時段改完請按「儲存搭話設定」）
+          上有尚未儲存的設定修改（開關／時刻表按鈕即時生效，其餘數字、時段與提示詞改完請按「儲存搭話設定」）
+        </div>
+
+        <div id="sp-silence-bar" class="dirty-bar action-row-between hidden" role="status">
+          <span id="sp-silence-text">自主勿擾中…</span>
+          <button id="btn-sp-clear-silence" type="button" class="btn-mini">解除勿擾</button>
         </div>
 
         <div class="surface-block">
           <p id="sp-preview-text" class="formula-line">計算中…</p>
           <div class="action-row-between compact-top">
             <div class="btn-group-compact">
-              <button id="btn-sp-dry" type="button" class="btn-secondary">演練一次</button>
+              <button id="btn-sp-dry" type="button" class="btn-secondary">演練擲骰一次</button>
               <button id="btn-sp-reset-streak" type="button" class="btn-mini">歸零加成</button>
+              <button id="btn-sp-reset-unanswered" type="button" class="btn-mini" title="清除已讀未回連發計數">重設未回</button>
             </div>
             <button id="btn-sp-send" type="button" class="btn-primary">立刻真實搭話</button>
           </div>
         </div>
 
-        <!-- Master & Routing (DSH followActive + targetConversations) -->
+        <!-- Master, Mode Switches & Routing -->
         <div class="surface-block">
-          <h3>開關與目標對話</h3>
+          <h3>模式開關與目標對話</h3>
           <div class="check-stack">
             <label class="check-row" for="sp-enabled">
               <input type="checkbox" id="sp-enabled" />
-              <span>啟用定時主動搭話排程</span>
+              <span>啟用主動搭話總開關</span>
+            </label>
+            <label class="check-row" for="sp-aiPlanEnabled">
+              <input type="checkbox" id="sp-aiPlanEnabled" />
+              <span>啟用「AI 自主預約 / 自然語言時間 / 固定波動節律」</span>
+            </label>
+            <label class="check-row" for="sp-diceEnabled">
+              <input type="checkbox" id="sp-diceEnabled" />
+              <span>啟用「傳統峰谷公式隨機擲骰」（無預約時補位）</span>
             </label>
             <label class="check-row" for="sp-dryRun">
               <input type="checkbox" id="sp-dryRun" />
-              <span>試運行模式（推薦新手開啟：擲中只記日誌，不實際發送）</span>
+              <span>試運行模式（推薦新手開啟：只記日誌，不實際發送）</span>
             </label>
             <label class="check-row" for="sp-followActive">
               <input type="checkbox" id="sp-followActive" />
               <span>跟隨最近活躍對話（自動挑選當前最新的 <code>gemini_cat</code> 對話）</span>
             </label>
+          </div>
+
+          <div class="sub-divider">
+            <h4>智能不打擾與自主排程傾向</h4>
+            <div class="check-stack">
+              <label class="check-row" for="sp-diceBlockActiveChat">
+                <input type="checkbox" id="sp-diceBlockActiveChat" />
+                <span>擲骰遵守「剛聊完防打擾間隔」（避免累積加成剛聊完幾分鐘又插話）</span>
+              </label>
+              <label class="check-row" for="sp-suppressBeforeReminder">
+                <input type="checkbox" id="sp-suppressBeforeReminder" />
+                <span>有待辦／叫醒提醒前自動壓制擲骰（避免睡前或到點前搶先冒泡）</span>
+              </label>
+              <label class="check-row" for="sp-proactiveCueEnabled">
+                <input type="checkbox" id="sp-proactiveCueEnabled" />
+                <span>聊到睡覺／忙／暫離時，即時提醒貓貓自主安排時間或設勿擾</span>
+              </label>
+            </div>
+            <div class="field compact-top">
+              <label for="sp-scheduleTendency">貓貓自主排程積極度（影響預設對話內提示詞）</label>
+              <select id="sp-scheduleTendency">
+                <option value="high">高（積極自主安排後續／睡前自動勿擾）</option>
+                <option value="normal">一般（有明確節點時適時排程）</option>
+                <option value="low">低（僅在主人開口要求時排提醒或勿擾）</option>
+              </select>
+            </div>
           </div>
 
           <div id="sp-targets-wrap" class="targets-wrap hidden">
@@ -681,9 +770,65 @@
           </div>
         </div>
 
+        <!-- AI Scheduled Plans & Recurring Jitter Routines -->
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>貓貓預約時刻表</h3>
+            <button id="btn-sp-clear-plans" type="button" class="btn-mini">清空預約</button>
+          </div>
+          <div id="sp-plans-list" class="item-list scroll-list"></div>
+
+          <div class="sub-divider">
+            <div class="block-head">
+              <h4>固定節律 ± 隨機波動</h4>
+              <span id="sp-routines-count" class="muted-meta tabular">0 條</span>
+            </div>
+            <div id="sp-routines-list" class="item-list scroll-list"></div>
+          </div>
+
+          <details class="drawer compact-top" id="drawer-sp-add-routine">
+            <summary>手動新增一筆固定波動節律</summary>
+            <div class="drawer-body">
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="sp-new-rt-time">基準時間 (24h)</label>
+                  <input id="sp-new-rt-time" type="time" value="12:30" />
+                </div>
+                <div class="field">
+                  <label for="sp-new-rt-jitter">隨機波動半徑 (±分鐘)</label>
+                  <input id="sp-new-rt-jitter" type="number" min="0" max="240" value="20" />
+                </div>
+              </div>
+              <div class="field">
+                <label>生效星期</label>
+                <div id="sp-new-rt-days" class="day-pills" role="group" aria-label="節律星期">
+                  <label class="day-pill"><input type="checkbox" data-day="1" checked /><span>一</span></label>
+                  <label class="day-pill"><input type="checkbox" data-day="2" checked /><span>二</span></label>
+                  <label class="day-pill"><input type="checkbox" data-day="3" checked /><span>三</span></label>
+                  <label class="day-pill"><input type="checkbox" data-day="4" checked /><span>四</span></label>
+                  <label class="day-pill"><input type="checkbox" data-day="5" checked /><span>五</span></label>
+                  <label class="day-pill"><input type="checkbox" data-day="6" checked /><span>六</span></label>
+                  <label class="day-pill"><input type="checkbox" data-day="0" checked /><span>日</span></label>
+                </div>
+              </div>
+              <div class="field">
+                <label for="sp-new-rt-label">節律名稱</label>
+                <input id="sp-new-rt-label" type="text" maxlength="80" placeholder="例如：午飯後悄悄看看他" />
+              </div>
+              <div class="field">
+                <label for="sp-new-rt-thought">觸發時念頭（選填）</label>
+                <input id="sp-new-rt-thought" type="text" maxlength="200" placeholder="例如：快一點了，來問問主人吃飯沒～" />
+              </div>
+              <div class="action-row-end">
+                <button id="btn-sp-add-routine" type="button" class="btn-secondary">新增固定波動節律</button>
+              </div>
+            </div>
+          </details>
+        </div>
+
         <!-- Peak/Valley & Trigger Config -->
         <div class="surface-block">
-          <h3>自訂峰谷分時與命中線</h3>
+          <h3>傳統擲骰：自訂峰谷分時與命中線</h3>
           <label class="check-row" for="sp-usePeakValley">
             <input type="checkbox" id="sp-usePeakValley" />
             <span>啟用峰谷分時差異命中率（取消勾選則全天統一使用谷時數值）</span>
@@ -721,7 +866,7 @@
         </div>
 
         <details class="drawer" id="drawer-sp-adv">
-          <summary>擲骰間隔、時機因子、安靜時段與內心念頭文案（原 <code>dsh-speak-up</code> 完整參數）</summary>
+          <summary>進階參數與提示詞微調（排程規則 / 預設念頭 / 接續指引）</summary>
           <div class="drawer-body">
             <div class="field-grid-2">
               <div class="field">
@@ -731,6 +876,18 @@
               <div class="field">
                 <label for="sp-cooldown">搭話後冷卻 (分鐘)</label>
                 <input id="sp-cooldown" type="number" min="0" max="1440" />
+              </div>
+              <div class="field">
+                <label for="sp-activeGap">對話進行中防打擾順延 (分)</label>
+                <input id="sp-activeGap" type="number" min="0" max="180" />
+              </div>
+              <div class="field">
+                <label for="sp-maxUnanswered">已讀未回連發暫停上限 (則，0=不限)</label>
+                <input id="sp-maxUnanswered" type="number" min="0" max="20" />
+              </div>
+              <div class="field">
+                <label for="sp-reminderSuppressMin">提醒前靜默擲骰窗口 (分，0=僅睡前)</label>
+                <input id="sp-reminderSuppressMin" type="number" min="0" max="720" />
               </div>
               <div class="field">
                 <label for="sp-bonus">連沒中加成 (%/次)</label>
@@ -765,10 +922,40 @@
                 <input id="sp-farFactor" type="number" step="0.1" min="0" max="100" />
               </div>
             </div>
-            <p id="sp-quiet-warn" class="warn-line hidden">注意：起止小時填成相同數字時，會關閉安靜時段保護，全天皆可能擲骰。</p>
-            <div class="field compact-top">
-              <label for="sp-prompt">觸發時注入給她的內心念頭</label>
-              <textarea id="sp-prompt" rows="2"></textarea>
+            <p id="sp-quiet-warn" class="warn-line hidden">注意：起止小時填成相同數字時，會關閉安靜時段保護，全天皆可能觸發。</p>
+
+            <div class="sub-group compact-top">
+              <div class="block-head">
+                <h4>對話內自主排程規則提示詞</h4>
+                <button id="btn-sp-reset-rule" type="button" class="btn-mini">恢復預設</button>
+              </div>
+              <div class="field">
+                <label for="sp-rulePrompt" class="sr-only">對話內自主排程規則提示詞</label>
+                <textarea id="sp-rulePrompt" rows="5"></textarea>
+                <p class="prompt-hint">指導模型使用 <code>speak_up_plan</code>（可用變數：<code>{{activeGapMin}}</code>）</p>
+              </div>
+            </div>
+
+            <div class="sub-group">
+              <div class="block-head">
+                <h4>預設觸發內心念頭文案</h4>
+                <button id="btn-sp-reset-prompt" type="button" class="btn-mini">恢復預設</button>
+              </div>
+              <div class="field">
+                <label for="sp-prompt" class="sr-only">觸發時注入給她的預設內心念頭</label>
+                <textarea id="sp-prompt" rows="2"></textarea>
+              </div>
+            </div>
+
+            <div class="sub-group">
+              <div class="block-head">
+                <h4>搭話醒來後的接續提醒詞</h4>
+                <button id="btn-sp-reset-followup" type="button" class="btn-mini">恢復預設</button>
+              </div>
+              <div class="field">
+                <label for="sp-followUpPrompt" class="sr-only">搭話醒來後的接續提醒詞</label>
+                <textarea id="sp-followUpPrompt" rows="3"></textarea>
+              </div>
             </div>
           </div>
         </details>
@@ -779,7 +966,7 @@
         </div>
 
         <div class="surface-block">
-          <h3>擲骰與排程紀錄</h3>
+          <h3>排程與擲骰紀錄</h3>
           <div id="sp-logs" class="item-list scroll-list"></div>
         </div>
       </section>
@@ -845,6 +1032,160 @@
             <button id="btn-per-cancel-edit" type="button" class="btn-secondary hidden">取消編輯</button>
             <button id="btn-per-create" type="button" class="btn-primary">新增並套用到本專案</button>
           </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 6: TELEGRAM ==================== -->
+      <section id="tab-telegram" role="tabpanel" aria-labelledby="tabbtn-telegram" class="tab-panel" hidden>
+        <div class="sec-head">
+          <div>
+            <h2>Telegram 雙向橋接與傳檔</h2>
+            <p class="sec-sub">免公網與外部付費金鑰，直接把手機訊息、圖片／檔案與 Gemini-chan 的回覆及主動搭話雙向串接。</p>
+          </div>
+          <span id="tg-status-badge" class="chip">未啟用</span>
+        </div>
+
+        <div id="tg-dirty-bar" class="dirty-bar hidden" role="status">
+          尚有未儲存的 Telegram 設定修改（下方開關即時生效，憑證、白名單與進階欄位改完請按「儲存 Telegram 設定」）
+        </div>
+
+        <div class="surface-block">
+          <h3>Bot 憑證與安全綁定</h3>
+          <div class="field">
+            <label for="tg-botToken">Telegram Bot Token（向 @BotFather 申請；已存則留空不變）</label>
+            <div class="field-row-inline">
+              <input id="tg-botToken" type="password" autocomplete="off" placeholder="例如 123456789:ABCdef..." />
+              <button id="btn-tg-clear-token" type="button" class="btn-mini btn-danger">清除 Token</button>
+            </div>
+            <p id="tg-token-hint" class="prompt-hint">尚未設定 Token</p>
+          </div>
+
+          <div class="field compact-top">
+            <label for="tg-allowedChatId">允許對話的 Telegram Chat ID（白名單，多組以逗號分隔）</label>
+            <div class="field-row-inline">
+              <input id="tg-allowedChatId" type="text" placeholder="點右邊產生配對碼自動綁定，或手動填數字 ID" />
+              <button id="btn-tg-gen-pair" type="button" class="btn-secondary">產生配對碼</button>
+            </div>
+            <label class="check-row compact-top" for="tg-lockSingleChat">
+              <input type="checkbox" id="tg-lockSingleChat" />
+              <span>鎖定單一帳號綁定（完成首次綁定後，禁止陌生人或第二支帳號透過 /bind 加入）</span>
+            </label>
+          </div>
+
+          <div id="tg-pair-box" class="dirty-bar compact-top hidden" role="status"></div>
+
+          <div class="action-row-between compact-top">
+            <div class="btn-group-compact">
+              <button id="btn-tg-test-me" type="button" class="btn-secondary">驗證 Bot 連線</button>
+              <button id="btn-tg-send-test" type="button" class="btn-primary">送出測試訊息</button>
+            </div>
+            <span id="tg-test-msg" class="muted-meta" role="status"></span>
+          </div>
+        </div>
+
+        <div class="surface-block">
+          <h3>雙向轉發與傳檔開關</h3>
+          <div class="check-stack">
+            <label class="check-row" for="tg-enabled">
+              <input type="checkbox" id="tg-enabled" />
+              <span>啟用 Telegram 雙向橋接總開關</span>
+            </label>
+            <label class="check-row" for="tg-receiveEnabled">
+              <input type="checkbox" id="tg-receiveEnabled" />
+              <span>接收從 Telegram 傳來的訊息（關閉則僅作單向通知輸出）</span>
+            </label>
+            <label class="check-row" for="tg-forwardTelegramReplies">
+              <input type="checkbox" id="tg-forwardTelegramReplies" />
+              <span>把由 Telegram 觸發的貓貓回覆傳回給該 Telegram 對象</span>
+            </label>
+            <label class="check-row" for="tg-forwardDesktopReplies">
+              <input type="checkbox" id="tg-forwardDesktopReplies" />
+              <span>把在 Antigravity 視窗直接聊天的回覆也鏡像送到 Telegram</span>
+            </label>
+            <label class="check-row" for="tg-forwardDesktopUserMessages">
+              <input type="checkbox" id="tg-forwardDesktopUserMessages" />
+              <span>鏡像電腦對話時，一併把我在 Antigravity 送出的訊息也同步到 Telegram</span>
+            </label>
+            <label class="check-row" for="tg-forwardSpeakUp">
+              <input type="checkbox" id="tg-forwardSpeakUp" />
+              <span>將貓貓主動搭話／叫起床／定時提醒推播到 Telegram</span>
+            </label>
+            <label class="check-row" for="tg-forwardXingxi">
+              <input type="checkbox" id="tg-forwardXingxi" />
+              <span>將每日拾星整理完成摘要推播到 Telegram</span>
+            </label>
+            <label class="check-row" for="tg-downloadFiles">
+              <input type="checkbox" id="tg-downloadFiles" />
+              <span>收到 Telegram 夾帶圖片／檔案時，自動下載至本機 <code>data/telegram/inbox</code></span>
+            </label>
+            <label class="check-row" for="tg-autoSendReplyFiles">
+              <input type="checkbox" id="tg-autoSendReplyFiles" />
+              <span>轉發回覆若內含允許的本機圖片／檔案連結，自動一併透過 Telegram 回傳</span>
+            </label>
+          </div>
+
+          <div class="sub-divider">
+            <h4>在電腦對話時，自動讓 Telegram 端靜音</h4>
+            <label class="check-row" for="tg-muteWhenDesktopActive">
+              <input type="checkbox" id="tg-muteWhenDesktopActive" />
+              <span>我在 Antigravity 視窗剛對話過時，自動靜音非 Telegram 觸發的推播（切去 Telegram 說話立即恢復）</span>
+            </label>
+            <p id="tg-mute-status-line" class="prompt-hint compact-top">目前無靜音鎖定</p>
+            <div class="field-grid-2 compact-top">
+              <div class="field">
+                <label for="tg-desktopActiveMuteMin">電腦剛說過話的靜音窗口 (分)</label>
+                <input id="tg-desktopActiveMuteMin" type="number" min="1" max="240" />
+              </div>
+              <div class="field">
+                <label for="tg-desktopMuteMode">靜音期間的處理方式</label>
+                <select id="tg-desktopMuteMode">
+                  <option value="skip">完全不傳送推播（推薦）</option>
+                  <option value="silent">無聲送達（留存訊息不響鈴）</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="surface-block">
+          <div class="block-head">
+            <h3>Telegram 來回對話視窗（同步預覽）</h3>
+            <button id="btn-tg-sync-history" type="button" class="btn-mini">從目前對話補同步</button>
+          </div>
+          <p class="prompt-hint">Antigravity 系統注入不顯示在主聊天氣泡時，可在這裡直接看完整來回對話（貓貓本體與記憶都完全共用）。</p>
+          <div id="tg-chat-history" class="item-list scroll-list compact-top"></div>
+        </div>
+
+        <details class="drawer" id="drawer-tg-adv">
+          <summary>目標對話路由與檔案安全範圍</summary>
+          <div class="drawer-body">
+            <label class="check-row" for="tg-followActive">
+              <input type="checkbox" id="tg-followActive" />
+              <span>跟隨最新活躍的 <code>gemini_cat</code> 對話（無對話時嘗試開新對話）</span>
+            </label>
+            <div class="field compact-top">
+              <label for="tg-targetConvId">指定目標對話 ID（取消上方勾選時使用）</label>
+              <input id="tg-targetConvId" type="text" placeholder="conv-id..." />
+            </div>
+            <div class="field">
+              <label for="tg-maxUploadMb">傳入檔案下載上限 (MB，1–50；Telegram getFile 上限約 20MB)</label>
+              <input id="tg-maxUploadMb" type="number" min="1" max="50" />
+            </div>
+            <div class="field">
+              <label for="tg-extraSendDirs">額外允許主動外傳的本機資料夾（每行一個路徑；預設已包含本專案與圖片暫存，設定檔永不外傳）</label>
+              <textarea id="tg-extraSendDirs" rows="2" placeholder="例如：D:\Exports"></textarea>
+            </div>
+          </div>
+        </details>
+
+        <div class="action-row-end compact-top">
+          <span id="tg-save-msg" class="muted-meta" role="status"></span>
+          <button id="btn-tg-save" type="button" class="btn-primary">儲存 Telegram 設定</button>
+        </div>
+
+        <div class="surface-block">
+          <h3>Telegram 橋接紀錄</h3>
+          <div id="tg-logs" class="item-list scroll-list"></div>
         </div>
       </section>
     </main>

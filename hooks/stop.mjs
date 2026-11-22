@@ -21,6 +21,12 @@ import {
 } from '../core/mood.mjs';
 import { loadNestState, setNestActivity } from '../core/nest.mjs';
 import {
+  extractTelegramCleanUserText,
+  flushTelegramOutbox,
+  isTelegramSidecarAlive,
+  maybeQueueTelegramOutgoing,
+} from '../core/telegram.mjs';
+import {
   appendLogLine,
   canonicalSessionKey,
   getDataPaths,
@@ -60,10 +66,14 @@ async function main() {
   const sessions = loadRegisteredSessions(ROOT);
   const sess = sessions.sessions.find((s) => canonicalSessionKey(s.conversationId) === canonicalSessionKey(sid));
   const turnStartAt = Number(sess?.lastTurnStartAt || 0);
+  const turnHash = (fallbackInput || assistantText)
+    ? createHash('sha1').update(`${mode}:${fallbackInput}\n---\n${assistantText}`).digest('hex')
+    : '';
 
   if (cfg.enabled && cfg.autoJudge && mode !== 'xingxi-pickup' && (fallbackInput || assistantText)) {
-    const judgeUserInput = (mode === 'speak-up' || mode === 'nest-event') ? '' : fallbackInput;
-    const turnHash = createHash('sha1').update(`${mode}:${fallbackInput}\n---\n${assistantText}`).digest('hex');
+    const judgeUserInput = (mode === 'speak-up' || mode === 'nest-event')
+      ? ''
+      : (mode === 'telegram' ? extractTelegramCleanUserText(fallbackInput) : fallbackInput);
     const state = loadMoodState({ root: ROOT, persist: false });
 
     if (state.lastTurnHash !== turnHash) {
@@ -88,6 +98,22 @@ async function main() {
           saveMoodState(state, { root: ROOT });
         }
       }
+    }
+  }
+
+  if (assistantText) {
+    const queuedTg = maybeQueueTelegramOutgoing({
+      root: ROOT,
+      mode,
+      sid,
+      turnHash,
+      userText: mode === 'user' ? stripAntigravityWrappers(fallbackInput) : '',
+      assistantText,
+      lastDesktopSpeechAt: Number(sess?.lastDesktopSpeechAt || 0),
+      now: Date.now(),
+    });
+    if (queuedTg.queued && !isTelegramSidecarAlive(ROOT)) {
+      await flushTelegramOutbox(ROOT, { timeoutMs: 3500 });
     }
   }
 

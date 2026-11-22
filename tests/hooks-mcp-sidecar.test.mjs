@@ -6,9 +6,11 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
-import { applyMoodDelta, getMoodSnapshot } from '../core/mood.mjs';
+import { rememberMemory } from '../core/memory.mjs';
+import { applyMoodDelta, getMoodSnapshot, saveMoodConfig } from '../core/mood.mjs';
 import { getNestSnapshot, loadNestState, performNestAction } from '../core/nest.mjs';
 import { mutatePersona } from '../core/persona.mjs';
+import { saveTelegramConfig } from '../core/telegram.mjs';
 import { appendDiary, appendToChapter } from '../core/xingxi.mjs';
 import { buildSidecarConfig, setupSidecar } from '../scripts/setup-sidecar.mjs';
 import { registerSidecarRoutes } from '../sidecar/routes.mjs';
@@ -104,6 +106,15 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
     }, env);
     assert.deepEqual(outOfScope, {});
 
+    // Multi-root workspace where another project is primary and gemini_cat is mounted secondary: MUST stay silent!
+    const secondaryMounted = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'other-multi-conv',
+      workspacePaths: ['C:\\workspaces\\dsh_plugin', REPO_ROOT],
+      cwd: REPO_ROOT,
+      lastUserInput: '把這個副資料夾當作參考程式',
+    }, env);
+    assert.deepEqual(secondaryMounted, {});
+
     // Inside gemini_cat: SessionStart initializes archive/session & returns `{}` (Antigravity 2.0 drops SessionStart injectSteps),
     // while Turn 1 PreInvocation performs the guaranteed one-time startup injection (Persona + Xingxi Card + Diaries + Mood Guide + Rules)
     mutatePersona('create', { name: '初始測試人設', text: 'INITIAL_PERSONA_TEXT', activate: true }, REPO_ROOT);
@@ -131,6 +142,7 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
     assert.match(pre1Msg, /摸了摸你的頭/);
     assert.match(pre1Msg, /對話內長期記憶提醒/);
     assert.match(pre1Msg, /remember/);
+    assert.match(pre1Msg, /speak_up_plan/);
     const traceAfterPre1 = JSON.parse(readFileSync(join(dataDir, 'fish-memory', 'store.json'), 'utf8')).traces;
     assert.equal(traceAfterPre1[traceAfterPre1.length - 1].query, '早安！現在心情怎麼樣？');
 
@@ -296,6 +308,128 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
     assert.match(wakeChatPre.injectSteps?.[0]?.systemMessage?.systemMessage || '', /剛醒過來/);
     assert.equal(loadNestState(REPO_ROOT).sleeping, false);
     assert.equal(loadNestState(REPO_ROOT).activity.phase, 'thinking');
+
+    // Remembering a fact decrements quota without causing spurious static-rule re-injection,
+    // while editing custom prompt/toggle in Sidecar DOES trigger a clean 1-time refresh
+    rememberMemory({ text: '記憶測試條目甲乙丙', importance: 0.4 }, { root: REPO_ROOT });
+    const preAfterQuotaTick = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 8,
+      lastUserInput: '哈囉你好呀',
+    }, env);
+    assert.deepEqual(preAfterQuotaTick, {});
+
+    saveMoodConfig({ inChatRulePrompt: 'LIVE_EDITED_MOOD_PROMPT' }, REPO_ROOT);
+    const prePromptEdited = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 9,
+      lastUserInput: '套用剛改好的心情提示詞',
+    }, env);
+    assert.match(prePromptEdited.injectSteps?.[0]?.systemMessage?.systemMessage || '', /LIVE_EDITED_MOOD_PROMPT/);
+    const prePromptSettled = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 10,
+      lastUserInput: '改完提示詞下一輪恢復靜默',
+    }, env);
+    assert.deepEqual(prePromptSettled, {});
+
+    // Pre-v1.3 session missing `injectedRulesHash` MUST automatically trigger a 1-time static-rules upgrade refresh!
+    const sessPath = join(dataDir, 'runtime', 'sessions.json');
+    const sessStore = JSON.parse(readFileSync(sessPath, 'utf-8'));
+    sessStore.sessions.push({
+      conversationId: 'pre-v13-legacy-sess',
+      firstSeenAt: Date.now() - 3600_000,
+      lastSeenAt: Date.now() - 1000,
+      lastUserSpeechAt: Date.now() - 1000,
+      lastTurnStartAt: Date.now() - 1000,
+      lastInjectedTurnKey: 'step-2:old',
+      lastRawUserInput: 'old',
+      lastInputStepIndex: 2,
+      injectedPersonaHash: sessStore.sessions.find((s) => s.conversationId === 'cat-conv-1').injectedPersonaHash,
+      hasInjectedStaticRules: true,
+      hasInjectedStartupContext: true,
+      transcriptPath: '',
+      modelName: 'gemini-4-hydrogen-medium',
+      turnCount: 0,
+    });
+    saveMoodConfig({ inChatRulePrompt: '' }, REPO_ROOT);
+    writeFileSync(sessPath, JSON.stringify(sessStore, null, 2), 'utf-8');
+    const legacyRefresh = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'pre-v13-legacy-sess',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 4,
+      lastUserInput: '等下幫我記著喊我',
+    }, env);
+    const legacyMsg = legacyRefresh.injectSteps?.[0]?.systemMessage?.systemMessage || '';
+    assert.match(legacyMsg, /speak_up_plan/);
+    assert.match(legacyMsg, /mood_update/);
+    const legacyNext = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'pre-v13-legacy-sess',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 5,
+      lastUserInput: '謝謝啦',
+    }, env);
+    assert.deepEqual(legacyNext, {});
+
+    // Transitional away/sleep user message triggers compact proactive scheduling cue while ordinary chit-chat stays quiet
+    const cuePre = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'pre-v13-legacy-sess',
+      workspacePaths: [REPO_ROOT],
+      invocationNum: 1,
+      initialNumSteps: 6,
+      lastUserInput: '累了，我先去睡了明天叫我',
+    }, env);
+    assert.match(cuePre.injectSteps?.[0]?.systemMessage?.systemMessage || '', /貓窩排程小提示/);
+
+    // Telegram incoming SYSTEM_MESSAGE triggers PreInvocation like real user turn (wakes sleep, recalls memory, updates lastUserSpeechAt)
+    // and Stop hook queues the assistant reply into telegram outbox cleanly
+    performNestAction('nap', { root: REPO_ROOT, now: Date.now() + 30_000, bypassLimits: true });
+    assert.equal(loadNestState(REPO_ROOT).sleeping, true);
+    writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ step_index: 20, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: '[TELEGRAM_INCOMING]\n時間：17:00\n訊息內容：\n我好喜歡你今天做的草莓大福' }),
+      ].join('\n'),
+      'utf-8',
+    );
+    const tgPre = runHook('hooks/pre-invocation.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      transcriptPath,
+      invocationNum: 1,
+      initialNumSteps: 21,
+      lastUserInput: 'stale desktop prompt',
+    }, env);
+    assert.match(tgPre.injectSteps?.[0]?.systemMessage?.systemMessage || '', /剛醒過來/);
+    assert.equal(loadNestState(REPO_ROOT).sleeping, false);
+
+    saveTelegramConfig({ enabled: true, botToken: '999999:FAKE_TOKEN_FOR_TEST', allowedChatId: '5555' }, REPO_ROOT);
+    writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ step_index: 20, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: '[TELEGRAM_INCOMING]\n時間：17:00\n訊息內容：\n草莓大福好吃嗎' }),
+        JSON.stringify({ step_index: 21, type: 'PLANNER_RESPONSE', content: '超甜超滿足！' }),
+      ].join('\n'),
+      'utf-8',
+    );
+    runHook('hooks/stop.mjs', {
+      conversationId: 'cat-conv-1',
+      workspacePaths: [REPO_ROOT],
+      transcriptPath,
+    }, env);
+    const outboxFiles = readdirSync(join(dataDir, 'telegram', 'outbox')).filter((f) => f.endsWith('.json'));
+    assert.equal(outboxFiles.length, 1);
+    const queuedJob = JSON.parse(readFileSync(join(dataDir, 'telegram', 'outbox', outboxFiles[0]), 'utf-8'));
+    assert.equal(queuedJob.text, '超甜超滿足！');
+    assert.deepEqual(queuedJob.chatIds, ['5555']);
   } finally {
     if (prevDataDir === undefined) delete process.env.GEMINI_CAT_DATA_DIR;
     else process.env.GEMINI_CAT_DATA_DIR = prevDataDir;
@@ -344,9 +478,75 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
 
     const list = await rpc(2, 'tools/list');
     const names = list.result.tools.map((t) => t.name);
-    for (const reqTool of ['remember', 'recall', 'xingxi', 'xingxi_read', 'xingxi_append', 'xingxi_diary', 'xingxi_pickup', 'mood_status', 'mood_update', 'nest_interact']) {
+    for (const reqTool of ['remember', 'recall', 'xingxi', 'xingxi_read', 'xingxi_append', 'xingxi_diary', 'xingxi_pickup', 'mood_status', 'mood_update', 'nest_interact', 'speak_up_plan', 'telegram_send']) {
       assert.ok(names.includes(reqTool), `Missing tool ${reqTool}`);
     }
+
+    // MCP telegram_send blocks exfiltrating Telegram secret config (isolated inside temp dataDir)
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(dataDir, 'telegram'), { recursive: true });
+    writeFileSync(
+      join(dataDir, 'telegram', 'config.json'),
+      JSON.stringify({ enabled: true, botToken: '888:SECRET', allowedChatId: '123' }),
+      'utf-8',
+    );
+    const tgBlocked = await rpc(16, 'tools/call', {
+      name: 'telegram_send',
+      arguments: { filePath: join(dataDir, 'telegram', 'config.json'), text: 'leak' },
+    });
+    assert.match(tgBlocked.result.content[0].text, /安全封鎖/);
+
+    const moodInner = await rpc(10, 'tools/call', {
+      name: 'mood_update',
+      arguments: {
+        subject: 'owner',
+        moodDelta: 2,
+        dims: { happy: 3 },
+        reason: '主人稱讚測試很細心',
+        innerThought: '哼，本來就很細心好嗎…不過被誇獎了還是超開心的。',
+      },
+    });
+    assert.match(moodInner.result.content[0].text, /貓窩內心小劇場/);
+
+    const batchPlan = await rpc(11, 'tools/call', {
+      name: 'speak_up_plan',
+      arguments: {
+        action: 'schedule_batch',
+        plans: [
+          { delayMinutes: 25, kind: 'reminder', label: '第一輪提醒', thought: '25分鐘到啦' },
+          { delayMinutes: 90, kind: 'autonomous', label: '晚點探頭', jitterMin: 10, thought: '偷瞄一下' },
+        ],
+      },
+    });
+    const batchObj = JSON.parse(batchPlan.result.content[0].text);
+    assert.equal(batchObj.ok, true);
+    assert.equal(batchObj.upcomingPlans.length, 2);
+
+    const routineAdd = await rpc(12, 'tools/call', {
+      name: 'speak_up_plan',
+      arguments: { action: 'add_routine', label: '每日午間波動問候', timeHHMM: '12:30', jitterMin: 20, thought: '吃飯沒' },
+    });
+    assert.equal(JSON.parse(routineAdd.result.content[0].text).routines.length, 1);
+
+    const stCheck = await rpc(13, 'tools/call', { name: 'mood_status', arguments: {} });
+    const stObj = JSON.parse(stCheck.result.content[0].text);
+    assert.match(stObj.mood.lastInnerThought, /被誇獎了還是超開心/);
+    assert.equal(stObj.speakUp.plans.length, 2);
+    assert.equal(stObj.speakUp.routines.length, 1);
+
+    const silRes = await rpc(14, 'tools/call', {
+      name: 'speak_up_plan',
+      arguments: { action: 'silence', delayMinutes: 60, reason: '主人先去休息了暫別打擾' },
+    });
+    const silObj = JSON.parse(silRes.result.content[0].text);
+    assert.equal(silObj.silence.active, true);
+    assert.match(silObj.silence.reason, /休息/);
+
+    const clrSilRes = await rpc(15, 'tools/call', {
+      name: 'speak_up_plan',
+      arguments: { action: 'clear_silence' },
+    });
+    assert.equal(JSON.parse(clrSilRes.result.content[0].text).silence.active, false);
 
     const rem = await rpc(3, 'tools/call', {
       name: 'remember',
@@ -420,6 +620,17 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.match(html.body, /pol-w-baseline/);
     assert.match(html.body, /sp-nearMin/);
     assert.match(html.body, /sp-followActive/);
+    assert.match(html.body, /sp-silence-bar/);
+    assert.match(html.body, /sp-scheduleTendency/);
+    assert.match(html.body, /sp-diceBlockActiveChat/);
+    assert.match(html.body, /sp-maxUnanswered/);
+    assert.match(html.body, /tab-telegram/);
+    assert.match(html.body, /tg-botToken/);
+    assert.match(html.body, /tg-lockSingleChat/);
+    assert.match(html.body, /tg-forwardDesktopUserMessages/);
+    assert.match(html.body, /tg-autoSendReplyFiles/);
+    assert.match(html.body, /tg-muteWhenDesktopActive/);
+    assert.match(html.body, /tg-chat-history/);
     assert.match(html.body, /xingxi-backups-list/);
     assert.match(html.body, /xx-map-search/);
     assert.equal(pages.get('/styles.css')().status, 200);
@@ -572,16 +783,26 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.equal(pToggle.item.enabled, false);
     assert.equal(pToggle.snapshot.persona.effectiveText, '');
 
-    // Mood parity config (selfPronoun & aliases)
+    // Mood parity config (selfPronoun, aliases, stepDivisor, changesPerDay, injectUnlimited)
     const mCfgRes = await apis.get('/api/mood/config').get('POST')({
       autoJudge: false,
       selfPronoun: '人家',
       selfAliases: '小橘, 小貓',
       ownerAliases: '阿哲, 飼主',
+      stepDivisor: 1,
+      changesPerDay: 12,
+      injectPerDay: 100,
+      injectUnlimited: true,
     });
     assert.equal(mCfgRes.config.autoJudge, false);
     assert.equal(mCfgRes.config.selfPronoun, '人家');
     assert.equal(mCfgRes.config.selfAliases, '小橘, 小貓');
+    assert.equal(mCfgRes.config.stepDivisor, 1);
+    assert.equal(mCfgRes.config.changesPerDay, 12);
+    assert.equal(mCfgRes.config.injectPerDay, 100);
+    assert.equal(mCfgRes.config.injectUnlimited, true);
+    assert.equal(mCfgRes.snapshot.mood.injectQuota.unlimited, true);
+    assert.equal(mCfgRes.snapshot.mood.changeQuota.cap, 12);
 
     // Memory parity: batch import -> edit -> test-recall with saveTrace -> resetPolicy
     const memImport = await apis.get('/api/memory/import').get('POST')({
@@ -609,15 +830,36 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.equal(polReset.ok, true);
     assert.ok(polReset.snapshot.memory.traces.length >= 1);
 
-    // Speak-up followActive=false targeting + reset-streak
+    // Speak-up followActive=false targeting + reset-streak + plan/routine endpoints + custom prompts
     const spTarget = await apis.get('/api/speak-up/config').get('POST')({
       followActive: false,
+      aiPlanEnabled: true,
+      diceEnabled: false,
+      inChatRulePrompt: 'CUSTOM_SP_SIDECAR',
       targetConversations: ['cat-conv-verified', 'cat-conv-verified'],
     });
     assert.deepEqual(spTarget.config.targetConversations, ['cat-conv-verified']);
+    assert.equal(spTarget.config.diceEnabled, false);
+    assert.equal(spTarget.config.inChatRulePrompt, 'CUSTOM_SP_SIDECAR');
+    const rtApi = await apis.get('/api/speak-up/plan').get('POST')({
+      action: 'add_routine',
+      timeHHMM: '15:00',
+      jitterMin: 10,
+      label: '下午點心時間',
+    });
+    assert.equal(rtApi.ok, true);
+    assert.equal(rtApi.snapshot.speakUp.state.routines.length, 1);
+    const togApi = await apis.get('/api/speak-up/plan').get('POST')({
+      action: 'toggle_routine',
+      id: rtApi.routine.id,
+    });
+    assert.equal(togApi.routine.enabled, false);
     const spReset = await apis.get('/api/speak-up/reset-streak').get('POST')({});
     assert.equal(spReset.ok, true);
     assert.equal(spReset.state.missStreak, 0);
+    const spResetUnans = await apis.get('/api/speak-up/reset-unanswered').get('POST')({});
+    assert.equal(spResetUnans.ok, true);
+    assert.equal(spResetUnans.state.unansweredCount, 0);
 
     // Xingxi file viewer & path traversal guard
     const xxRead = await apis.get('/api/xingxi/file').get('GET')({ name: '記憶卡.md' });
@@ -625,6 +867,39 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.match(xxRead.text, /記憶卡/);
     const xxBad = await apis.get('/api/xingxi/file').get('GET')({ name: '../outside.txt' });
     assert.equal(xxBad.ok, false);
+
+    // Telegram API endpoints: config saves token safely masked, blank update preserves token, pair-code issues 6-char code
+    const tgSave = await apis.get('/api/telegram/config').get('POST')({
+      enabled: true,
+      botToken: '424242:SECRET_PART_ABCD',
+      forwardDesktopReplies: true,
+    });
+    assert.equal(tgSave.ok, true);
+    assert.equal(tgSave.telegram.config.hasBotToken, true);
+    assert.equal(tgSave.telegram.config.botTokenMasked, '424242:***ABCD');
+    assert.equal(Object.hasOwn(tgSave.telegram.config, 'botToken'), false);
+
+    // Generate pair-code before binding -> ok: true
+    const tgPair = await apis.get('/api/telegram/pair-code').get('POST')({});
+    assert.equal(tgPair.ok, true);
+    assert.match(tgPair.pairCode, /^[A-Z0-9]{6}$/);
+
+    // Once bound with default lockSingleChat=true, pair-code generation is blocked until unlocked or cleared
+    const tgKeepToken = await apis.get('/api/telegram/config').get('POST')({
+      allowedChatId: '7777',
+      botToken: '',
+    });
+    assert.equal(tgKeepToken.telegram.config.hasBotToken, true);
+    assert.equal(tgKeepToken.telegram.config.allowedChatId, '7777');
+    const tgPairLocked = await apis.get('/api/telegram/pair-code').get('POST')({});
+    assert.equal(tgPairLocked.ok, false);
+    assert.equal(tgPairLocked.blocked, true);
+
+    // Unlocking single-chat permits generating a new pair-code again
+    await apis.get('/api/telegram/config').get('POST')({ lockSingleChat: false });
+    const tgPairUnlocked = await apis.get('/api/telegram/pair-code').get('POST')({});
+    assert.equal(tgPairUnlocked.ok, true);
+    assert.match(tgPairUnlocked.pairCode, /^[A-Z0-9]{6}$/);
   } finally {
     delete process.env.GEMINI_CAT_DATA_DIR;
     rmSync(dataDir, { recursive: true, force: true });

@@ -54,7 +54,9 @@ export function isSidecarInputStep(step) {
     c.includes('[SPEAK_UP_INTERNAL]') ||
     c.includes('<speak-up>') ||
     c.includes('[XINGXI_AUTO_PICKUP]') ||
-    c.includes('[CAT_NEST_EVENT]')
+    c.includes('[CAT_NEST_EVENT]') ||
+    c.includes('[TELEGRAM_INCOMING]') ||
+    c.includes('[YOUTUBE_PATROL]')
   );
 }
 
@@ -149,12 +151,15 @@ export function extractLatestTurnFromTranscript(transcriptPath) {
       }
       if (!userText && isSidecarInputStep(step)) {
         userText = step.content.trim();
+        break;
       }
       if (!userText && step?.type === 'USER_INPUT' && typeof step.content === 'string') {
         const cleaned = stripAntigravityWrappers(step.content);
-        if (cleaned) userText = cleaned;
+        if (cleaned) {
+          userText = cleaned;
+          break;
+        }
       }
-      if (userText && assistantText) break;
     }
     return { userText, assistantText };
   } catch {
