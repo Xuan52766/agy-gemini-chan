@@ -9,7 +9,7 @@
   - 新增純 Node 獨佔檔案鎖 `withFileLockSync`／`updateJsonLocked` 與 `writeTextAtomic` 3 次重新命名重試（Windows 短暫檔案鎖容錯），消除 Hooks、Sidecar 輪詢與 60 秒排程並發寫入時的狀態覆蓋競態。
   - 重構 `handleTelegramUpdatesBatch`、`flushTelegramOutbox`、`maybeQueueTelegramOutgoing`、`applyMoodDelta`、`consumeMoodInjection` 與 `registerProjectConversation`，避免橫跨 `await` 後以舊快照覆寫最新狀態。
 - **Telegram 防偽造、防外洩與測試端點收緊（`core/telegram.mjs`、`core/bridge.mjs`、`hooks/lib.mjs`、`sidecar/routes.mjs`）**：
-  - 新增 `neutralizeTelegramMarkers` 跳脫外部訊息夾帶的內部標記與標籤，並將 `classifyInputSource` 與 `isSidecarInputStep` 改為前綴精準比對（`.startsWith()`）。
+  - 新增 `neutralizeTelegramMarkers` 跳脫外部訊息夾帶的內部標記與標籤，並新增 `unwrapSidecarSystemEnvelope`（`core/storage.mjs`）剝除 `Antigravity` 真實紀錄的 `<SYSTEM_MESSAGE>`／`[Message] ... content=` 外殼，讓 `classifyInputSource`、`isSidecarInputStep`（忽略 `SYSTEM_SDK` 注入）與 `syncTelegramHistoryFromTranscript` 在前綴精準比對下不會跳過 Telegram／主動搭話輪次或誤鏡像舊電腦提問。
   - 強化 `isAllowedTelegramSendPath`：以 `realpathSync.native` 驗證實體路徑防止 symlink／junction 逃逸；擴大封鎖私鑰與憑證檔（`.pem`/`.key`/`.p12`/`.pfx`/`id_rsa*`/`id_ed25519*`/`.npmrc`/`.pypirc`/`.git-credentials`/`credentials*.json`/`data/**/config.json`）；限制 `brain` 目錄僅允許圖片、音訊、影片與文件產物。
   - 配對碼改用 `crypto.randomInt`，並針對每個 `chatId` 加上 `/bind` 失敗 5 次鎖定 15 分鐘防暴力嘗試；`POST /api/telegram/test` 在單帳號已鎖定綁定後僅允許對已綁定 `Chat ID` 傳送純文字測試（拒絕 `filePath`）。
 - **Sidecar XSS 修復、唯讀與條件輪詢（`sidecar/routes.mjs`、`sidecar/app.js`、`sidecar/index.html`、`sidecar/styles.css`）**：

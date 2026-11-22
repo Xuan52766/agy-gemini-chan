@@ -330,6 +330,24 @@ export function normalizeCustomPrompt(value, defaultRendered = '', maxLen = 4000
 }
 
 /**
+ * Unwraps Antigravity 2.0's runtime `SYSTEM_MESSAGE` / `[Message] ... content=` wrapper
+ * around Sidecar-dispatched messages while leaving ordinary text & mid-body strings untouched.
+ */
+export function unwrapSidecarSystemEnvelope(text = '') {
+  let s = String(text || '').trimStart();
+  s = s.replace(
+    /^(?:The following is a <SYSTEM_MESSAGE>[^\r\n]*(?:\r?\n)+)?<SYSTEM_MESSAGE>\s*/i,
+    '',
+  );
+  s = s.replace(
+    /^\[Message\]\s+[^\r\n]*?\bcontent=/i,
+    '',
+  );
+  s = s.replace(/\r?\n?<\/SYSTEM_MESSAGE>\s*$/i, '');
+  return s.trim();
+}
+
+/**
  * Strips Antigravity runtime XML envelopes (`<USER_REQUEST>`, `<ADDITIONAL_METADATA>`, etc.)
  * so transcripts, recall queries, and mood reasons retain clean human text.
  */

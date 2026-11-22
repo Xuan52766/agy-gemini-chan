@@ -16,6 +16,7 @@ import {
   getProjectRoot,
   isProjectWorkspaceActive,
   readJsonSafe,
+  unwrapSidecarSystemEnvelope,
   updateJsonLocked,
   writeJsonAtomic,
 } from './storage.mjs';
@@ -135,7 +136,7 @@ export function isVerifiedProjectConversation(conversationId, root = getProjectR
  * Classifies turn origin (`speak-up` | `xingxi-pickup` | `nest-event` | `telegram` | `work` | `user`).
  */
 export function classifyInputSource(userInput = '') {
-  const s = String(userInput || '').trimStart().replace(/^<SYSTEM_MESSAGE>\s*/i, '').trimStart();
+  const s = unwrapSidecarSystemEnvelope(userInput);
   if (s.startsWith(SPEAK_UP_MARKER) || s.startsWith('<speak-up>')) return 'speak-up';
   if (s.startsWith(XINGXI_PICKUP_MARKER)) return 'xingxi-pickup';
   if (s.startsWith(CAT_NEST_EVENT_MARKER)) return 'nest-event';

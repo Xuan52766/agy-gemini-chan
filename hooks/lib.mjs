@@ -4,7 +4,12 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { getProjectRoot, isProjectWorkspaceActive, stripAntigravityWrappers } from '../core/storage.mjs';
+import {
+  getProjectRoot,
+  isProjectWorkspaceActive,
+  stripAntigravityWrappers,
+  unwrapSidecarSystemEnvelope,
+} from '../core/storage.mjs';
 
 export function readHookInput() {
   const raw = readFileSync(0, { encoding: 'utf-8' }).trim();
@@ -47,9 +52,11 @@ export function ensureInProjectScope(payload, root = getProjectRoot()) {
  * `SYSTEM_MESSAGE` (`source: "SYSTEM"`) rather than `USER_INPUT` or hook `<SYSTEM_MESSAGE>`.
  */
 export function isSidecarInputStep(step) {
-  if (step?.type !== 'SYSTEM_MESSAGE' || typeof step.content !== 'string') return false;
-  const c = step.content.trimStart();
-  if (!c || c.startsWith('<SYSTEM_MESSAGE>')) return false;
+  if (step?.type !== 'SYSTEM_MESSAGE' || step?.source === 'SYSTEM_SDK' || typeof step.content !== 'string') {
+    return false;
+  }
+  const c = unwrapSidecarSystemEnvelope(step.content);
+  if (!c) return false;
   return (
     c.startsWith('[SPEAK_UP_INTERNAL]') ||
     c.startsWith('<speak-up>') ||
@@ -104,7 +111,7 @@ export function inspectTranscriptTail(transcriptPath) {
         return {
           hasTranscript: true,
           isMidTurnToolContinuation: sawPlannerOrToolAfterInput,
-          latestInputText: step.content.trim(),
+          latestInputText: unwrapSidecarSystemEnvelope(step.content),
           latestInputStepIndex: Number.isFinite(Number(step.step_index)) ? Number(step.step_index) : i,
           isSidecarInput: true,
         };
@@ -150,7 +157,7 @@ export function extractLatestTurnFromTranscript(transcriptPath) {
         assistantText = step.content.trim();
       }
       if (!userText && isSidecarInputStep(step)) {
-        userText = step.content.trim();
+        userText = unwrapSidecarSystemEnvelope(step.content);
         break;
       }
       if (!userText && step?.type === 'USER_INPUT' && typeof step.content === 'string') {

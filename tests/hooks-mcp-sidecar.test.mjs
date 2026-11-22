@@ -10,7 +10,8 @@ import { rememberMemory } from '../core/memory.mjs';
 import { applyMoodDelta, getMoodSnapshot, saveMoodConfig } from '../core/mood.mjs';
 import { getNestSnapshot, loadNestState, performNestAction } from '../core/nest.mjs';
 import { mutatePersona } from '../core/persona.mjs';
-import { saveTelegramConfig } from '../core/telegram.mjs';
+import { saveTelegramConfig, syncTelegramHistoryFromTranscript } from '../core/telegram.mjs';
+import { isSidecarInputStep, inspectTranscriptTail, extractLatestTurnFromTranscript } from '../hooks/lib.mjs';
 import { appendDiary, appendToChapter } from '../core/xingxi.mjs';
 import { buildSidecarConfig, setupSidecar } from '../scripts/setup-sidecar.mjs';
 import { registerSidecarRoutes } from '../sidecar/routes.mjs';
@@ -1124,5 +1125,105 @@ test('v1.4.4 sidecar routes & frontend guards: readonly GET /api/state, /api/ver
     assert.match(css, /\.scope-pill\.offline/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('hooks & transcript sync unwrap Antigravity <SYSTEM_MESSAGE> [Message] ... content= envelope without mirroring stale desktop user input', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'gemini-cat-envelope-test-'));
+  try {
+    const env = { GEMINI_CAT_DATA_DIR: dataDir };
+    const txPath = join(dataDir, 'transcript.jsonl');
+    const wrappedTg = [
+      'The following is a <SYSTEM_MESSAGE> not actually sent by the user. It is provided by the system as important information to pay attention to.',
+      '',
+      '<SYSTEM_MESSAGE>',
+      '[Message] timestamp=2026-11-22T10:49:11Z sender=system priority=MESSAGE_PRIORITY_HIGH content=[TELEGRAM_INCOMING]',
+      '（這是@tester從 Telegram 傳來的訊息，請直接自然回覆；你這輪的最終文字與生成的檔案會自動轉發回 Telegram。）',
+      '時間：11-22 18:49:05',
+      '訊息內容：',
+      '晚餐吃牛肉麵',
+      '</SYSTEM_MESSAGE>',
+    ].join('\n');
+
+    // Spoofed hook injection mentioning [TELEGRAM_INCOMING] must NOT be treated as a sidecar input
+    assert.equal(
+      isSidecarInputStep({
+        type: 'SYSTEM_MESSAGE',
+        source: 'SYSTEM_SDK',
+        content: 'The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\nThe following system message was injected by a PreInvocation hook:\n- memory mentions [TELEGRAM_INCOMING]',
+      }),
+      false,
+    );
+    assert.equal(isSidecarInputStep({ type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: wrappedTg }), true);
+
+    writeFileSync(txPath, [
+      JSON.stringify({ step_index: 0, type: 'USER_INPUT', content: '舊的電腦端提問' }),
+      JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', content: '電腦端回覆完畢' }),
+      JSON.stringify({ step_index: 2, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: wrappedTg }),
+    ].join('\n') + '\n', 'utf-8');
+
+    const tail = inspectTranscriptTail(txPath);
+    assert.equal(tail.isSidecarInput, true);
+    assert.equal(tail.isMidTurnToolContinuation, false);
+    assert.ok(tail.latestInputText.startsWith('[TELEGRAM_INCOMING]'));
+
+    // Run PreInvocation hook on the Telegram turn: must detect source=telegram & NOT mark stale desktop step as continuation
+    const sid = 'tg-envelope-conv';
+    const preOut = runHook('hooks/pre-invocation.mjs', {
+      conversationId: sid,
+      workspacePaths: [REPO_ROOT],
+      transcriptPath: txPath,
+      invocationNum: 1,
+      lastUserInput: '舊的電腦端提問',
+    }, env);
+    assert.ok(preOut.injectSteps?.length > 0 || preOut);
+    const nestAfterPre = JSON.parse(readFileSync(join(dataDir, 'nest', 'state.json'), 'utf-8'));
+    assert.match(nestAfterPre.activity.label, /收到 Telegram：「晚餐吃牛肉麵」/);
+
+    // Append model response & run Stop hook with forwardDesktopReplies=true: must classify mode=telegram & NOT mirror stale desktop prompt!
+    writeFileSync(txPath, [
+      JSON.stringify({ step_index: 0, type: 'USER_INPUT', content: '舊的電腦端提問' }),
+      JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', content: '電腦端回覆完畢' }),
+      JSON.stringify({ step_index: 2, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', content: wrappedTg }),
+      JSON.stringify({ step_index: 3, type: 'PLANNER_RESPONSE', content: '熱呼呼的牛肉麵好好吃！' }),
+    ].join('\n') + '\n', 'utf-8');
+
+    const latest = extractLatestTurnFromTranscript(txPath);
+    assert.ok(latest.userText.startsWith('[TELEGRAM_INCOMING]'));
+    assert.equal(latest.assistantText, '熱呼呼的牛肉麵好好吃！');
+
+    const origEnv = process.env.GEMINI_CAT_DATA_DIR;
+    process.env.GEMINI_CAT_DATA_DIR = dataDir;
+    try {
+      saveTelegramConfig({
+        enabled: true,
+        botToken: '123456:TESTTOKEN_ABCDEFGHIJKLMNOP',
+        allowedChatId: '7777',
+        forwardDesktopReplies: true,
+        forwardDesktopUserMessages: true,
+      }, REPO_ROOT);
+      const synced = syncTelegramHistoryFromTranscript(REPO_ROOT, txPath);
+      assert.equal(synced.ok, true);
+      assert.equal(synced.imported, 2);
+    } finally {
+      if (origEnv === undefined) delete process.env.GEMINI_CAT_DATA_DIR;
+      else process.env.GEMINI_CAT_DATA_DIR = origEnv;
+    }
+
+    runHook('hooks/stop.mjs', {
+      conversationId: sid,
+      workspacePaths: [REPO_ROOT],
+      transcriptPath: txPath,
+      lastUserInput: '舊的電腦端提問',
+    }, env);
+
+    const outboxFiles = readdirSync(join(dataDir, 'telegram', 'outbox')).filter((f) => f.endsWith('.json'));
+    assert.equal(outboxFiles.length, 1);
+    const queued = JSON.parse(readFileSync(join(dataDir, 'telegram', 'outbox', outboxFiles[0]), 'utf-8'));
+    assert.equal(queued.mode, 'telegram');
+    assert.equal(queued.mirrorUserText, '');
+    assert.equal(queued.text, '熱呼呼的牛肉麵好好吃！');
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
   }
 });

@@ -32,6 +32,7 @@ import {
   localDayKey,
   normalizePathOrUri,
   readJsonSafe,
+  unwrapSidecarSystemEnvelope,
   updateJsonLocked,
   withFileLockSync,
   writeJsonAtomic,
@@ -971,8 +972,7 @@ export function formatTelegramIncomingPrompt({
  * Fish Memory queries, and sleep wake-word matching never read boilerplate.
  */
 export function extractTelegramCleanUserText(rawInput = '') {
-  let s = String(rawInput || '').trim();
-  s = s.replace(/^<SYSTEM_MESSAGE>\s*/i, '').replace(/\n?<\/SYSTEM_MESSAGE>\s*$/i, '').trim();
+  const s = unwrapSidecarSystemEnvelope(rawInput);
   if (!s.startsWith(TELEGRAM_INCOMING_MARKER)) return s;
   const msgIdx = s.indexOf('\n訊息內容：\n');
   if (msgIdx >= 0) {
@@ -1588,7 +1588,9 @@ export function syncTelegramHistoryFromTranscript(root = getProjectRoot(), trans
     let step;
     try { step = JSON.parse(raw); } catch { continue; }
     const content = typeof step?.content === 'string' ? step.content : '';
-    const unwrappedContent = content.replace(/^<SYSTEM_MESSAGE>\s*/i, '').trimStart();
+    const unwrappedContent = step?.type === 'SYSTEM_MESSAGE' && step?.source !== 'SYSTEM_SDK'
+      ? unwrapSidecarSystemEnvelope(content)
+      : '';
     const ts = step?.created_at ? (Date.parse(step.created_at) || Date.now()) : Date.now();
     if (step?.type === 'SYSTEM_MESSAGE' && unwrappedContent.startsWith(TELEGRAM_INCOMING_MARKER)) {
       const cleanIn = extractTelegramCleanUserText(content);
