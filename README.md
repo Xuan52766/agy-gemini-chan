@@ -1,267 +1,239 @@
-# agy-gemini-chan｜Gemini-chan 貓窩伴侶
+<div align="center">
+  <img src="./assets/geminichan/chibi_base.png" width="120" alt="Gemini-chan" />
+  <h1>agy-gemini-chan</h1>
+  <p><strong>Antigravity 2.0 專案限定 AI 伴侶與互動貓窩系統</strong></p>
 
-<p align="center">
-  <img src="./assets/geminichan/chibi_base.png" width="160" alt="Gemini-chan 貓窩 Q 版立繪" />
-</p>
+  <p>
+    <a href="https://github.com/Xuan52766/agy-gemini-chan/releases"><img src="https://img.shields.io/badge/version-v1.4.5-blue" alt="Version v1.4.5" /></a>
+    <img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen" alt="Node >= 20.0.0" />
+    <img src="https://img.shields.io/badge/dependencies-0-success" alt="Zero Dependencies" />
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Yuuyuko--uu%201.2-informational" alt="License Yuuyuko-uu 1.2" /></a>
+  </p>
 
-<p align="center">
-  <strong>Antigravity 2.0 專案限定 AI 伴侶與互動貓窩系統</strong><br/>
-  <span>版本：<code>v1.4.5</code> ・ 需 Node.js <code>&gt;= 20.0.0</code> ・ <a href="./CHANGELOG.md">更新紀錄</a> ・ <a href="./使用手冊.md">完整使用手冊</a> ・ <a href="./LICENSE">Yuuyuko-uu 插件許可 1.2</a></span>
-</p>
+  <p>
+    <a href="#快速開始">快速開始</a> ·
+    <a href="#版本升級與資料保護">版本升級</a> ·
+    <a href="#系統架構與低-token-設計">系統架構</a> ·
+    <a href="#mcp-工具與-skills">MCP 工具</a> ·
+    <a href="#telegram-橋接與安全模型">Telegram 橋接</a> ·
+    <a href="./使用手冊.md">使用手冊</a> ·
+    <a href="./CHANGELOG.md">Changelog</a>
+  </p>
+</div>
 
-> [!IMPORTANT]
-> **派生來源與授權聲明（依 [Yuuyuko-uu 插件許可 1.2](./LICENSE) 標示）**
-> 本專案派生自原作者 **Yuuyuko-uu** 的 DSH 伴侶插件系列原倉庫：
-> [`dsh-fish-memory`](https://github.com/Yuuyuko-uu/dsh-fish-memory)、[`dsh-feiyu-mood`](https://github.com/Yuuyuko-uu/dsh-feiyu-mood)、[`dsh-xingxi`](https://github.com/Yuuyuko-uu/dsh-xingxi)、[`dsh-speak-up`](https://github.com/Yuuyuko-uu/dsh-speak-up)，
-> 並參考整合 **huaizhuanghub** 的 [`dsh-persona-dafeiyu`](https://www.npmjs.com/package/dsh-persona-dafeiyu)（MIT）與 [`jieba`](https://github.com/fxsjy/jieba) 分詞詞表。
->
-> **主要改動項目**：重構為 **Antigravity 2.0** 原生 Plugin（Hooks + Stdio MCP Server + Skills + Sidecar Web UI）、首輪與差量低 Token 注入機制、嚴格單一工作區隔離（切換至其他開發專案時 0 Token 靜默）、對話內免外部 API 心情評分與本地語意兜底、互動貓窩羈絆系統、Telegram Long Polling 雙向橋接與無損一鍵更新器（詳見文末[授權與改動明細](#致謝與授權聲明)）。
-
-<p align="center">
-  <a href="#快速安裝與啟用">快速安裝</a> ・
-  <a href="#初次使用必看-3-件事">新手避坑</a> ・
-  <a href="#一鍵安全更新保留所有記憶與設定">一鍵安全更新</a> ・
-  <a href="#核心模組一覽">核心模組</a> ・
-  <a href="#原生-mcp-工具gemini-cat_companion共-13-個">13 項 MCP 工具</a> ・
-  <a href="#telegram-雙向橋接與安全防護">Telegram 橋接</a> ・
-  <a href="#常見問題faq">常見問題</a>
-</p>
+> **派生聲明（[Yuuyuko-uu 插件許可 1.2](./LICENSE)）**
+> 本專案派生自 **Yuuyuko-uu** 的 [`dsh-fish-memory`](https://github.com/Yuuyuko-uu/dsh-fish-memory)、[`dsh-feiyu-mood`](https://github.com/Yuuyuko-uu/dsh-feiyu-mood)、[`dsh-xingxi`](https://github.com/Yuuyuko-uu/dsh-xingxi)、[`dsh-speak-up`](https://github.com/Yuuyuko-uu/dsh-speak-up)，並整合 **huaizhuanghub** [`dsh-persona-dafeiyu`](https://www.npmjs.com/package/dsh-persona-dafeiyu)（MIT）與 [`jieba`](https://github.com/fxsjy/jieba) 詞表。
+> 主要改動：移植為 Antigravity 2.0 原生架構（Hooks / MCP / Sidecar Web UI）、單一工作區隔離、差量低 Token 注入、免外部 API 心情評估、Telegram 雙向橋接與無損更新器（詳見[致謝與授權](#致謝與授權)）。
 
 ---
 
-## 專案簡介
+## 系統概覽
 
-**`agy-gemini-chan`** 是一套純本機、零第三方依賴（不需額外 `npm install` 與外部模型 API Key）的 **Antigravity 2.0** AI 伴侶系統。只要開啟本專案資料夾作為主要工作區，即可同時擁有長期記憶、情緒內心戲、日記星圖、主動搭話排程、Telegram 手機連線與右側 **Gemini-chan 貓窩** 互動面板；切換回其他程式開發專案時則完全自動靜默，不會外洩規則也不額外耗用 Token。
+`agy-gemini-chan` 是純本機運行的 Antigravity 2.0 工作區伴侶外掛，基於 Node.js 標準庫實作（無 `node_modules`，無需外部 LLM API Key）。僅在 Antigravity 以本目錄作為主要工作區時啟用；切換至其他開發專案時自動維持靜默，不注入上下文也不消耗額外 Token。
 
----
-
-## 核心模組一覽
-
-| 模組 | 功能定位與重點機制 | 核心實作 |
+| 模組 | 職責說明 | 核心實作 |
 | :--- | :--- | :--- |
-| **Gemini-chan 互動貓窩** | 依大心情與睡眠狀態自動切換 6 款 Q 版立繪；支援摸頭、餵小魚乾、逗貓棒、貼貼、打盹／叫醒與遞小紙條；採**羈絆進度（`Lv.X`）＋今日陪伴暖度**設計（無飢餓／精力倒扣懲罰，單日完成 3 種照護另有羈絆加成） | [core/nest.mjs](core/nest.mjs)<br>[sidecar/](sidecar/) |
-| **艾賓浩斯長期記憶** | 本地中文詞典切詞＋連續單字專名滑動窗（`補專名`）、說話尺 IDF 證據評分、鮮活度指數半衰期 $H = 30 \times (1 + 2I)$、15 輪防重複注入窗（`repeatWindow`）、`factKey` 事實鍵收斂與常駐檔案支援 | [core/memory.mjs](core/memory.mjs)<br>[core/tokenizer.mjs](core/tokenizer.mjs) |
-| **8 維情緒與內心獨白** | 免外部 API Key 混成評估：發生明確情緒觸動時由對話內模型呼叫 `mood_update`（含第一人稱「內心小劇場」`innerThought` 顯示於貓窩面板而不洗版對話），未呼叫則於 `Stop` Hook 自動本地語意兜底 | [core/mood.mjs](core/mood.mjs) |
-| **星汐記憶卡與 3D 星圖** | 八章結構 `記憶卡.md`＋`日記/YYYY-MM-DD.md`＋清潔標籤後的 `原始對話/`；支援每日定時／錯過自動補跑「拾星」、`.bak` 自動備份還原，以及含球心核心星、共詞橋與「年輪」時間軸的 **3D 記憶宇宙星圖** | [core/xingxi.mjs](core/xingxi.mjs) |
-| **自主預約＋波動搭話排程** | 透過 `speak_up_plan` 支援自然語言單次／多筆時刻表、固定時段 ± 隨機波動節律、自主勿擾窗（`silence`）與峰谷擲骰雙開關；具備對話進行中防打擾順延、安靜時段與打盹自動喚醒 | [core/speak-up.mjs](core/speak-up.mjs) |
-| **雙層隔離人設庫** | **「單一對話覆寫 ＞ 專案共用 ＞ 內建中性陪伴範本」**架構；支援側邊欄即時編修、改名、單筆啟停與 `.md` / `.txt` 匯入匯出（預設不附帶特定預設人設） | [core/persona.mjs](core/persona.mjs) |
-| **Telegram 雙向橋接** | 純 Node Long Polling（免公網 IP 與開埠）串接手機訊息、相簿圖片與檔案收發；預設開啟單一帳號鎖、`POST /api/telegram/test` 與外傳白名單防護、配對防暴力鎖定及電腦活躍自動靜音 | [core/telegram.mjs](core/telegram.mjs) |
+| **Cat Nest Sidecar** | 6 款情緒與睡眠立繪連動、照護互動、羈絆等級 `Lv.X` 與陪伴暖度 | [`core/nest.mjs`](core/nest.mjs), [`sidecar/`](sidecar/) |
+| **Fish Memory** | 本地分詞與專名滑動窗、IDF 證據評分、半衰期 $H = 30(1 + 2I)$、`factKey` 收斂 | [`core/memory.mjs`](core/memory.mjs), [`core/tokenizer.mjs`](core/tokenizer.mjs) |
+| **Mood Engine** | 對話內呼叫 `mood_update`（支援 `innerThought`）並於 `Stop` Hook 提供本地語意兜底 | [`core/mood.mjs`](core/mood.mjs) |
+| **Xingxi Archive** | 八章 `記憶卡.md`、每日日記、清潔對話切片、共詞橋與 3D 記憶星圖 | [`core/xingxi.mjs`](core/xingxi.mjs) |
+| **Speak-Up Scheduler** | `speak_up_plan` 預約排程／固定節律／自主勿擾（`silence`）與峰谷擲骰 | [`core/speak-up.mjs`](core/speak-up.mjs) |
+| **Persona Store** | 雙層作用域（`session > project`）與 `.md` / `.txt` 匯入匯出（預設為空） | [`core/persona.mjs`](core/persona.mjs) |
+| **Telegram Bridge** | 純 HTTPS Long Polling 雙向收發、`/bind` 配對鎖定與檔案外傳白名單 | [`core/telegram.mjs`](core/telegram.mjs) |
 
 ---
 
-## 快速安裝與啟用
+## 快速開始
 
 ### 環境需求
-- **Node.js `>= 20.0.0`**（純標準庫運行，無須安裝 `node_modules`）
-- **Antigravity 2.0**（支援 Plugin Lifecycle Hooks、MCP 與 Sidecar Aux Pane）
 
-### 步驟一：下載專案並註冊插件與 Sidecar
+- Node.js `>= 20.0.0`
+- Antigravity 2.0（支援 Workspace Plugins、MCP 與 Sidecar Aux Pane）
 
-#### 方式 A：Git 複製（推薦，後續更新最順暢）
+### 安裝與註冊
+
+#### 透過 Git 安裝（推薦）
+
 ```bash
 git clone https://github.com/Xuan52766/agy-gemini-chan.git
 cd agy-gemini-chan
 node scripts/setup-sidecar.mjs
 ```
 
-#### 方式 B：免 Git 下載壓縮檔（ZIP）
-1. 至 [Releases 頁面](https://github.com/Xuan52766/agy-gemini-chan/releases) 下載最新版本的原始碼 `.zip` 並解壓縮至固定資料夾（避免放進暫存目錄）。
-2. 在該資料夾開啟終端機執行：
-   ```bash
-   node scripts/setup-sidecar.mjs
-   ```
-   > **Windows 快捷提示**：若在 Windows PowerShell 執行 `npm run setup` 時遇到「系統停用執行指令碼（`npm.ps1`）」原則阻擋，請直接使用上方 `node scripts/setup-sidecar.mjs`，或於檔案總管直接**雙擊 [`scripts/setup.cmd`](./scripts/setup.cmd)** 完成註冊。
+#### 透過 Release 壓縮檔安裝（免 Git）
+
+從 [Releases](https://github.com/Xuan52766/agy-gemini-chan/releases) 下載最新原始碼 `.zip` 並解壓至固定目錄，於該目錄執行 `node scripts/setup-sidecar.mjs`（Windows 若受 PowerShell `ExecutionPolicy` 阻擋，可直接雙擊 [`scripts/setup.cmd`](scripts/setup.cmd)）。
 
 <details>
-<summary><code>setup-sidecar.mjs</code> 會設定哪些檔案？（點開檢視細節與進階參數）</summary>
+<summary><code>setup-sidecar.mjs</code> 註冊行為與 CLI 參數</summary>
 
-1. 自動將此資料夾的實際路徑同步至 `~/.gemini/config/plugins/gemini-cat/`（包含 `plugin.json`、`hooks.json`、`mcp_config.json`、`rules/AGENTS.md`、`skills/`、`logo.svg` 與 `sidecars/gemini_cat_nest/sidecar.json`），所有個人記憶與設定依然留在本資料夾 `data/` 內。
-2. 若舊版本曾安裝過獨立設定，會自動備份後切換為統一插件路徑，避免衝突。
-3. 常用參數：
-   - `--dry-run`：僅預覽寫入路徑與設定內容，不修改硬碟檔案。
-   - `--force`：搬移或重新命名專案資料夾後，備份舊設定 `.bak-*` 並強制覆寫為目前目錄路徑。
-   - `--config-dir <dir>`：自訂 `.gemini/config` 目錄（預設 `~/.gemini/config`）。
+- 將目前專案路徑同步寫入 `~/.gemini/config/plugins/gemini-cat/`（包含 `plugin.json`、`hooks.json`、`mcp_config.json`、`rules/AGENTS.md`、`skills/` 與 `sidecars/gemini_cat_nest/sidecar.json`），所有個人資料仍留在本專案 `data/` 下。
+- `--dry-run`：預覽寫入路徑與設定，不實際修改檔案。
+- `--force`：搬移或重新命名專案目錄後，備份舊設定 `.bak-*` 並更新路徑指向。
+- `--config-dir <dir>`：指定自訂的 `.gemini/config` 路徑。
 
 </details>
 
-### 步驟二：在 Antigravity 2.0 開啟工作區與貓窩面板
-1. 使用 **Antigravity 2.0** 將剛才下載的 `agy-gemini-chan` 資料夾開啟為**主要工作區（第 1 個資料夾）**。
-2. 於 **Customizations → Plugins** 確認 `Gemini-chan 貓窩伴侶`（`customization://gemini-cat`）已啟用，並從 **UI Extensions → Gemini-chan 貓窩**（或於對話中點擊 `[打開 Gemini-chan 貓窩](sidecar://gemini-cat/gemini_cat_nest/)`）喚出右側貓窩面板。
+### 啟用與初始化設定
+
+1. 在 Antigravity 2.0 將此目錄開啟為**第 1 個（主要）工作區**。
+2. 於 **Customizations → Plugins** 確認 [`Gemini-chan 貓窩伴侶`](customization://gemini-cat) 已啟用，並自 **UI Extensions**（或 [`sidecar://gemini-cat/gemini_cat_nest/`](sidecar://gemini-cat/gemini_cat_nest/)）開啟側邊欄。
+3. **設定人設**：為保持專案中立，`projectDefaultId` 預設為空；請先至貓窩「人設」分頁啟用內建中性範本或匯入 `.md` / `.txt` 角色設定。
+4. **啟用主動搭話**：`dryRun` 預設為 `true`；調整好時段後，至「搭話」分頁取消勾選試運行即可正式觸發主動推播。
+5. **設定 MCP 權限規則（建議）**：本插件提供 13 個本機伴侶 MCP 工具；建議在 Antigravity 權限規則將 `mcp(gemini-cat_companion/*)` 設為 `Allow`，避免日常使用或 Telegram 遠端對話期間遭到授權確認彈窗阻塞。
 
 ---
 
-## 初次使用必看 3 件事
+## 版本升級與資料保護
 
-為避免第一次裝好卻以為「沒有人設／不會搭話／一直跳確認視窗」，初次啟動請先確認以下三點：
+無論透過 Git 或 Release 壓縮檔安裝，皆可使用內建更新腳本直接升級至最新版，升級過程不會覆蓋個人資料或根目錄自訂規則：
 
-1. **先在側邊欄啟用或匯入人設（`projectDefaultId` 預設為空）**
-   為了確保開源專案乾淨中立，系統預設不預載特定角色人格。開啟右側貓窩 **「人設」** 分頁後，點擊 **「設為本專案」** 即可啟用內建中性陪伴範本，或立即新增／匯入你的 `.md` / `.txt` 角色設定檔。
-2. **主動搭話預設為「試運行（`dryRun: true`）」**
-   新安裝完成後，系統不會未經同意就突然在背景開口洗版。當你準備好啟用主動關心與定時提醒時，請至 **「搭話」** 分頁檢視時段設定並取消勾選「試運行模式」。
-3. **建議預先放行 `companion` MCP 工具權限（Telegram 遠端尤為重要）**
-   本插件共有 13 個本地伴侶 MCP 工具；若未將其加入自動允許清單，對話過程中（尤其當你透過 **Telegram 手機端** 遠端對話、人不在電腦螢幕前點擊確認時）會被授權彈窗阻塞等待確認。可在 Antigravity 權限設定為 `mcp(gemini-cat_companion/*)` 加入 `Allow` 規則（本 MCP 僅讀寫本專案伴侶資料與受白名單保護的 Telegram 發送，不包含任意系統指令執行）。
-
----
-
-## 一鍵安全更新（保留所有記憶與設定）
-
-不論你是從 Git 複製還是透過 ZIP 下載舊版，往後皆可用內建一鍵更新器升級至最新版，**不會遺失任何個人回憶、日記、人設、心情紀錄、貓窩羈絆進度或 Telegram 設定**。
-
-### 為什麼升級不會覆蓋你的資料？
-- **版控隔離**：`.gitignore` 已將 `data/*`（除了公開詞表 `data/dict/`）與根目錄自訂規則 `/AGENTS.md` 排除在外。
-- **升級前自動雙重備份**：`scripts/update.mjs` 開始更新前，會先將 `data/fish-memory`、`data/mood`、`data/nest`、`data/persona`、`data/speak-up`、`data/telegram`、`data/xingxi`、`data/runtime` 與根目錄 `AGENTS.md`（若存在）完整備份至：
-  `~/.gemini/config/backups/agy-gemini-chan/upgrade-<時間戳>/`（自動略過 `.lock` 與 `.tmp-*` 暫存檔，最多保留最新 5 份）。
-- **雙模式更新**：
-  - **Git 安裝**：自動執行 `git fetch --tags` 與 `git pull --ff-only`。若有本機未提交改動會主動停止提醒（可加 `--stash` 自動暫存後更新）。
-  - **ZIP 無 Git 安裝**：自動向 GitHub 查詢最新 Release（無 Release 時退回 `main` 分支）下載壓縮包，**只覆蓋程式、資源、Skills、說明文件與 `data/dict/`**，完全跳過所有個人資料夾。
-- **自動重整插件與測試驗證**：更新完成後會自動重新執行 `setupSidecar` 同步外掛清單，並跑完 `node --test tests/*.test.mjs` 驗證狀態。
-
-### 執行方式
-
-**方式 A｜終端機執行（跨平台／PowerShell 安全）**
 ```bash
+# 跨平台與 PowerShell 安全指令（Windows 亦可雙擊 scripts\update.cmd）
 node scripts/update.mjs
 ```
-> 亦可使用 `npm run update`（若未受限於 PowerShell 腳本原則）。
 
-**方式 B｜Windows 檔案總管雙擊**
-直接雙擊專案內的 **[`scripts/update.cmd`](./scripts/update.cmd)** 即可自動完成備份、更新與測試驗證。
+| 階段 | 機制說明 | 涵蓋範圍 |
+| :--- | :--- | :--- |
+| **版控隔離** | `.gitignore` 排除個人執行期資料與自訂規則 | `data/*`（僅保留 `data/dict/`）、`/AGENTS.md` |
+| **升級前備份** | 自動建立完整快照並排除 `.lock` / `.tmp-*`，最多保留 5 份 | `~/.gemini/config/backups/agy-gemini-chan/upgrade-<timestamp>/` |
+| **安全更新** | Git 版執行 `git pull --ff-only`；ZIP 版抓取最新 Release Tarball 僅覆蓋程式與詞表 | 保留 `data/fish-memory`、`mood`、`nest`、`persona`、`speak-up`、`telegram`、`xingxi`、`runtime` 與 `/AGENTS.md` |
+| **自動對齊與驗證** | 自動呼叫 `setupSidecar` 更新外掛路徑並執行完整測試套件 | `~/.gemini/config/plugins/gemini-cat/` 與 `tests/*.test.mjs` |
 
 <details>
-<summary>更新器進階參數（<code>--dry-run</code>、<code>--stash</code>、<code>--force</code> 等）</summary>
+<summary><code>update.mjs</code> 進階參數</summary>
 
-| 參數 | 說明 |
+| 參數 | 作用 |
 | :--- | :--- |
-| `--dry-run` / `-n` | 僅檢查目前版本、會使用的更新模式與備份目錄，不寫入任何檔案 |
-| `--stash` | （僅 Git 模式）若程式碼曾在本機修改，自動執行 `git stash push` 暫存後再更新 |
-| `--force` / `-f` | （ZIP 模式）即使版本相同仍強制重新下載最新版覆蓋程式檔，並強制同步 Sidecar 路徑 |
-| `--skip-tests` | 更新後略過自動化測試（預設會自動執行 `tests/*.test.mjs` 確認相容） |
-| `--config-dir <dir>` | 指定自訂的 `.gemini/config` 目錄（預設 `~/.gemini/config`） |
+| `--dry-run`, `-n` | 僅顯示更新模式與備份路徑，不寫入任何檔案 |
+| `--stash` | Git 模式下若有未提交程式碼修改，自動 `git stash push` 後再更新 |
+| `--force`, `-f` | ZIP 模式強制重新下載最新 Release，並強制同步 Sidecar 路徑 |
+| `--skip-tests` | 升級完成後略過 `node --test tests/*.test.mjs` 驗證 |
+| `--config-dir <dir>` | 指定自訂的 `.gemini/config` 目錄 |
 
 </details>
 
-### 更新完成後的最後 2 個小動作
-1. **重開側邊欄**：在 Antigravity 右側 **UI Extensions** 將「Gemini-chan 貓窩」關掉再重新開啟（或重載視窗），讓 Sidecar 背景行程切換為新版程式。
-2. **（選用）更新抽屜提示詞**：若你先前在「心情」或「搭話」抽屜曾按下手動儲存自訂提示詞，系統會優先保留你的自訂內容而不主動覆寫；若想改用新版規則提示，於抽屜點擊 **「恢復預設」** 即可。
+升級完成後，請於 Antigravity **UI Extensions** 將「Gemini-chan 貓窩」關掉重開以重新啟動 Sidecar 背景行程；若曾於抽屜手動儲存自訂提示詞，系統會保留你的自訂內容，可視需要於抽屜點擊「恢復預設」。
 
 ---
 
-## 對話指令與 MCP 工具一覽
-
-### 內建 Slash Skills
-- `/xingxi`：通讀星汐八章記憶卡、檢索過往日記或執行今日對話拾星歸檔。
-- `/cat-nest`：查看貓窩即時狀態、心情維度與羈絆暖度，或在對話中進行照護／睡眠互動。
-
-### 原生 MCP 工具（`gemini-cat_companion`，共 13 個）
-
-| 工具名稱 | 用途說明 |
-| :--- | :--- |
-| `remember` | 將值得長期保留的事實、偏好與約定寫入記憶庫（支援 `importance`、`factKey`、`supersedes`） |
-| `recall` | 依關鍵句主動檢索長期記憶庫（不改動被召回條目的強化次數） |
-| `memory_forget` | 將指定 ID 的舊記憶標記為「已被取代」以停止召回（仍保留供追溯復原） |
-| `xingxi` | 通讀完整 `記憶卡.md` 八章內容並自動檢查重複章節 |
-| `xingxi_read` | 檢索記憶卡、指定日期日記（`date`）或全文搜尋（`keyword` / `file`） |
-| `xingxi_append` | 追加長期要點至 `記憶卡.md` 第 1～8 章（自動去重備份；第 2 章支援 `wholeChapter` 防縮水合併） |
-| `xingxi_diary` | 寫入或追加指定日期日記（`日記/YYYY-MM-DD.md`）並推進整理進度 |
-| `xingxi_pickup` | 切出指定日期原始對話素材與記憶／心情摘要，供拾星寫入記憶卡或日記 |
-| `mood_status` | 讀取大心情分數、8 維情緒、貓窩羈絆進度與現行人設摘要 |
-| `mood_update` | 依當輪真實互動記錄心情起伏、8 維情緒與第一人稱 `innerThought`（僅顯示於貓窩，不印入對話） |
-| `nest_interact` | 在對話中執行照護互動或切換睡眠狀態（`pet` / `feed` / `play` / `comfort` / `nap` / `sleep` / `wake`） |
-| `speak_up_plan` | 排定單次／多筆自然語言預約（`autonomous` / `reminder`）、固定節律 ± 波動、自主勿擾（`silence`）或調整開關 |
-| `telegram_send` | 主動透過已綁定的 Telegram Bot 傳送文字、圖片或受白名單保護的本機檔案給主人 |
-
----
-
-## Telegram 雙向橋接與安全防護
-
-- **純本機 Long Polling**：由 Sidecar 背景服務主動向 `api.telegram.org` 長輪詢，**不須公網 IP、不需申請網域或 Webhook 反向代理**，關機或關閉插件即停止。
-- **綁定安全與防暴力鎖定**：
-  - 側邊欄產生 6 碼隨機配對碼（`crypto.randomInt`），在手機端傳送 `/bind <配對碼>` 完成綁定；同一 `chatId` 失敗 5 次會鎖定 15 分鐘。
-  - **單一帳號綁定鎖（`lockSingleChat`，預設開啟）**：完成首次綁定後會阻擋任何第二支 Telegram 帳號加入，且測試端點 `POST /api/telegram/test` 在鎖定後只允許對已綁定對象傳送純文字測試。
-- **防注入與防敏感檔案外洩**：
-  - 外部 Telegram 來訊會自動剝除／中和偽造內部系統標記（`<SYSTEM_MESSAGE>`、`[SPEAK_UP_INTERNAL]` 等）。
-  - `telegram_send` 與回覆附檔皆經過 `isAllowedTelegramSendPath`＋`realpathSync.native` 實體路徑解析檢查，嚴格封鎖 `.env`、`*.pem` / `*.key` / `id_rsa*` / `credentials*.json`、`data/**/config.json`、`runtime/`、`.git/` 與任何 symlink / NTFS junction 跳板路徑。
-- **電腦活躍自動靜音**：你在 Antigravity 桌面視窗剛聊過天時，預設於設定窗期（`15` 分鐘）內自動以 `skip` 或 `silent` 靜音非手機端觸發的鏡像／推播通知；從 Telegram 發問的回覆則永遠即時回傳。
-
----
-
-## 運作架構與低 Token 設計
+## 系統架構與低 Token 設計
 
 ```mermaid
 flowchart LR
-  subgraph Antigravity["Antigravity 2.0 對話生命週期"]
-    SS["SessionStart Hook<br/>初始化星汐檔與登記對話"] --> PI["PreInvocation Hook<br/>第 1 輪載入人設 / 記憶卡 / 近 3 日記；後續僅差量注入"]
-    PI --> LLM["Agent 回覆與 13 項 MCP 工具"]
-    LLM --> PT["PostToolUse Hook<br/>同步貓窩即時氣泡"]
-    LLM --> ST["Stop Hook<br/>未呼叫 mood_update 時本地情緒兜底＋TG Outbox 投遞"]
+  subgraph Host["Antigravity 2.0 Lifecycle"]
+    SS["SessionStart Hook"] --> PI["PreInvocation Hook"]
+    PI -->|"Turn 1 / 狀態變動差量注入"| LLM["Agent + 13 MCP Tools"]
+    LLM --> PT["PostToolUse Hook"]
+    LLM --> ST["Stop Hook"]
   end
-  subgraph Sidecar["右側貓窩 Sidecar 面板（Node Web UI）"]
-    UI["Q 版立繪 / 3D 星圖 / 照護互動 / 排程器 / Telegram 橋接"]
+  subgraph Sidecar["Node Sidecar Aux Pane & Daemon"]
+    UI["Cat Nest UI / 3D Star Map / Scheduler"]
+    TG["Telegram Long Polling Worker"]
   end
-  UI <-->|"data/*（跨行程檔案鎖 ＋ 原子寫入）"| Antigravity
+  Host <-->|"withFileLockSync / 原子寫入 (data/*)"| Sidecar
 ```
 
-- **首輪完整啟動、後續按需差量**：人設全文、`記憶卡.md`（上限 4,200 字）、近 3 日日記（上限 2,400 字）與靜態指引僅在新對話第 1 輪或切換人設／編輯提示詞時由 `PreInvocation` 注入一次；平常對話若無新命中記憶、顯著心情波動或待傳小紙條，`PreInvocation` 回傳 `{}`（**0 Token 注入**）。
-- **工具續行自動跳過**：回合內呼叫 MCP 工具後的模型續行階段會由 `inspectTranscriptTail`（並自動剝除 Antigravity `<SYSTEM_MESSAGE>` 外殼）精準跳過，不重複累積系統提醒。
-- **並發寫入零競態**：Hooks、Sidecar 輪詢與每 60 秒排程共同讀寫 `data/` 時，全程透過 `withFileLockSync` / `updateJsonLocked` 獨佔鎖與 Windows 重試機制原子更新（`core/storage.mjs`）。
-
-更多公式與參數細節請查閱 **[使用手冊.md](./使用手冊.md)**。
+- **單次基底與差量注入**：人設全文、`記憶卡.md`（上限 4,200 字）、近 3 日日記（上限 2,400 字）與規則指引僅於新對話第 1 輪或設定變更時由 `PreInvocation` 注入；其餘輪次無新召回記憶或狀態變動時回傳 `{}`（0 Token）。
+- **工具續行過濾**：`inspectTranscriptTail` 與 `unwrapSidecarSystemEnvelope` 自動識別回合中 MCP 工具續行及 Antigravity `<SYSTEM_MESSAGE>` 外殼，避免重複注入系統提示。
+- **跨行程獨佔檔案鎖**：Hooks、Sidecar Web UI 與 60 秒背景排程透過 `withFileLockSync` / `updateJsonLocked` 與 Windows atomic rename 重試保護併發狀態寫入（[`core/storage.mjs`](core/storage.mjs)）。
 
 ---
 
-## 開發、測試與常見問題（FAQ）
+## MCP 工具與 Skills
+
+- **Slash Skills**：`/xingxi`（記憶卡總覽、日記檢索與拾星歸檔）、`/cat-nest`（查看貓窩即時狀態、照護與睡眠切換）。
+- **Stdio MCP Server（`gemini-cat_companion`）**：
+
+<details open>
+<summary>13 項原生 MCP 工具列表</summary>
+
+| 類別 | 工具名稱 | 功能摘要 |
+| :--- | :--- | :--- |
+| **長期記憶** | `remember` | 寫入長期記憶，支援 `importance`、`tags`、`factKey`、`supersedes` |
+| | `recall` | 依查詢句主動檢索記憶庫，不增加強化次數 |
+| | `memory_forget` | 將指定 ID 標記為已被取代以停用召回（資料保留可復原） |
+| **星汐系統** | `xingxi` | 通讀完整八章 `記憶卡.md` 並檢查重複章節 |
+| | `xingxi_read` | 檢索記憶卡索引、指定日期日記（`date`）或關鍵詞搜尋（`keyword`） |
+| | `xingxi_append` | 追加長期要點至第 1–8 章（自動去重；第 2 章支援 `wholeChapter` 防縮水） |
+| | `xingxi_diary` | 寫入或追加 `日記/YYYY-MM-DD.md` 並推進整理進度 |
+| | `xingxi_pickup` | 切出指定日期原始對話素材與摘要供歸檔寫入 |
+| **心情與貓窩** | `mood_status` | 讀取大心情分數、8 維情緒、羈絆進度與現行人設摘要 |
+| | `mood_update` | 更新本輪大心情、8 維情緒與第一人稱 `innerThought` |
+| | `nest_interact` | 在對話中執行照護互動或作息切換（`pet`/`feed`/`play`/`comfort`/`nap`/`sleep`/`wake`） |
+| **排程與外部** | `speak_up_plan` | 設定單次／批次預約、`add_routine`、自主勿擾（`silence`）與模組開關 |
+| | `telegram_send` | 主動透過已綁定 Telegram Bot 發送文字、圖片或白名單內檔案 |
+
+</details>
+
+---
+
+## Telegram 橋接與安全模型
+
+- **純出站 Long Polling**：由 Sidecar 主動長輪詢 `api.telegram.org`，不需公網 IP、Port Forwarding 或反向代理。
+- **綁定保護與速率限制**：配對碼由 `crypto.randomInt` 產生，單一來源 `/bind` 連續失敗 5 次鎖定 15 分鐘；預設啟用 `lockSingleChat`，首次綁定後阻擋第二支 Telegram 帳號接入，且 `POST /api/telegram/test` 在鎖定後僅限對已綁定對象傳送純文字測試。
+- **輸入中和與檔案路徑驗證**：`neutralizeTelegramMarkers` 會跳脫外部訊息夾帶的內部系統標籤；`telegram_send` 與回覆附檔皆經 `realpathSync.native` 實體路徑解析（`isAllowedTelegramSendPath`），封鎖 `.env`、`*.pem` / `*.key`、`id_rsa*`、`credentials*.json`、`data/**/config.json`、`runtime/`、`.git/` 與任何 symlink / NTFS junction 跳脫。
+- **桌面活躍自動靜音**：Antigravity 桌面端對話進行後的設定窗期內（預設 15 分鐘），非 Telegram 觸發的推播會依設定自動切換為 `skip` 或 `silent`；直接來自 Telegram 的提問回覆永遠即時傳回。
+
+---
+
+## 目錄結構與測試
+
+```text
+agy-gemini-chan/
+├── .agents/plugins/gemini-cat/   # Antigravity Plugin 清單、Hooks、MCP、Skills 與 Sidecar 設定
+├── assets/geminichan/            # Q 版情緒與睡眠立繪資源
+├── core/                         # 領域模組（記憶、心情、星汐、搭話、人設、貓窩、Telegram、跨模組橋接）
+├── hooks/                        # SessionStart / PreInvocation / PostToolUse / Stop 實作
+├── mcp/                          # Stdio JSON-RPC 2.0 MCP Server（13 tools）
+├── scripts/                      # setup-sidecar.mjs / update.mjs 與 Windows .cmd 啟動檔
+├── sidecar/                      # Node HTTP Server 與貓窩 Aux Pane 前端
+├── tests/                        # node:test 單元與整合測試套件
+└── data/                         # 僅追蹤 data/dict/；個人執行期狀態由 .gitignore 排除
+```
+
+執行完整測試套件：
 
 ```bash
-# 執行完整自動化單元與整合測試（23 項測試套件）
 node --test tests/*.test.mjs
-# 若未受 PowerShell 腳本限制，亦可使用：
+# 若 PowerShell 未封鎖執行原則亦可使用：
 npm test
 ```
 
-<details>
-<summary><strong>Q1：同時開啟多個專案資料夾時，伴侶模式會誤觸嗎？</strong></summary>
+---
 
-不會。`isProjectWorkspaceActive` 僅檢查目前工作區列表的**第 1 個（主要）工作區**是否為 `agy-gemini-chan`（僅當工作區列表為空時才參考 `cwd`）。當你把此專案掛載為第 2 個參考資料夾、或是切換到其他開發專案時，Hooks 與 Sidecar 會完全靜默待機（0 規則注入、0 Token 消耗）。
-</details>
+## 故障排除
 
-<details>
-<summary><strong>Q2：放在硬碟裡的大量歷史日記與對話切片會一直吃掉 Token 嗎？</strong></summary>
-
-不會。歷史日記、原始對話切片與升級備份平時只保存在硬碟中（0 Token）；僅新對話首輪啟動注入時會讀取記憶卡與最近 3 天日記（受字數上限約束），更早以前的紀錄只在呼叫 `xingxi_read` 或 `recall` 主動查詢時才會按需讀取。
-</details>
-
-<details>
-<summary><strong>Q3：搬移或重新命名專案資料夾後該怎麼修復？</strong></summary>
-
-本專案所有核心模組皆從專案根目錄動態解析相對路徑，資料與設定不綁死舊路徑；搬移或改名後，只需在新的資料夾下執行一次 `node scripts/setup-sidecar.mjs --force`（或雙擊 `scripts\setup.cmd`）更新 Sidecar 指向即可。
-</details>
-
-<details>
-<summary><strong>Q4：萬一升級後我想回溯升級前的原始資料怎麼辦？</strong></summary>
-
-每次執行 `node scripts/update.mjs`（含 `scripts\update.cmd`）更新前，系統都會先在 `~/.gemini/config/backups/agy-gemini-chan/upgrade-<YYYYMMDD-HHMMSS>/` 建立完整個人資料與 `AGENTS.md` 快照（預設保留最近 5 次）。需要時可直接比對或還原該備份內的檔案。
-</details>
+- **開啟多個工作區時是否會誤觸或污染其他專案？**
+  不會。`isProjectWorkspaceActive` 僅檢查 `workspaceList[0]`（第 1 個主要工作區）；當本專案作為輔助參考資料夾或切換至其他專案時，所有 Hooks 與 Sidecar 會維持 0 Token 靜默待機。
+- **搬移或重新命名專案資料夾後 Sidecar 無法載入？**
+  於新目錄執行 `node scripts/setup-sidecar.mjs --force`（或雙擊 `scripts\setup.cmd`）更新外掛指向即可。
+- **升級後需要比對或還原升級前的資料？**
+  前往 `~/.gemini/config/backups/agy-gemini-chan/upgrade-<timestamp>/` 即可取得升級前建立的完整 `data/` 與 `AGENTS.md` 快照。
+- **長期累積的日記與對話紀錄會不斷拉高 Token 消耗嗎？**
+  不會。歷史日記、原始切片與備份僅保存於本機硬碟，平時不進入上下文；僅首輪啟動會載入受長度上限約束的記憶卡（4,200 字）與近 3 日日記（2,400 字）。
 
 ---
 
-## 致謝與授權聲明
+## 致謝與授權
 
-本專案遵循並完整保留 **[Yuuyuko-uu 插件許可 1.2](./LICENSE)** 條款公開分享，特此感謝以下原作者與上游專案：
+本專案遵循並完整保留 **[Yuuyuko-uu 插件許可 1.2](./LICENSE)** 公開衍生（原 `dsh-xingxi` 另附 `1.1` 版條款），上游引用專案如下：
 
-1. **[Yuuyuko-uu](https://github.com/Yuuyuko-uu)** 開發之 DSH 伴侶插件系列（**[Yuuyuko-uu 插件許可 1.2](./LICENSE)**；原 `dsh-xingxi` 倉庫另附 `1.1` 版許可）：
-   - 長期記憶：[`dsh-fish-memory`](https://github.com/Yuuyuko-uu/dsh-fish-memory)（對齊至 `v1.6.3`）
-   - 心情引擎：[`dsh-feiyu-mood`](https://github.com/Yuuyuko-uu/dsh-feiyu-mood)（對齊至 `v0.9.6`）
-   - 星汐記憶卡與日記星圖：[`dsh-xingxi`](https://github.com/Yuuyuko-uu/dsh-xingxi)（對齊至 `v0.3.8`）
-   - 主動搭話：[`dsh-speak-up`](https://github.com/Yuuyuko-uu/dsh-speak-up)（對齊至 `v0.3.3`）
-2. **[huaizhuanghub](https://github.com/huaizhuanghub)** 開發之人設管理插件 **[`dsh-persona-dafeiyu`](https://www.npmjs.com/package/dsh-persona-dafeiyu)**（MIT License）——參考並移植其雙層作用域人設機制。
-3. 中文分詞詞表 [`data/dict/`](data/dict/) 沿用 **[jieba](https://github.com/fxsjy/jieba)** 詞典（MIT License，詳見 [data/dict/LICENSE-dict.txt](data/dict/LICENSE-dict.txt)）。
+| 上游元件 | 原作者 | 原始倉庫 / 套件 | 對齊版本 / 授權 |
+| :--- | :--- | :--- | :--- |
+| 長期記憶 | Yuuyuko-uu | [`Yuuyuko-uu/dsh-fish-memory`](https://github.com/Yuuyuko-uu/dsh-fish-memory) | `v1.6.3` · [Yuuyuko-uu 1.2](./LICENSE) |
+| 心情引擎 | Yuuyuko-uu | [`Yuuyuko-uu/dsh-feiyu-mood`](https://github.com/Yuuyuko-uu/dsh-feiyu-mood) | `v0.9.6` · [Yuuyuko-uu 1.2](./LICENSE) |
+| 星汐記憶卡與星圖 | Yuuyuko-uu | [`Yuuyuko-uu/dsh-xingxi`](https://github.com/Yuuyuko-uu/dsh-xingxi) | `v0.3.8` · Yuuyuko-uu 1.1 / 1.2 |
+| 主動搭話 | Yuuyuko-uu | [`Yuuyuko-uu/dsh-speak-up`](https://github.com/Yuuyuko-uu/dsh-speak-up) | `v0.3.3` · [Yuuyuko-uu 1.2](./LICENSE) |
+| 雙層作用域人設 | huaizhuanghub | [`dsh-persona-dafeiyu`](https://www.npmjs.com/package/dsh-persona-dafeiyu) | MIT License |
+| 中文分詞詞表 | fxsjy | [`jieba`](https://github.com/fxsjy/jieba)（[`LICENSE-dict.txt`](data/dict/LICENSE-dict.txt)） | MIT License |
 
 <details>
-<summary>相較原版 DSH 插件之完整平台移植與改動說明（依許可條款第 5 條第 c 項列明）</summary>
+<summary>完整平台移植與修改明細（依許可條款第 5 條第 c 項列明）</summary>
 
-1. **運行平台重構**：由 DSH / Cordis 插件架構移植為 Antigravity 2.0 原生 Plugin（`hooks.json`、Stdio MCP Server、Skills 與 `sidecar_sdk` Web UI），並以差量注入機制（`injectedPersonaHash`＋`inspectTranscriptTail`＋`unwrapSidecarSystemEnvelope`）避免在 Antigravity 對話紀錄中重複累積系統上下文。
-2. **單一工作區嚴格隔離**：將原版全域人格收斂為「單一對話覆寫 ＞ 專案共用」雙層架構，並在 Hooks、MCP 與 Sidecar 推播入口實作主要工作區與已登記對話驗證（[core/bridge.mjs](core/bridge.mjs)、[core/storage.mjs](core/storage.mjs)）。
-3. **對話內零外部 API 心情評分**：改由現行對話內模型呼叫 `mood_update`（支援第一人稱 `innerThought`）搭配 `Stop` Hook 本地語意分析兜底，無須額外申請外部 LLM API Key。
-4. **新增「Gemini-chan 貓窩」視覺陪伴與 Telegram 雙向橋接**：新增 6 款 Q 版情緒／打盹立繪連動、羈絆等級與今日陪伴暖度累積、打盹／喚醒同步、跨行程檔案鎖、Telegram Long Polling 安全遠端橋接，以及非破壞性安裝腳本（[scripts/setup-sidecar.mjs](scripts/setup-sidecar.mjs)）與自動備份無損更新器（[scripts/update.mjs](scripts/update.mjs)）。
+1. **運行平台重構**：由 DSH / Cordis 插件架構移植為 Antigravity 2.0 原生 Plugin（`hooks.json`、Stdio MCP Server、Skills 與 `sidecar_sdk` Web UI），並以 `injectedPersonaHash`＋`inspectTranscriptTail`＋`unwrapSidecarSystemEnvelope` 實作差量注入。
+2. **單一工作區隔離與雙層人設**：收斂全域切換設計為「單一對話覆寫 ＞ 專案共用」雙層架構，於 Hooks、MCP 與 Sidecar 推播入口實作主要工作區與已登記對話驗證（[`core/bridge.mjs`](core/bridge.mjs)、[`core/storage.mjs`](core/storage.mjs)）。
+3. **對話內零外部 API 心情評估**：改由現行對話內模型呼叫 `mood_update`（支援第一人稱 `innerThought`）搭配 `Stop` Hook 本地語意分析兜底。
+4. **擴充伴侶體驗與工程維運**：新增「Gemini-chan 貓窩」Q 版情緒立繪、羈絆暖度系統、跨行程獨佔檔案鎖、Telegram Long Polling 安全橋接，以及非破壞性安裝腳本（[`scripts/setup-sidecar.mjs`](scripts/setup-sidecar.mjs)）與自動備份無損更新器（[`scripts/update.mjs`](scripts/update.mjs)）。
 
 </details>
