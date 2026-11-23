@@ -388,6 +388,30 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
     const cappedCtx = buildSessionStartupContext(root, { maxCardChars: 1200 });
     assert.match(cappedCtx, /請呼叫 `xingxi` 讀取全文/);
     assert.doesNotMatch(cappedCtx, /尾巴標記Ch7/);
+
+    // 7-day full diaries + sliding keyword index with strict size cap
+    for (let dayNum = 15; dayNum <= 24; dayNum++) {
+      const dd = `2026-11-${String(dayNum).padStart(2, '0')}`;
+      const body = dayNum === 16
+        ? '這天去買了珍珠鮮奶茶還去看了棒球比賽，今天心情真不錯。\n關鍵詞：棒球比賽、珍珠鮮奶茶'
+        : dayNum === 17
+          ? `這天中午點了摩斯漢堡等超久，今天也在貓窩陪他聊天。${'補充生活瑣事記錄字數。'.repeat(18)}`
+          : `這天也是平常相處的日常紀錄，今天在貓窩聊天喝茶。${'補充生活瑣事記錄字數。'.repeat(18)}`;
+      appendDiary({ date: dd, entry: body }, root);
+    }
+    const sevenDayCtx = buildSessionStartupContext(root);
+    assert.match(sevenDayCtx, /最近 7 天/);
+    assert.match(sevenDayCtx, /### 日記 2026-11-24/);
+    assert.match(sevenDayCtx, /### 日記 2026-11-18/);
+    assert.doesNotMatch(sevenDayCtx, /### 日記 2026-11-17/);
+    assert.match(sevenDayCtx, /更早日記關鍵字索引/);
+    assert.match(sevenDayCtx, /2026-11-16：棒球比賽、珍珠鮮奶茶/);
+    assert.match(sevenDayCtx, /2026-11-17：.*摩斯漢堡/);
+
+    // Index strictly respects maxOlderIndexChars and summarizes older dates
+    const boundedCtx = buildSessionStartupContext(root, { maxDiaryDays: 3, olderIndexDays: 10, maxOlderIndexChars: 95 });
+    assert.match(boundedCtx, /更早日記關鍵字索引/);
+    assert.match(boundedCtx, /更早還有 \d+ 天日記：2026-11-14 ~ 2026-11-/);
   });
 });
 

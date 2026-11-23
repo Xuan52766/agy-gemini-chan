@@ -1217,12 +1217,22 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
   }
 
   if (scheduleMode === 'diary_only') {
-    parts.push('', '歸檔原則：不要重複呼叫 `remember`；只把今日日常細節與情緒脈絡寫進日記。');
+    parts.push(
+      '',
+      '歸檔原則：不要重複呼叫 `remember`；只把今日日常細節與情緒脈絡寫進日記（日記結尾可附一行 `關鍵詞：詞1、詞2、詞3` 方便日後索引）。',
+    );
+  } else if (scheduleMode === 'card_only') {
+    parts.push(
+      '',
+      '歸檔原則：',
+      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章只收「過了一週再看還有價值」的重點，這次不必生成日記。',
+      '- 性格與說話演進（不刪舊記憶、勿推翻核心人設）：回顧今日互動，若有長期成立的新偏好、吐槽點、相處共識或反應習慣，可帶日期追加進第 1 或第 7 章；若有特別傳神的新口癖或代表台詞，可用 `xingxi_append`（`chapter: "2", wholeChapter: true`）適度更新第 2 章原話照抄（上限 10 句，保留既有準則）；沒有明確成長變化就維持原樣、不要硬湊。',
+    );
   } else {
     parts.push(
       '',
       '歸檔原則：',
-      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章只收「過了一週再看還有價值」的重點，流水過程寫進日記。',
+      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章只收「過了一週再看還有價值」的重點，流水過程寫進日記（日記結尾可附一行 `關鍵詞：詞1、詞2、詞3` 方便日後索引）。',
       '- 性格與說話演進（不刪舊記憶、勿推翻核心人設）：回顧今日互動，若有長期成立的新偏好、吐槽點、相處共識或反應習慣，可帶日期追加進第 1 或第 7 章；若有特別傳神的新口癖或代表台詞，可用 `xingxi_append`（`chapter: "2", wholeChapter: true`）適度更新第 2 章原話照抄（上限 10 句，保留既有準則）；沒有明確成長變化就維持原樣、不要硬湊。',
     );
   }
@@ -1317,11 +1327,129 @@ export async function executeXingxiPickup({
   return { action: 'dispatched', date: targetDateStr, catchUp: isCatchUp, mode: effectiveMode, material, prompt, cfg: freshCfg };
 }
 
+const DIARY_SPLIT_CHARS = '玄我他她的了是在有和跟與及或就都也還又被把將給對向往從到去來說想問聽看寫讀吃喝玩睡買等著過完好沒不很太真只才卻但而這那其個種些裡中內外上下前後早午晚一兩二三四五六七八九十百半多幾每再已正先並更於為以所當隻條封場杯碗件份句篇段本能會要得讓令使';
+const DIARY_SPLIT_RE = new RegExp(`[${DIARY_SPLIT_CHARS}]+`, 'g');
+const DIARY_STOP_WORDS = new Set([
+  '今天', '明天', '昨天', '昨晚', '凌晨', '早上', '上午', '中午', '下午', '傍晚', '晚上', '半夜',
+  '剛才', '後來', '結果', '已經', '因為', '雖然', '如果', '而且', '還是', '原本', '竟然', '順便',
+  '還好', '差點', '總算', '稍微', '一直', '終於', '其實', '突然', '發現', '告訴', '約好', '提到',
+  '聊到', '跑去', '回來', '睡前', '醒來', '出門', '睡著', '睡死', '小時', '分鐘', '時候', '事情',
+  '自己', '什麼', '怎麼', '為什麼', '這樣', '那樣', '開始', '結束', '繼續', '準備', '決定', '覺得',
+  '感覺', '開心', '高興', '舒服', '溫暖', '難過', '緊張', '日記', '更新', '根本', '比較', '容易',
+  '特別', '幾乎', '真的', '以為', '讀完', '回寄', '陪著', '陪睡',
+]);
+
+function extractExplicitDiaryKeywords(rawText) {
+  const m = /^(?:關鍵詞|关键词|標籤|标签)[:：]\s*(.+)$/m.exec(String(rawText || ''));
+  if (!m) return [];
+  return m[1]
+    .split(/[、,，;；|]+/)
+    .map((s) => s.replace(/^[#*`\s]+|[`*.\s]+$/g, '').trim())
+    .filter((s) => s.length >= 2 && s.length <= 20)
+    .slice(0, 5);
+}
+
+function extractDiaryKeywordCandidates(rawText) {
+  const txt = String(rawText || '')
+    .replace(/^#\s*\d{4}-\d{2}-\d{2}.*$/gm, '')
+    .replace(/^(?:關鍵詞|关键词|標籤|标签)[:：].*$/gm, '')
+    .replace(/`[^`]+`/g, ' ');
+  const terms = new Map();
+  const boost = (w, v) => terms.set(w, (terms.get(w) || 0) + v);
+
+  for (const m of txt.matchAll(/《([^》\n]{2,14})》/g)) {
+    const w = m[1].trim();
+    if (!DIARY_STOP_WORDS.has(w)) boost(w, 5);
+  }
+  for (const m of txt.matchAll(/「([^」\[\]\n]{2,8})」/g)) {
+    const w = m[1].trim();
+    if (!DIARY_STOP_WORDS.has(w) && !/[哈嗯啊哼哇！!？?…~]/.test(w)) boost(w, 2.5);
+  }
+  const cleaned = txt.replace(/[《》「」`*_#>]/g, ' ');
+  for (const m of cleaned.matchAll(/[A-Za-z][A-Za-z0-9-]{2,16}/g)) {
+    const w = m[0];
+    if (!/^(md|json|txt)$/i.test(w)) boost(w, 2.5);
+  }
+  for (const run of cleaned.match(/[\u4e00-\u9fa5]+/g) || []) {
+    for (const chunk of run.split(DIARY_SPLIT_RE)) {
+      if (chunk.length < 2 || DIARY_STOP_WORDS.has(chunk)) continue;
+      if (chunk.length <= 5) {
+        boost(chunk, 1.8);
+      } else {
+        for (const sub of [chunk.slice(0, 4), chunk.slice(-4)]) {
+          if (sub.length >= 2 && !DIARY_STOP_WORDS.has(sub)) boost(sub, 1.1);
+        }
+      }
+    }
+  }
+  return terms;
+}
+
+/**
+ * Builds bounded per-day keyword index lines for diaries outside the full-text window,
+ * preferring explicit `關鍵詞：` tags and falling back to cross-diary TF-IDF terms.
+ */
+function buildOlderDiaryIndexLines(allDiaries, olderDiaries, { maxIndexChars = 800, maxPerDay = 4 } = {}) {
+  if (!olderDiaries.length || maxIndexChars <= 0) return { lines: [], indexedCount: 0 };
+
+  const docs = allDiaries.map((d) => ({
+    date: d.date,
+    explicit: extractExplicitDiaryKeywords(d.text),
+    cands: extractDiaryKeywordCandidates(d.text),
+  }));
+  const df = new Map();
+  for (const doc of docs) {
+    for (const w of doc.cands.keys()) df.set(w, (df.get(w) || 0) + 1);
+  }
+  const docByDate = new Map(docs.map((doc) => [doc.date, doc]));
+  const N = Math.max(1, docs.length);
+  const maxAllowedDf = Math.max(2, Math.floor(N * 0.45));
+
+  const lines = [];
+  let usedChars = 0;
+  let indexedCount = 0;
+  for (const d of olderDiaries) {
+    const doc = docByDate.get(d.date);
+    if (!doc) continue;
+    let picked = doc.explicit;
+    if (!picked.length) {
+      const ranked = [...doc.cands.entries()]
+        .filter(([w]) => (df.get(w) || 0) <= maxAllowedDf)
+        .map(([w, wgt]) => [w, wgt * Math.log((N + 1) / ((df.get(w) || 0) + 0.5)) * (w.length >= 3 ? 1.25 : 1)])
+        .sort((a, b) => b[1] - a[1]);
+      picked = [];
+      for (const [w] of ranked) {
+        if (picked.some((p) => p.includes(w) || w.includes(p))) continue;
+        picked.push(w);
+        if (picked.length >= maxPerDay) break;
+      }
+      if (!picked.length) {
+        picked = [...doc.cands.keys()].slice(0, maxPerDay);
+      }
+    }
+    const line = `- ${d.date}：${picked.join('、') || '日常記事'}`;
+    if (usedChars + line.length + 1 > maxIndexChars) break;
+    lines.push(line);
+    usedChars += line.length + 1;
+    indexedCount++;
+  }
+  return { lines, indexedCount };
+}
+
 /**
  * Builds startup memory context for `SessionStart` so every new conversation inside
- * `gemini_cat` inherits Xingxi's Memory Card + recent N days of diaries + core promises.
+ * `gemini_cat` inherits Xingxi's Memory Card + recent N days of diaries + bounded keyword index.
  */
-export function buildSessionStartupContext(root, { maxCardChars = 20000, maxDiaryDays = 3, maxDiaryChars = 2400 } = {}) {
+export function buildSessionStartupContext(
+  root,
+  {
+    maxCardChars = 20000,
+    maxDiaryDays = 7,
+    maxDiaryChars = 10000,
+    olderIndexDays = 23,
+    maxOlderIndexChars = 800,
+  } = {},
+) {
   const { cardPath, ledgerPath } = ensureXingxiArchive(root);
   const files = listXingxiFiles(root);
   const cardText = readTextSafe(cardPath, '');
@@ -1380,17 +1508,29 @@ export function buildSessionStartupContext(root, { maxCardChars = 20000, maxDiar
   if (diaryFiles.length) {
     const recentParts = [];
     let charsLeft = maxDiaryChars;
+    let shownCount = 0;
     for (const d of diaryFiles.slice(0, maxDiaryDays)) {
       if (charsLeft <= 80) break;
       const chunk = d.text.slice(0, charsLeft);
       recentParts.push(`### 日記 ${d.date}\n${chunk}${d.text.length > charsLeft ? '…' : ''}`);
       charsLeft -= chunk.length;
+      shownCount++;
     }
-    const allDates = diaryFiles.map((d) => d.date);
-    const tailNote = allDates.length > maxDiaryDays
-      ? `\n（更早還有 ${allDates.length - maxDiaryDays} 天日記：${allDates[allDates.length - 1]} ~ ${allDates[maxDiaryDays]}，需要細節可用 \`xingxi_read\` 查）`
+
+    const olderPool = diaryFiles.slice(shownCount);
+    const { lines: indexLines, indexedCount } = buildOlderDiaryIndexLines(
+      diaryFiles,
+      olderPool.slice(0, olderIndexDays),
+      { maxIndexChars: maxOlderIndexChars },
+    );
+    const unindexed = olderPool.slice(indexedCount);
+    const indexBlock = indexLines.length
+      ? `\n\n更早日記關鍵字索引（想看細節可呼叫 \`xingxi_read\` 查對應日期）：\n${indexLines.join('\n')}`
       : '';
-    blocks.push(`【星汐近期日記（最近 ${Math.min(maxDiaryDays, diaryFiles.length)} 天）】\n${recentParts.join('\n\n')}${tailNote}`);
+    const tailNote = unindexed.length
+      ? `\n（更早還有 ${unindexed.length} 天日記：${unindexed[unindexed.length - 1].date} ~ ${unindexed[0].date}，需要細節可用 \`xingxi_read\` 查）`
+      : '';
+    blocks.push(`【星汐近期日記（最近 ${shownCount} 天）】\n${recentParts.join('\n\n')}${indexBlock}${tailNote}`);
   }
 
   if (coreAnchors.length) {
