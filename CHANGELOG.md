@@ -2,6 +2,18 @@
 
 本專案採用語意化版本控制（[Semantic Versioning](https://semver.org/)），版本號同步維護於 [package.json](./package.json) 與 [.agents/plugins/gemini-cat/plugin.json](./.agents/plugins/gemini-cat/plugin.json)。
 
+## [1.4.5] - 2026-11-23
+
+### 新增、文件合規與測試可攜性改進（Added & Changed）
+- **一鍵無損安全更新系統（`scripts/update.mjs`、`scripts/setup.cmd`、`scripts/update.cmd`、`package.json` `"update"`）**：
+  - 更新前自動備份 `data/fish-memory`、`data/mood`、`data/nest`、`data/persona`、`data/speak-up`、`data/telegram`、`data/xingxi`、`data/runtime` 與根目錄 `AGENTS.md` 至 `~/.gemini/config/backups/agy-gemini-chan/upgrade-<時間戳>/`（排除 `.lock` 與 `.tmp-*` 並最多保留最新 5 份）。
+  - 同時支援 Git（`git pull --ff-only`／`--stash`）與免 Git 壓縮檔（ZIP 安裝自動下載 GitHub 最新 Release Tarball，僅覆蓋程式碼、資源與 `data/dict/`，絕對不動個人 `data/*` 與 `AGENTS.md`）；完成後自動重整 Sidecar 外掛路徑並執行 `node --test tests/*.test.mjs` 驗證。
+  - 新增純 ASCII `scripts/setup.cmd` 與 `scripts/update.cmd`，解決 Windows 環境下 PowerShell 腳本執行原則封鎖 `npm.ps1` 的安裝／升級障礙。
+- **授權條款合規與新手上手文件全面改寫（`README.md`、`.agents/plugins/gemini-cat/README.md`）**：
+  - 依 `Yuuyuko-uu 插件許可 1.2` 第 5 條將原作者 `Yuuyuko-uu` 署名、四項原倉庫網址與主要改動摘要置於 `README.md` 首屏；補齊「初次使用必看 3 件事」（手動啟用中性／自訂人設、`dryRun: true` 預設與 `mcp(gemini-cat_companion/*)` Allow 授權設定）、完整 13 項 MCP 工具（含 `telegram_send`）與 Telegram 雙向橋接安全指南。
+- **測試沙盒可攜性與更新器驗證補齊（`tests/core.test.mjs`、`tests/hooks-mcp-sidecar.test.mjs`）**：
+  - 針對不允許建立 NTFS junction 的受限環境優雅處理 `EPERM`/`EACCES` 診斷（保留其餘路徑安全與防偽造斷言不減弱），並新增 `backupUserData`、`applyArchiveDirectory`、`runUpdate` 與 `checkRemoteLatestVersion` 整合測試。
+
 ## [1.4.4] - 2026-11-22
 
 ### 安全性、資料一致性與介面穩定性修正（Fixed & Security）

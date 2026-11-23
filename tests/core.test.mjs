@@ -1350,7 +1350,7 @@ test('telegram bridge supports /bind pairing, whitelist guard, album media downl
   });
 });
 
-test('v1.4.4 concurrency & security: file locks preserve concurrent batch state, symlink/key paths blocked, markers neutralized, bind rate-limited', async () => {
+test('v1.4.4 concurrency & security: file locks preserve concurrent batch state, symlink/key paths blocked, markers neutralized, bind rate-limited', async (t) => {
   await withTempRoot(async (root) => {
     // 1. updateJsonLocked + withFileLockSync integrity
     const counterPath = join(root, 'data', 'runtime', 'lock-test.json');
@@ -1416,8 +1416,18 @@ test('v1.4.4 concurrency & security: file locks preserve concurrent batch state,
     try {
       writeFileSync(join(extTarget, 'leak.txt'), 'secret');
       const linkPath = join(root, 'junction-out');
-      symlinkSync(extTarget, linkPath, 'junction');
-      assert.equal(isAllowedTelegramSendPath(join(linkPath, 'leak.txt'), root).ok, false);
+      try {
+        symlinkSync(extTarget, linkPath, 'junction');
+      } catch (err) {
+        if (err?.code === 'EPERM' || err?.code === 'EACCES') {
+          t.diagnostic(`Skipping junction escape assertion due to OS permission (${err.code})`);
+        } else {
+          throw err;
+        }
+      }
+      if (existsSync(linkPath)) {
+        assert.equal(isAllowedTelegramSendPath(join(linkPath, 'leak.txt'), root).ok, false);
+      }
     } finally {
       rmSync(extTarget, { recursive: true, force: true });
     }

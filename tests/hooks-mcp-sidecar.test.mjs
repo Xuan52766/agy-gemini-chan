@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -14,6 +14,12 @@ import { saveTelegramConfig, syncTelegramHistoryFromTranscript } from '../core/t
 import { isSidecarInputStep, inspectTranscriptTail, extractLatestTurnFromTranscript } from '../hooks/lib.mjs';
 import { appendDiary, appendToChapter } from '../core/xingxi.mjs';
 import { buildSidecarConfig, setupSidecar } from '../scripts/setup-sidecar.mjs';
+import {
+  applyArchiveDirectory,
+  backupUserData,
+  checkRemoteLatestVersion,
+  runUpdate,
+} from '../scripts/update.mjs';
 import { registerSidecarRoutes } from '../sidecar/routes.mjs';
 
 const REPO_ROOT = resolve('.');
@@ -1225,5 +1231,124 @@ test('hooks & transcript sync unwrap Antigravity <SYSTEM_MESSAGE> [Message] ... 
     assert.equal(queued.text, '熱呼呼的牛肉麵好好吃！');
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('updater backups, archive overlay, and runUpdate preserve all user data and sync Sidecar', async () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'gcat-update-test-'));
+  try {
+    const repoDir = join(workDir, 'install');
+    const srcDir = join(workDir, 'new-release');
+    const backupBase = join(workDir, 'backups');
+    const configDir = join(workDir, 'config');
+
+    // Seed an existing installation with user data + custom AGENTS.md + temp/lock artifacts
+    mkdirSync(join(repoDir, 'data', 'fish-memory'), { recursive: true });
+    mkdirSync(join(repoDir, 'data', 'persona', 'presets'), { recursive: true });
+    mkdirSync(join(repoDir, 'data', 'telegram'), { recursive: true });
+    mkdirSync(join(repoDir, 'data', 'xingxi'), { recursive: true });
+    mkdirSync(join(repoDir, 'data', 'dict'), { recursive: true });
+    mkdirSync(join(repoDir, 'core'), { recursive: true });
+    mkdirSync(join(repoDir, '.agents', 'plugins', 'gemini-cat'), { recursive: true });
+    writeFileSync(join(repoDir, 'package.json'), JSON.stringify({ name: 'agy-gemini-chan', version: '1.4.4' }), 'utf-8');
+    writeFileSync(join(repoDir, 'AGENTS.md'), '# My Custom Rules\nKeep this safe\n', 'utf-8');
+    writeFileSync(join(repoDir, 'core', 'old.mjs'), '// old v1.4.4 code\n', 'utf-8');
+    writeFileSync(join(repoDir, 'data', 'dict', 'dict.txt'), 'old-dict 10\n', 'utf-8');
+    writeFileSync(join(repoDir, 'data', 'fish-memory', 'memories.jsonl'), '{"id":"m1","text":"重要回憶"}\n', 'utf-8');
+    writeFileSync(join(repoDir, 'data', 'persona', 'settings.json'), '{"projectDefaultId":"custom_cat"}\n', 'utf-8');
+    writeFileSync(join(repoDir, 'data', 'telegram', 'config.json'), '{"botToken":"123:secret"}\n', 'utf-8');
+    writeFileSync(join(repoDir, 'data', 'xingxi', 'diary.md'), '# 2026-11-23\n珍貴日記\n', 'utf-8');
+    writeFileSync(join(repoDir, 'data', 'telegram', 'state.json.lock'), 'locked', 'utf-8');
+    writeFileSync(join(repoDir, 'data', 'telegram', 'state.json.tmp-999'), 'tmp', 'utf-8');
+
+    // Prune behavior: create 6 rapid snapshots and keep newest 3
+    for (let i = 1; i <= 6; i++) {
+      backupUserData(repoDir, backupBase, { now: 1_700_000_000_000 + i * 2000, maxBackups: 3 });
+    }
+    const keptBackups = readdirSync(backupBase).filter((d) => d.startsWith('upgrade-'));
+    assert.equal(keptBackups.length, 3);
+    const latestBackup = join(backupBase, keptBackups.sort().at(-1));
+    assert.equal(existsSync(join(latestBackup, 'data', 'fish-memory', 'memories.jsonl')), true);
+    assert.equal(existsSync(join(latestBackup, 'AGENTS.md')), true);
+    assert.equal(existsSync(join(latestBackup, 'data', 'dict', 'dict.txt')), false);
+    assert.equal(existsSync(join(latestBackup, 'data', 'telegram', 'state.json.lock')), false);
+    assert.equal(existsSync(join(latestBackup, 'data', 'telegram', 'state.json.tmp-999')), false);
+
+    // Prepare new release payload (even with template data files that MUST NOT overwrite user data)
+    mkdirSync(join(srcDir, 'core'), { recursive: true });
+    mkdirSync(join(srcDir, 'sidecar'), { recursive: true });
+    mkdirSync(join(srcDir, 'data', 'dict'), { recursive: true });
+    mkdirSync(join(srcDir, 'data', 'fish-memory'), { recursive: true });
+    mkdirSync(join(srcDir, '.agents', 'plugins', 'gemini-cat'), { recursive: true });
+    writeFileSync(join(srcDir, 'package.json'), JSON.stringify({ name: 'agy-gemini-chan', version: '1.4.5' }), 'utf-8');
+    writeFileSync(join(srcDir, 'README.md'), '# Updated README v1.4.5\n', 'utf-8');
+    writeFileSync(join(srcDir, 'core', 'old.mjs'), '// new v1.4.5 code\n', 'utf-8');
+    writeFileSync(join(srcDir, 'sidecar', 'main.mjs'), '// v1.4.5 sidecar\n', 'utf-8');
+    writeFileSync(join(srcDir, 'data', 'dict', 'dict.txt'), 'new-dict 99\n', 'utf-8');
+    writeFileSync(join(srcDir, 'data', 'fish-memory', 'memories.jsonl'), 'SHOULD_NOT_OVERWRITE\n', 'utf-8');
+    writeFileSync(join(srcDir, 'AGENTS.md'), 'SHOULD_NOT_OVERWRITE\n', 'utf-8');
+    writeFileSync(
+      join(srcDir, '.agents', 'plugins', 'gemini-cat', 'plugin.json'),
+      JSON.stringify({ name: 'gemini-cat', version: '1.4.5' }),
+      'utf-8',
+    );
+    writeFileSync(join(srcDir, '.agents', 'plugins', 'gemini-cat', 'README.md'), '# plugin\n', 'utf-8');
+
+    // Dry-run makes no changes
+    const dryRes = await runUpdate({ repoRoot: repoDir, configDir, backupBaseDir: backupBase, sourceDir: srcDir, dryRun: true });
+    assert.equal(dryRes.ok, true);
+    assert.equal(dryRes.dryRun, true);
+    assert.equal(dryRes.mode, 'archive-dir');
+    assert.equal(dryRes.beforeVersion, '1.4.4');
+
+    // Real upgrade via sourceDir + automatic Sidecar sync
+    const updRes = await runUpdate({
+      repoRoot: repoDir,
+      configDir,
+      backupBaseDir: backupBase,
+      sourceDir: srcDir,
+      runTests: false,
+    });
+    assert.equal(updRes.ok, true);
+    assert.equal(updRes.beforeVersion, '1.4.4');
+    assert.equal(updRes.afterVersion, '1.4.5');
+    assert.equal(updRes.updateMode, 'archive-dir');
+    assert.equal(updRes.setupStatus, 'created');
+
+    // Code, dict, and plugin version updated
+    assert.equal(readFileSync(join(repoDir, 'core', 'old.mjs'), 'utf-8'), '// new v1.4.5 code\n');
+    assert.equal(readFileSync(join(repoDir, 'data', 'dict', 'dict.txt'), 'utf-8'), 'new-dict 99\n');
+    assert.equal(JSON.parse(readFileSync(join(configDir, 'plugins', 'gemini-cat', 'plugin.json'), 'utf-8')).version, '1.4.5');
+
+    // Personal data & AGENTS.md untouched
+    assert.equal(readFileSync(join(repoDir, 'data', 'fish-memory', 'memories.jsonl'), 'utf-8'), '{"id":"m1","text":"重要回憶"}\n');
+    assert.equal(readFileSync(join(repoDir, 'data', 'persona', 'settings.json'), 'utf-8'), '{"projectDefaultId":"custom_cat"}\n');
+    assert.equal(readFileSync(join(repoDir, 'data', 'telegram', 'config.json'), 'utf-8'), '{"botToken":"123:secret"}\n');
+    assert.equal(readFileSync(join(repoDir, 'data', 'xingxi', 'diary.md'), 'utf-8'), '# 2026-11-23\n珍貴日記\n');
+    assert.equal(readFileSync(join(repoDir, 'AGENTS.md'), 'utf-8'), '# My Custom Rules\nKeep this safe\n');
+
+    // Remote check uses latest release or falls back cleanly to package.json on main
+    const relMeta = await checkRemoteLatestVersion('Xuan52766/agy-gemini-chan', {
+      fetchFn: async (url) => {
+        if (url.endsWith('/releases/latest')) {
+          return { ok: false, status: 404 };
+        }
+        return { ok: true, status: 200, json: async () => ({ version: '1.4.5' }) };
+      },
+    });
+    assert.equal(relMeta.source, 'main');
+    assert.equal(relMeta.version, '1.4.5');
+
+    // Direct applyArchiveDirectory skips .git and node_modules while overlaying code
+    mkdirSync(join(srcDir, '.git'), { recursive: true });
+    writeFileSync(join(srcDir, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf-8');
+    mkdirSync(join(srcDir, 'core', 'node_modules', 'dummy'), { recursive: true });
+    writeFileSync(join(srcDir, 'core', 'node_modules', 'dummy', 'index.js'), 'x', 'utf-8');
+    const overlayRes = applyArchiveDirectory(srcDir, repoDir);
+    assert.ok(overlayRes.updatedFiles > 0);
+    assert.equal(existsSync(join(repoDir, '.git')), false);
+    assert.equal(existsSync(join(repoDir, 'core', 'node_modules')), false);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
   }
 });

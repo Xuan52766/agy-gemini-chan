@@ -9,5 +9,6 @@
   - `PreInvocation`：於新對話第 1 輪（及修改提示詞／開關時）單次載入人設、星汐八章記憶卡、近 3 天日記、核心記憶與各模組指引；後續輪次僅差量注入當輪召回記憶、顯著心情提示與待處理貓窩互動（平時無變動則 0 Token）。
   - `PostToolUse`：同步更新貓窩活動氣泡。
   - `Stop`：當對話內未呼叫 `mood_update` 時，自動執行本地語意心情兜底。
-- **MCP 工具（`gemini-cat_companion`，共 12 個）**：`remember`、`recall`、`memory_forget`、`xingxi`、`xingxi_read`、`xingxi_append`、`xingxi_diary`、`xingxi_pickup`、`mood_status`、`mood_update`、`nest_interact`、`speak_up_plan`。
+- **MCP 工具（`gemini-cat_companion`，共 13 個）**：`remember`、`recall`、`memory_forget`、`xingxi`、`xingxi_read`、`xingxi_append`、`xingxi_diary`、`xingxi_pickup`、`mood_status`、`mood_update`、`nest_interact`、`speak_up_plan`、`telegram_send`。
+- **Telegram 雙向橋接**：純 Node Long Polling＋一鍵配對鎖定，支援手機收發對話與靜音策略，無須外部暴露埠或 Webhook。
 - **Skills**：`/cat-nest`、`/xingxi`。
