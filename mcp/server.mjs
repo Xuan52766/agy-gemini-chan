@@ -205,7 +205,7 @@ const TOOLS = [
         action: {
           type: 'string',
           enum: ['list', 'schedule', 'schedule_batch', 'add_routine', 'update_routine', 'toggle_routine', 'reroll_routine', 'silence', 'clear_silence', 'remove', 'clear_plans', 'set_config'],
-          description: '排程動作：schedule=單次預約；schedule_batch=一次排入多筆 plans；add_routine=新增固定時間隨機波動節律；silence=設定勿擾到指定時間；clear_silence=提前解除勿擾；list=查看目前時刻表、設定與見聞籃；set_config=調整開關或參數；remove=刪除指定 ID；clear_plans=清空預約佇列。',
+          description: '排程動作：schedule=單次預約；schedule_batch=一次排入多筆 plans；add_routine=新增固定時間隨機波動節律；silence=設定勿擾到指定時間；clear_silence=提前解除勿擾；list=查看目前完整時刻表、ID、設定與見聞籃；set_config=調整開關或參數；remove=刪除指定 ID；clear_plans=清空預約佇列。',
         },
         id: { type: 'string', description: '要修改、切換或移除的預約／節律 ID' },
         kind: {
@@ -462,7 +462,84 @@ async function callTool(name, args = {}) {
       const res = mutateSpeakUpPlan(action, args, ROOT);
       if (!res.ok) return { content: [{ type: 'text', text: `✗ ${res.error}` }] };
       const snap = getSpeakUpSnapshot(ROOT);
-      const summary = {
+      const silence = {
+        active: snap.preview.isSilenced,
+        until: snap.preview.silentUntil ? localClockDisplay(snap.preview.silentUntil) : '',
+        reason: snap.preview.silentReason || '',
+      };
+      const switches = {
+        enabled: snap.config.enabled,
+        aiPlanEnabled: snap.config.aiPlanEnabled,
+        diceEnabled: snap.config.diceEnabled,
+        dryRun: snap.config.dryRun,
+        scheduleTendency: snap.config.scheduleTendency,
+        diceBlockActiveChat: snap.config.diceBlockActiveChat,
+        suppressDiceBeforeReminder: snap.config.suppressDiceBeforeReminder,
+        maxUnansweredSpontaneous: snap.config.maxUnansweredSpontaneous,
+      };
+      const freshBrowseConfig = {
+        enabled: Boolean(snap.freshBrowse?.config?.enabled),
+        fetchTimes: snap.freshBrowse?.config?.fetchTimes || [],
+        presets: snap.freshBrowse?.config?.presets || [],
+        weatherCity: snap.freshBrowse?.config?.weatherResolvedLabel || snap.freshBrowse?.config?.weatherCity || '',
+      };
+      if (action === 'list') {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              action,
+              switches,
+              silence,
+              unansweredCount: snap.state.unansweredCount || 0,
+              upcomingPlans: (snap.state.plans || []).map((p) => ({
+                id: p.id,
+                kind: p.kind,
+                label: p.label,
+                triggerAt: localClockDisplay(p.triggerAt),
+                jitterMin: p.jitterMin,
+                thought: p.thought,
+              })),
+              routines: (snap.state.routines || []).map((r) => ({
+                id: r.id,
+                enabled: r.enabled,
+                label: r.label,
+                timeHHMM: r.timeHHMM,
+                jitterMin: r.jitterMin,
+                days: r.days,
+                nextTriggerAt: r.nextTriggerAt ? localClockDisplay(r.nextTriggerAt) : '',
+                thought: r.thought,
+              })),
+              freshBrowse: {
+                ...freshBrowseConfig,
+                pendingItems: (snap.freshBrowse?.items || []).slice(0, 5).map((i) => ({
+                  source: i.source,
+                  title: i.title,
+                  url: i.url,
+                })),
+              },
+            }, null, 2),
+          }],
+        };
+      }
+      if (action === 'set_config') {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              action,
+              switches,
+              silence,
+              upcomingCount: (snap.state.plans || []).length,
+              routineCount: (snap.state.routines || []).length,
+              freshBrowse: freshBrowseConfig,
+            }, null, 2),
+          }],
+        };
+      }
+      const compact = {
         ok: true,
         action,
         ...(res.plan ? {
@@ -492,53 +569,12 @@ async function callTool(name, args = {}) {
             enabled: res.routine.enabled,
           },
         } : {}),
-        switches: {
-          enabled: snap.config.enabled,
-          aiPlanEnabled: snap.config.aiPlanEnabled,
-          diceEnabled: snap.config.diceEnabled,
-          dryRun: snap.config.dryRun,
-          scheduleTendency: snap.config.scheduleTendency,
-          diceBlockActiveChat: snap.config.diceBlockActiveChat,
-          suppressDiceBeforeReminder: snap.config.suppressDiceBeforeReminder,
-          maxUnansweredSpontaneous: snap.config.maxUnansweredSpontaneous,
-        },
-        silence: {
-          active: snap.preview.isSilenced,
-          until: snap.preview.silentUntil ? localClockDisplay(snap.preview.silentUntil) : '',
-          reason: snap.preview.silentReason || '',
-        },
-        unansweredCount: snap.state.unansweredCount || 0,
-        upcomingPlans: (snap.state.plans || []).map((p) => ({
-          id: p.id,
-          kind: p.kind,
-          label: p.label,
-          triggerAt: localClockDisplay(p.triggerAt),
-          jitterMin: p.jitterMin,
-          thought: p.thought,
-        })),
-        routines: (snap.state.routines || []).map((r) => ({
-          id: r.id,
-          enabled: r.enabled,
-          label: r.label,
-          timeHHMM: r.timeHHMM,
-          jitterMin: r.jitterMin,
-          days: r.days,
-          nextTriggerAt: r.nextTriggerAt ? localClockDisplay(r.nextTriggerAt) : '',
-          thought: r.thought,
-        })),
-        freshBrowse: {
-          enabled: Boolean(snap.freshBrowse?.config?.enabled),
-          fetchTimes: snap.freshBrowse?.config?.fetchTimes || [],
-          presets: snap.freshBrowse?.config?.presets || [],
-          weatherCity: snap.freshBrowse?.config?.weatherResolvedLabel || snap.freshBrowse?.config?.weatherCity || '',
-          pendingItems: (snap.freshBrowse?.items || []).slice(0, 5).map((i) => ({
-            source: i.source,
-            title: i.title,
-            url: i.url,
-          })),
-        },
+        ...(typeof res.removed === 'number' ? { removed: res.removed } : {}),
+        silence,
+        upcomingCount: (snap.state.plans || []).length,
+        routineCount: (snap.state.routines || []).length,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(compact, null, 2) }] };
     }
     case 'telegram_send': {
       const cfg = loadTelegramConfig(ROOT);

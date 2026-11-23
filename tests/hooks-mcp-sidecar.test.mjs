@@ -527,13 +527,20 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
     });
     const batchObj = JSON.parse(batchPlan.result.content[0].text);
     assert.equal(batchObj.ok, true);
-    assert.equal(batchObj.upcomingPlans.length, 2);
+    assert.equal(batchObj.added.length, 2);
+    assert.equal(batchObj.upcomingCount, 2);
+    assert.equal(batchObj.upcomingPlans, undefined);
+    assert.equal(batchObj.freshBrowse, undefined);
 
     const routineAdd = await rpc(12, 'tools/call', {
       name: 'speak_up_plan',
       arguments: { action: 'add_routine', label: '每日午間波動問候', timeHHMM: '12:30', jitterMin: 20, thought: '吃飯沒' },
     });
-    assert.equal(JSON.parse(routineAdd.result.content[0].text).routines.length, 1);
+    const routineObj = JSON.parse(routineAdd.result.content[0].text);
+    assert.equal(routineObj.routine.label, '每日午間波動問候');
+    assert.equal(routineObj.routineCount, 1);
+    assert.equal(routineObj.routines, undefined);
+    assert.equal(routineObj.freshBrowse, undefined);
 
     const stCheck = await rpc(13, 'tools/call', { name: 'mood_status', arguments: {} });
     const stObj = JSON.parse(stCheck.result.content[0].text);
@@ -548,6 +555,8 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
     const silObj = JSON.parse(silRes.result.content[0].text);
     assert.equal(silObj.silence.active, true);
     assert.match(silObj.silence.reason, /休息/);
+    assert.equal(silObj.upcomingPlans, undefined);
+    assert.equal(silObj.freshBrowse, undefined);
 
     const clrSilRes = await rpc(15, 'tools/call', {
       name: 'speak_up_plan',
@@ -555,8 +564,29 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
     });
     const clrSilObj = JSON.parse(clrSilRes.result.content[0].text);
     assert.equal(clrSilObj.silence.active, false);
-    assert.equal(clrSilObj.freshBrowse.enabled, false);
-    assert.deepEqual(clrSilObj.freshBrowse.fetchTimes, ['10:00', '17:00']);
+    assert.equal(clrSilObj.upcomingPlans, undefined);
+    assert.equal(clrSilObj.freshBrowse, undefined);
+
+    const cfgRes = await rpc(18, 'tools/call', {
+      name: 'speak_up_plan',
+      arguments: { action: 'set_config', dryRun: false },
+    });
+    const cfgObj = JSON.parse(cfgRes.result.content[0].text);
+    assert.equal(cfgObj.switches.dryRun, false);
+    assert.equal(cfgObj.freshBrowse.enabled, false);
+    assert.equal(cfgObj.freshBrowse.pendingItems, undefined);
+    assert.equal(cfgObj.upcomingPlans, undefined);
+
+    const listRes = await rpc(19, 'tools/call', {
+      name: 'speak_up_plan',
+      arguments: { action: 'list' },
+    });
+    const listObj = JSON.parse(listRes.result.content[0].text);
+    assert.equal(listObj.upcomingPlans.length, 2);
+    assert.equal(listObj.routines.length, 1);
+    assert.equal(listObj.freshBrowse.enabled, false);
+    assert.deepEqual(listObj.freshBrowse.fetchTimes, ['10:00', '17:00']);
+    assert.ok(Array.isArray(listObj.freshBrowse.pendingItems));
 
     const rem = await rpc(3, 'tools/call', {
       name: 'remember',
