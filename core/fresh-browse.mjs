@@ -27,7 +27,7 @@ const MAX_FEED_BYTES = 1_500_000;
 const FETCH_TIMEOUT_MS = 6000;
 const MAX_REDIRECT_HOPS = 3;
 const MAX_CUSTOM_FEEDS = 15;
-const MAX_STORED_ITEMS = 32;
+const MAX_STORED_ITEMS = 40;
 const MAX_SEEN_KEYS = 250;
 
 export const FRESH_PRESET_PACKS = {
@@ -69,7 +69,7 @@ export const FRESH_PRESET_PACKS = {
 export const DEFAULT_FRESH_BROWSE_CONFIG = {
   enabled: false,
   dailyShareLimit: 2,
-  maxAgeHours: 48,
+  maxAgeHours: 72,
   presets: ['science', 'acg'],
   weatherCity: '',
   weatherLat: null,
@@ -77,6 +77,10 @@ export const DEFAULT_FRESH_BROWSE_CONFIG = {
   weatherResolvedCity: '',
   customFeeds: [],
 };
+
+function effectiveMaxAgeHours(category, cfg) {
+  return category === 'custom' ? Math.max(cfg.maxAgeHours, 168) : cfg.maxAgeHours;
+}
 
 function cacheFilePath(root = getProjectRoot()) {
   return join(getDataPaths(root).speakUpDir, 'fresh-picks.json');
@@ -574,43 +578,47 @@ export async function validateAndPreviewFeed(
   let feedUrl = norm.url;
   let resolvedLabel = '';
 
-  if (norm.needsHandleResolve) {
-    const html = await safeFetchExternalText(feedUrl, fetchOpts);
-    const cidMatch = /<meta\s+itemprop=["']channelId["']\s+content=["'](UC[A-Za-z0-9_-]{20,})["']/i.exec(html)
-      || /"externalId"\s*:\s*"(UC[A-Za-z0-9_-]{20,})"/i.exec(html)
-      || /channel_id=(UC[A-Za-z0-9_-]{20,})/i.exec(html);
-    if (!cidMatch) {
-      return { ok: false, error: '無法從此 YouTube 頁面解析頻道 ID，請改貼含 /channel/UC... 的網址' };
+  try {
+    if (norm.needsHandleResolve) {
+      const html = await safeFetchExternalText(feedUrl, { ...fetchOpts, maxBytes: 4_000_000 });
+      const cidMatch = /<meta\s+itemprop=["']channelId["']\s+content=["'](UC[A-Za-z0-9_-]{20,})["']/i.exec(html)
+        || /"externalId"\s*:\s*"(UC[A-Za-z0-9_-]{20,})"/i.exec(html)
+        || /channel_id=(UC[A-Za-z0-9_-]{20,})/i.exec(html);
+      if (!cidMatch) {
+        return { ok: false, error: '無法從此 YouTube 頁面解析頻道 ID，請改貼含 /channel/UC... 的網址' };
+      }
+      feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${cidMatch[1]}`;
+      const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(html);
+      if (titleMatch) {
+        resolvedLabel = cleanExternalSnippet(titleMatch[1].replace(/\s*-\s*YouTube\s*$/i, ''), 40);
+      }
     }
-    feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${cidMatch[1]}`;
-    const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(html);
-    if (titleMatch) {
-      resolvedLabel = cleanExternalSnippet(titleMatch[1].replace(/\s*-\s*YouTube\s*$/i, ''), 40);
+
+    const xml = await safeFetchExternalText(feedUrl, fetchOpts);
+    const parsed = parseFeedXml(xml, {
+      sourceLabel: resolvedLabel,
+      category: 'custom',
+      maxAgeHours: 24 * 30,
+      nowMs,
+      maxItems: 3,
+    });
+
+    if (!parsed.feedTitle && !parsed.items.length) {
+      return { ok: false, error: '找不到任何條目或標題，請確認這是標準 RSS / Atom 網址' };
     }
+
+    const hostFallback = new URL(feedUrl).hostname.replace(/^www\./, '');
+    return {
+      ok: true,
+      url: feedUrl,
+      label: parsed.feedTitle || resolvedLabel || hostFallback,
+      sampleTitle: parsed.items[0]?.title || '',
+      sampleUrl: parsed.items[0]?.url || '',
+      itemCount: parsed.items.length,
+    };
+  } catch (err) {
+    return { ok: false, error: err?.message || '讀取外部來源失敗' };
   }
-
-  const xml = await safeFetchExternalText(feedUrl, fetchOpts);
-  const parsed = parseFeedXml(xml, {
-    sourceLabel: resolvedLabel,
-    category: 'custom',
-    maxAgeHours: 24 * 30,
-    nowMs,
-    maxItems: 3,
-  });
-
-  if (!parsed.feedTitle && !parsed.items.length) {
-    return { ok: false, error: '找不到任何條目或標題，請確認這是標準 RSS / Atom 網址' };
-  }
-
-  const hostFallback = new URL(feedUrl).hostname.replace(/^www\./, '');
-  return {
-    ok: true,
-    url: feedUrl,
-    label: parsed.feedTitle || resolvedLabel || hostFallback,
-    sampleTitle: parsed.items[0]?.title || '',
-    sampleUrl: parsed.items[0]?.url || '',
-    itemCount: parsed.items.length,
-  };
 }
 
 function summarizeWeatherCode(code) {
@@ -785,9 +793,9 @@ export async function refreshFreshFeedNow({
       const parsed = parseFeedXml(xml, {
         sourceLabel: src.label,
         category: src.category,
-        maxAgeHours: cfg.maxAgeHours,
+        maxAgeHours: effectiveMaxAgeHours(src.category, cfg),
         nowMs,
-        maxItems: 6,
+        maxItems: 5,
       });
       collected.push(...parsed.items);
     } catch (err) {
@@ -816,7 +824,6 @@ export async function refreshFreshFeedNow({
 
   let addedCount = 0;
   let itemsCount = 0;
-  const maxAgeMs = cfg.maxAgeHours * 3600_000;
 
   const updated = updateJsonLocked(cacheFilePath(root), defaultCacheState(), (raw) => {
     const state = {
@@ -839,7 +846,8 @@ export async function refreshFreshFeedNow({
     for (const item of (Array.isArray(state.items) ? state.items : [])) {
       if (!item || !item.key || seenSet.has(item.key)) continue;
       const ageRef = item.publishedAt || item.fetchedAt || nowMs;
-      if (nowMs - ageRef <= maxAgeMs) {
+      const itemMaxAgeMs = effectiveMaxAgeHours(item.category, cfg) * 3600_000;
+      if (nowMs - ageRef <= itemMaxAgeMs) {
         existingByKey.set(item.key, item);
       }
     }
@@ -922,12 +930,12 @@ function selectDiverseFreshPicks(state, cfg, dayKey, nowMs, maxPick) {
   if (state.shareDayKey === dayKey && Number(state.todayShareCount || 0) >= cfg.dailyShareLimit) {
     return [];
   }
-  const maxAgeMs = cfg.maxAgeHours * 3600_000;
   const seenSet = new Set(Array.isArray(state.seenKeys) ? state.seenKeys : []);
   const freshPool = (Array.isArray(state.items) ? state.items : []).filter((item) => {
     if (!item?.key || !item?.title || seenSet.has(item.key)) return false;
     const ref = item.publishedAt || item.fetchedAt || nowMs;
-    return nowMs - ref <= maxAgeMs;
+    const itemMaxAgeMs = effectiveMaxAgeHours(item.category, cfg) * 3600_000;
+    return nowMs - ref <= itemMaxAgeMs;
   });
   if (!freshPool.length) return [];
 

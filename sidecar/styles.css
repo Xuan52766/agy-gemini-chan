@@ -1143,6 +1143,16 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.row-body a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.row-body a:hover {
+  text-decoration: underline;
+}
+
 .row-body-clamped {
   display: -webkit-box;
   -webkit-line-clamp: 2;

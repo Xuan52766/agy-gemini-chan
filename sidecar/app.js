@@ -1866,7 +1866,7 @@
     }
     setIfClean($('sp-freshWeatherCity'), fbCfg.weatherCity || '', 'sp');
     setIfClean($('sp-freshDailyLimit'), fbCfg.dailyShareLimit ?? 2, 'sp');
-    setIfClean($('sp-freshMaxAgeHours'), fbCfg.maxAgeHours ?? 48, 'sp');
+    setIfClean($('sp-freshMaxAgeHours'), fbCfg.maxAgeHours ?? 72, 'sp');
     if ($('sp-fresh-feeds-count')) {
       $('sp-fresh-feeds-count').textContent = `${fbCustomFeeds.length} 個`;
     }
@@ -2884,7 +2884,7 @@
           presets: collectFreshPresets(),
           weatherCity: $('sp-freshWeatherCity')?.value.trim() || '',
           dailyShareLimit: Number($('sp-freshDailyLimit')?.value ?? 2),
-          maxAgeHours: Number($('sp-freshMaxAgeHours')?.value ?? 48),
+          maxAgeHours: Number($('sp-freshMaxAgeHours')?.value ?? 72),
         },
       }),
     });
