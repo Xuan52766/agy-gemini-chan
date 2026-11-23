@@ -1216,7 +1216,16 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
     parts.push('', '（目前找不到落盤的歷史紀錄檔案或今日尚無新對話紀錄；請回顧你在本對話看過的近期互動來整理，如果真的沒什麼新內容可寫，就不用硬湊，簡短說一聲即可。）');
   }
 
-  parts.push('', '歸檔原則：不要重複呼叫 `remember`；記憶卡第 1~8 章只收「過了一週再看還有價值」的重點，流水過程寫進日記。');
+  if (scheduleMode === 'diary_only') {
+    parts.push('', '歸檔原則：不要重複呼叫 `remember`；只把今日日常細節與情緒脈絡寫進日記。');
+  } else {
+    parts.push(
+      '',
+      '歸檔原則：',
+      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章只收「過了一週再看還有價值」的重點，流水過程寫進日記。',
+      '- 性格與說話演進（不刪舊記憶、勿推翻核心人設）：回顧今日互動，若有長期成立的新偏好、吐槽點、相處共識或反應習慣，可帶日期追加進第 1 或第 7 章；若有特別傳神的新口癖或代表台詞，可用 `xingxi_append`（`chapter: "2", wholeChapter: true`）適度更新第 2 章原話照抄（上限 10 句，保留既有準則）；沒有明確成長變化就維持原樣、不要硬湊。',
+    );
+  }
   return parts.join('\n');
 }
 
@@ -1312,7 +1321,7 @@ export async function executeXingxiPickup({
  * Builds startup memory context for `SessionStart` so every new conversation inside
  * `gemini_cat` inherits Xingxi's Memory Card + recent N days of diaries + core promises.
  */
-export function buildSessionStartupContext(root, { maxCardChars = 4200, maxDiaryDays = 3, maxDiaryChars = 2400 } = {}) {
+export function buildSessionStartupContext(root, { maxCardChars = 20000, maxDiaryDays = 3, maxDiaryChars = 2400 } = {}) {
   const { cardPath, ledgerPath } = ensureXingxiArchive(root);
   const files = listXingxiFiles(root);
   const cardText = readTextSafe(cardPath, '');
@@ -1358,7 +1367,11 @@ export function buildSessionStartupContext(root, { maxCardChars = 4200, maxDiary
   const blocks = [];
 
   if (populatedSections.length) {
-    const joinedCard = populatedSections.join('\n\n').slice(0, maxCardChars);
+    const fullCard = populatedSections.join('\n\n');
+    const isTruncated = maxCardChars > 0 && fullCard.length > maxCardChars;
+    const joinedCard = isTruncated
+      ? `${fullCard.slice(0, maxCardChars)}\n…（記憶卡總長 ${fullCard.length} 字，以上顯示前 ${maxCardChars} 字；後半尚未展開，需要查閱請呼叫 \`xingxi\` 讀取全文）`
+      : fullCard;
     blocks.push(`【星汐長期記憶卡（開新對話自動注入｜已整理到：${ledger['已整理到'] || '持續累積中'}）】\n${joinedCard}`);
   } else {
     blocks.push('【星汐長期記憶卡】記憶卡目前剛建檔還沒有寫入具體經歷；若這段對話裡有值得長留一週以上的約定、性格或里程碑，記得用 `xingxi_append` 寫入記憶卡。');

@@ -91,6 +91,7 @@ import {
   appendToChapter,
   buildSessionStartupContext,
   buildStarGraph,
+  buildXingxiPickupPrompt,
   executeXingxiPickup,
   listXingxiBackups,
   parseMarkdownToStars,
@@ -359,6 +360,9 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
     assert.equal(sent.length, 1);
     assert.match(sent[0].prompt, /\[XINGXI_AUTO_PICKUP\]/);
     assert.match(sent[0].prompt, /熱可可/);
+    assert.match(sent[0].prompt, /性格與說話演進/);
+    const diaryOnlyPrompt = buildXingxiPickupPrompt(root, { date: dayDate, scheduleMode: 'diary_only', material: mat });
+    assert.doesNotMatch(diaryOnlyPrompt, /性格與說話演進/);
 
     const duplicate = await executeXingxiPickup({
       root,
@@ -371,12 +375,19 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
     assert.equal(duplicate.action, 'already_ran_today');
 
     // New conversation injection includes card, diaries, and high-importance anchors
+    // Also retains long cards beyond legacy 4200 chars and emits an explicit pointer if maxCardChars is exceeded
+    appendToChapter(7, `- ${'細水長流相處紀錄_'.repeat(280)}尾巴標記Ch7`, root);
     const startupCtx = buildSessionStartupContext(root);
     assert.match(startupCtx, /看一次星星/);
     assert.match(startupCtx, /Gemini-chan 貓窩/);
     assert.match(startupCtx, /互道晚安/);
     assert.match(startupCtx, /高重要度記憶/);
+    assert.match(startupCtx, /尾巴標記Ch7/);
     assert.doesNotMatch(startupCtx, /魚的記憶/);
+
+    const cappedCtx = buildSessionStartupContext(root, { maxCardChars: 1200 });
+    assert.match(cappedCtx, /請呼叫 `xingxi` 讀取全文/);
+    assert.doesNotMatch(cappedCtx, /尾巴標記Ch7/);
   });
 });
 
