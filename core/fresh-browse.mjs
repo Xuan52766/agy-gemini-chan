@@ -70,11 +70,13 @@ export const DEFAULT_FRESH_BROWSE_CONFIG = {
   enabled: false,
   dailyShareLimit: 2,
   maxAgeHours: 72,
+  fetchTimes: ['10:00', '17:00'],
   presets: ['science', 'acg'],
   weatherCity: '',
   weatherLat: null,
   weatherLon: null,
   weatherResolvedCity: '',
+  weatherResolvedLabel: '',
   customFeeds: [],
 };
 
@@ -104,7 +106,7 @@ function defaultCacheState() {
   };
 }
 
-function formatDayAndHour(ms, timezone = '') {
+function formatClockInTz(ms, timezone = '') {
   try {
     if (timezone) {
       const dParts = new Intl.DateTimeFormat('en-CA', {
@@ -113,22 +115,58 @@ function formatDayAndHour(ms, timezone = '') {
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
+        minute: '2-digit',
         hourCycle: 'h23',
       }).formatToParts(new Date(ms));
       const map = Object.fromEntries(dParts.map((p) => [p.type, p.value]));
+      const hour = Number(map.hour) % 24;
+      const minute = Number(map.minute) % 60;
       return {
         dayKey: `${map.year}-${map.month}-${map.day}`,
-        hour: Number(map.hour) % 24,
+        hour,
+        minute,
+        totalMin: hour * 60 + minute,
       };
     }
   } catch {
     // Fallback to local clock
   }
   const d = new Date(ms);
+  const hour = d.getHours();
+  const minute = d.getMinutes();
   return {
     dayKey: localDayKey(ms),
-    hour: d.getHours(),
+    hour,
+    minute,
+    totalMin: hour * 60 + minute,
   };
+}
+
+function parseClockHhMm(str = '') {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(str || '').trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isInteger(h) || !Number.isInteger(min) || h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return {
+    text: `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`,
+    totalMin: h * 60 + min,
+  };
+}
+
+export function normalizeFetchTimes(raw) {
+  if (!Array.isArray(raw)) return [...DEFAULT_FRESH_BROWSE_CONFIG.fetchTimes];
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    const parsed = parseClockHhMm(item);
+    if (parsed && !seen.has(parsed.text)) {
+      seen.add(parsed.text);
+      out.push(parsed.text);
+      if (out.length >= 2) break;
+    }
+  }
+  return out;
 }
 
 /**
@@ -308,16 +346,21 @@ export function normalizeFreshBrowseConfig(raw) {
   const sameCity = weatherCity && weatherCity === String(m.weatherResolvedCity || '').trim();
   const lat = sameCity && Number.isFinite(Number(m.weatherLat)) ? Number(m.weatherLat) : null;
   const lon = sameCity && Number.isFinite(Number(m.weatherLon)) ? Number(m.weatherLon) : null;
+  const fetchTimes = m.fetchTimes !== undefined
+    ? normalizeFetchTimes(m.fetchTimes)
+    : [...DEFAULT_FRESH_BROWSE_CONFIG.fetchTimes];
 
   return {
     enabled: Boolean(m.enabled),
     dailyShareLimit: Math.round(clampNum(m.dailyShareLimit, 0, 6, DEFAULT_FRESH_BROWSE_CONFIG.dailyShareLimit)),
     maxAgeHours: Math.round(clampNum(m.maxAgeHours, 6, 168, DEFAULT_FRESH_BROWSE_CONFIG.maxAgeHours)),
+    fetchTimes,
     presets,
     weatherCity,
     weatherLat: lat,
     weatherLon: lon,
     weatherResolvedCity: sameCity ? weatherCity : '',
+    weatherResolvedLabel: sameCity ? neutralizeControlMarkers(String(m.weatherResolvedLabel || '').trim().slice(0, 60)) : '',
     customFeeds,
   };
 }
@@ -330,6 +373,7 @@ export function mergeFreshBrowseConfig(currentCfg, patch) {
     merged.weatherLat = null;
     merged.weatherLon = null;
     merged.weatherResolvedCity = '';
+    merged.weatherResolvedLabel = '';
   }
   return normalizeFreshBrowseConfig(merged);
 }
@@ -632,6 +676,102 @@ function summarizeWeatherCode(code) {
   return '多雲陰天';
 }
 
+const CITY_QUERY_ALIASES = new Map([
+  ['台北', { query: 'Taipei', cc: 'TW', label: '台北市（台灣）', displayName: '台北市' }],
+  ['臺北', { query: 'Taipei', cc: 'TW', label: '台北市（台灣）', displayName: '台北市' }],
+  ['台北市', { query: 'Taipei', cc: 'TW', label: '台北市（台灣）', displayName: '台北市' }],
+  ['臺北市', { query: 'Taipei', cc: 'TW', label: '台北市（台灣）', displayName: '台北市' }],
+  ['新北', { query: 'New Taipei', cc: 'TW', label: '新北市（台灣）', displayName: '新北市' }],
+  ['新北市', { query: 'New Taipei', cc: 'TW', label: '新北市（台灣）', displayName: '新北市' }],
+  ['桃園', { query: 'Taoyuan', cc: 'TW', label: '桃園市（台灣）', displayName: '桃園市' }],
+  ['桃園市', { query: 'Taoyuan', cc: 'TW', label: '桃園市（台灣）', displayName: '桃園市' }],
+  ['台中', { query: 'Taichung', cc: 'TW', label: '台中市（台灣）', displayName: '台中市' }],
+  ['臺中', { query: 'Taichung', cc: 'TW', label: '台中市（台灣）', displayName: '台中市' }],
+  ['台中市', { query: 'Taichung', cc: 'TW', label: '台中市（台灣）', displayName: '台中市' }],
+  ['臺中市', { query: 'Taichung', cc: 'TW', label: '台中市（台灣）', displayName: '台中市' }],
+  ['台南', { query: 'Tainan', cc: 'TW', label: '台南市（台灣）', displayName: '台南市' }],
+  ['臺南', { query: 'Tainan', cc: 'TW', label: '台南市（台灣）', displayName: '台南市' }],
+  ['台南市', { query: 'Tainan', cc: 'TW', label: '台南市（台灣）', displayName: '台南市' }],
+  ['臺南市', { query: 'Tainan', cc: 'TW', label: '台南市（台灣）', displayName: '台南市' }],
+  ['高雄', { query: 'Kaohsiung', cc: 'TW', label: '高雄市（台灣）', displayName: '高雄市' }],
+  ['高雄市', { query: 'Kaohsiung', cc: 'TW', label: '高雄市（台灣）', displayName: '高雄市' }],
+  ['基隆', { query: 'Keelung', cc: 'TW', label: '基隆市（台灣）', displayName: '基隆市' }],
+  ['基隆市', { query: 'Keelung', cc: 'TW', label: '基隆市（台灣）', displayName: '基隆市' }],
+  ['新竹', { query: 'Hsinchu', cc: 'TW', label: '新竹市（台灣）', displayName: '新竹市' }],
+  ['新竹市', { query: 'Hsinchu', cc: 'TW', label: '新竹市（台灣）', displayName: '新竹市' }],
+  ['嘉義', { query: 'Chiayi', cc: 'TW', label: '嘉義市（台灣）', displayName: '嘉義市' }],
+  ['嘉義市', { query: 'Chiayi', cc: 'TW', label: '嘉義市（台灣）', displayName: '嘉義市' }],
+  ['屏東', { query: 'Pingtung', cc: 'TW', label: '屏東縣（台灣）', displayName: '屏東' }],
+  ['屏東縣', { query: 'Pingtung', cc: 'TW', label: '屏東縣（台灣）', displayName: '屏東' }],
+  ['屏東市', { query: 'Pingtung', cc: 'TW', label: '屏東市（台灣）', displayName: '屏東市' }],
+  ['宜蘭', { query: 'Yilan', cc: 'TW', label: '宜蘭（台灣）', displayName: '宜蘭' }],
+  ['花蓮', { query: 'Hualien', cc: 'TW', label: '花蓮（台灣）', displayName: '花蓮' }],
+  ['花蓮市', { query: 'Hualien', cc: 'TW', label: '花蓮市（台灣）', displayName: '花蓮市' }],
+  ['台東', { query: 'Taitung', cc: 'TW', label: '台東（台灣）', displayName: '台東' }],
+  ['臺東', { query: 'Taitung', cc: 'TW', label: '台東（台灣）', displayName: '台東' }],
+  ['澎湖', { query: 'Penghu', cc: 'TW', label: '澎湖（台灣）', displayName: '澎湖' }],
+  ['金門', { query: 'Kinmen', cc: 'TW', label: '金門（台灣）', displayName: '金門' }],
+  ['香港', { query: 'Hong Kong', cc: 'HK', label: '香港', displayName: '香港' }],
+  ['澳門', { query: 'Macau', cc: 'MO', label: '澳門', displayName: '澳門' }],
+]);
+
+function normalizeGeoCountry(cc = '', rawCountry = '') {
+  const c = String(cc || '').toUpperCase();
+  if (c === 'TW') return '台灣';
+  if (c === 'HK') return '香港';
+  if (c === 'MO') return '澳門';
+  if (c === 'JP') return '日本';
+  if (c === 'US') return '美國';
+  return cleanExternalSnippet(rawCountry || c, 20);
+}
+
+/**
+ * Resolves a city string via Open-Meteo Geocoding (supporting Taiwan/HK Chinese names
+ * and sorting candidates by country preference + population so major cities win).
+ */
+export async function resolveWeatherCity(
+  city = '',
+  { fetchFn = fetch, lookupFn = dnsLookup } = {},
+) {
+  const cleanCity = neutralizeControlMarkers(String(city || '').trim().slice(0, 60));
+  if (!cleanCity) return { ok: false, error: '請輸入城市名稱' };
+
+  const alias = CITY_QUERY_ALIASES.get(cleanCity);
+  const queryTerm = alias ? alias.query : cleanCity;
+  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(queryTerm)}&count=5&language=zh`;
+  const geoJson = JSON.parse(await safeFetchExternalText(geoUrl, { fetchFn, lookupFn }));
+  const candidates = Array.isArray(geoJson?.results) ? geoJson.results : [];
+  if (!candidates.length) {
+    return { ok: false, error: `找不到城市「${cleanCity}」，可改輸入英文或完整市名（例：Kaohsiung）` };
+  }
+
+  candidates.sort((a, b) => {
+    if (alias?.cc) {
+      const aMatch = String(a.country_code || '').toUpperCase() === alias.cc ? 1 : 0;
+      const bMatch = String(b.country_code || '').toUpperCase() === alias.cc ? 1 : 0;
+      if (aMatch !== bMatch) return bMatch - aMatch;
+    }
+    return Number(b.population || 0) - Number(a.population || 0);
+  });
+
+  const hit = candidates[0];
+  if (!hit || !Number.isFinite(hit.latitude) || !Number.isFinite(hit.longitude)) {
+    return { ok: false, error: `無法取得「${cleanCity}」座標` };
+  }
+  const hitName = cleanExternalSnippet(hit.name || cleanCity, 40) || cleanCity;
+  const countryLabel = normalizeGeoCountry(hit.country_code, hit.country);
+  const displayName = alias?.displayName || hitName;
+  const resolvedLabel = alias?.label || (countryLabel ? `${hitName}（${countryLabel}）` : hitName);
+  return {
+    ok: true,
+    city: cleanCity,
+    displayName,
+    resolvedLabel,
+    lat: hit.latitude,
+    lon: hit.longitude,
+  };
+}
+
 /**
  * Fetches 2-day forecast from Open-Meteo and returns a notice ONLY when tomorrow shows
  * a significant weather swing (rain >= 60%, temperature drop >= 5°C, or extreme temp).
@@ -641,6 +781,7 @@ export async function fetchWeatherNotice({
   weatherLat = null,
   weatherLon = null,
   weatherResolvedCity = '',
+  weatherResolvedLabel = '',
   fetchFn = fetch,
   lookupFn = dnsLookup,
   nowMs = Date.now(),
@@ -649,20 +790,21 @@ export async function fetchWeatherNotice({
   if (!cleanCity) return { ok: false, reason: 'no_city' };
 
   const fetchOpts = { fetchFn, lookupFn };
+  const alias = CITY_QUERY_ALIASES.get(cleanCity);
   let lat = weatherLat;
   let lon = weatherLon;
-  let displayCity = weatherResolvedCity || cleanCity;
+  let displayCity = alias?.displayName || String(weatherResolvedLabel || '').replace(/（.*$/, '').trim() || weatherResolvedCity || cleanCity;
+  let resolvedLabel = alias?.label || weatherResolvedLabel || '';
 
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanCity)}&count=1&language=zh`;
-    const geoJson = JSON.parse(await safeFetchExternalText(geoUrl, fetchOpts));
-    const hit = geoJson?.results?.[0];
-    if (!hit || !Number.isFinite(hit.latitude) || !Number.isFinite(hit.longitude)) {
-      return { ok: false, reason: 'city_not_found' };
+    const resolved = await resolveWeatherCity(cleanCity, fetchOpts);
+    if (!resolved.ok) {
+      return { ok: false, reason: 'city_not_found', error: resolved.error };
     }
-    lat = hit.latitude;
-    lon = hit.longitude;
-    displayCity = cleanExternalSnippet(hit.name || cleanCity, 40) || cleanCity;
+    lat = resolved.lat;
+    lon = resolved.lon;
+    displayCity = resolved.displayName;
+    resolvedLabel = resolved.resolvedLabel;
   }
 
   const fcUrl =
@@ -671,7 +813,11 @@ export async function fetchWeatherNotice({
   const fcJson = JSON.parse(await safeFetchExternalText(fcUrl, fetchOpts));
   const daily = fcJson?.daily;
   if (!daily || !Array.isArray(daily.time) || daily.time.length < 2) {
-    return { ok: false, reason: 'no_forecast', resolvedCoords: { lat, lon, city: cleanCity, displayCity } };
+    return {
+      ok: false,
+      reason: 'no_forecast',
+      resolvedCoords: { lat, lon, city: cleanCity, displayCity, resolvedLabel },
+    };
   }
 
   const t0Max = Number(daily.temperature_2m_max?.[0]);
@@ -698,7 +844,7 @@ export async function fetchWeatherNotice({
   }
 
   if (!reasons.length) {
-    return { ok: true, alert: null, resolvedCoords: { lat, lon, city: cleanCity, displayCity } };
+    return { ok: true, alert: null, resolvedCoords: { lat, lon, city: cleanCity, displayCity, resolvedLabel } };
   }
 
   const tempRange = (Number.isFinite(t1Min) && Number.isFinite(t1Max))
@@ -706,7 +852,7 @@ export async function fetchWeatherNotice({
     : '';
   return {
     ok: true,
-    resolvedCoords: { lat, lon, city: cleanCity, displayCity },
+    resolvedCoords: { lat, lon, city: cleanCity, displayCity, resolvedLabel },
     alert: {
       key: `weather:${displayCity}:${tomorrowDate}`,
       source: `${displayCity}天氣提醒`,
@@ -777,7 +923,7 @@ export async function refreshFreshFeedNow({
 } = {}) {
   const cfg = normalizeFreshBrowseConfig(config);
   const sources = resolveConfiguredFeedSources(cfg);
-  const { dayKey } = formatDayAndHour(nowMs, timezone);
+  const { dayKey } = formatClockInTz(nowMs, timezone);
   const wantWeather = cfg.presets.includes('weather') || Boolean(cfg.weatherCity);
 
   if (!sources.length && !(wantWeather && cfg.weatherCity)) {
@@ -811,6 +957,7 @@ export async function refreshFreshFeedNow({
         weatherLat: cfg.weatherLat,
         weatherLon: cfg.weatherLon,
         weatherResolvedCity: cfg.weatherResolvedCity,
+        weatherResolvedLabel: cfg.weatherResolvedLabel,
         fetchFn,
         lookupFn,
         nowMs,
@@ -836,7 +983,7 @@ export async function refreshFreshFeedNow({
       state.todayFetchCount = 0;
     }
     state.lastCheckedAt = nowMs;
-    if (slotName === 'morning' || slotName === 'evening') {
+    if (slotName && slotName !== 'manual') {
       if (!state.todaySlotsUsed.includes(slotName)) state.todaySlotsUsed.push(slotName);
     }
     state.todayFetchCount = Number(state.todayFetchCount || 0) + 1;
@@ -890,8 +1037,8 @@ export async function refreshFreshFeedNow({
 }
 
 /**
- * Checks whether Sidecar's 60s tick falls in the daily morning (10-12h) or evening (17-20h)
- * window and has not yet fetched in that slot today (strictly max 2 scheduled fetches/day).
+ * Checks whether Sidecar's 60s tick falls inside any user-configured fetch schedule
+ * window (each schedule allows a 3-hour grace window starting at its HH:MM time).
  */
 export async function maybeRefreshFreshFeed({
   root = getProjectRoot(),
@@ -908,22 +1055,38 @@ export async function maybeRefreshFreshFeed({
   const wantWeather = (cfg.presets.includes('weather') || Boolean(cfg.weatherCity)) && Boolean(cfg.weatherCity);
   if (!sources.length && !wantWeather) return { skipped: true, reason: 'no_sources' };
 
-  const { dayKey, hour } = formatDayAndHour(nowMs, timezone);
-  let slotName = '';
-  if (hour >= 10 && hour <= 12) slotName = 'morning';
-  else if (hour >= 17 && hour <= 20) slotName = 'evening';
-  if (!slotName) return { skipped: true, reason: 'outside_window' };
+  const fetchTimes = normalizeFetchTimes(cfg.fetchTimes);
+  if (!fetchTimes.length) return { skipped: true, reason: 'no_schedule' };
 
+  const { dayKey, totalMin } = formatClockInTz(nowMs, timezone);
   const cache = loadFreshBrowseCache(root);
   const used = cache.dayKey === dayKey ? cache.todaySlotsUsed : [];
-  if (used.includes(slotName)) return { skipped: true, reason: 'slot_already_fetched' };
+
+  let dueSlot = '';
+  let anyInWindow = false;
+  for (let i = 0; i < fetchTimes.length; i++) {
+    const parsed = parseClockHhMm(fetchTimes[i]);
+    if (!parsed) continue;
+    if (totalMin >= parsed.totalMin && totalMin < parsed.totalMin + 180) {
+      anyInWindow = true;
+      const slotKey = `slot-${i}-${parsed.text}`;
+      if (!used.includes(slotKey)) {
+        dueSlot = slotKey;
+        break;
+      }
+    }
+  }
+
+  if (!dueSlot) {
+    return { skipped: true, reason: anyInWindow ? 'slot_already_fetched' : 'outside_window' };
+  }
 
   // Minimum 25-min cooldown between fetch attempts (handles repeated failures gracefully)
   if (cache.lastCheckedAt > 0 && nowMs - cache.lastCheckedAt < 25 * 60_000) {
     return { skipped: true, reason: 'throttle' };
   }
 
-  return await refreshFreshFeedNow({ root, config: cfg, timezone, slotName, nowMs, fetchFn, lookupFn });
+  return await refreshFreshFeedNow({ root, config: cfg, timezone, slotName: dueSlot, nowMs, fetchFn, lookupFn });
 }
 
 function selectDiverseFreshPicks(state, cfg, dayKey, nowMs, maxPick) {
@@ -961,19 +1124,37 @@ function selectDiverseFreshPicks(state, cfg, dayKey, nowMs, maxPick) {
   return selected;
 }
 
+function markPicksConsumedInState(state, selected) {
+  const pickedKeys = new Set(selected.map((x) => x?.key).filter(Boolean));
+  const seenSet = new Set(Array.isArray(state.seenKeys) ? state.seenKeys : []);
+  state.items = (Array.isArray(state.items) ? state.items : []).filter((x) => x?.key && !pickedKeys.has(x.key));
+  state.seenKeys = [...seenSet, ...pickedKeys].slice(-MAX_SEEN_KEYS);
+  state.recentShared = [
+    ...selected.map((x) => ({
+      key: x.key,
+      source: x.source,
+      title: x.title,
+      url: x.url,
+      sharedAt: x.sharedAt || Date.now(),
+    })),
+    ...(Array.isArray(state.recentShared) ? state.recentShared : []),
+  ].slice(0, 10);
+  state.todayShareCount = Number(state.todayShareCount || 0) + 1;
+}
+
 /**
- * Peeks up to `maxPick` (default 3) unseen diverse candidates without modifying cache state.
+ * Peeks up to `maxPick` (default 2) unseen diverse candidates without modifying cache state.
  */
 export function peekFreshBrowsePicks({
   root = getProjectRoot(),
   config,
   timezone = '',
   nowMs = Date.now(),
-  maxPick = 3,
+  maxPick = 2,
 } = {}) {
   const cfg = normalizeFreshBrowseConfig(config);
   if (!cfg.enabled || cfg.dailyShareLimit <= 0) return [];
-  const { dayKey } = formatDayAndHour(nowMs, timezone);
+  const { dayKey } = formatClockInTz(nowMs, timezone);
   const state = loadFreshBrowseCache(root);
   return selectDiverseFreshPicks(state, cfg, dayKey, nowMs, maxPick);
 }
@@ -988,9 +1169,8 @@ export function commitFreshBrowsePicks({
   nowMs = Date.now(),
 } = {}) {
   if (!Array.isArray(picked) || !picked.length) return [];
-  const { dayKey } = formatDayAndHour(nowMs, timezone);
-  const pickedKeys = new Set(picked.map((x) => x?.key).filter(Boolean));
-  if (!pickedKeys.size) return [];
+  const { dayKey } = formatClockInTz(nowMs, timezone);
+  const stamped = picked.map((x) => ({ ...x, sharedAt: nowMs }));
 
   updateJsonLocked(cacheFilePath(root), defaultCacheState(), (raw) => {
     const state = {
@@ -1001,27 +1181,14 @@ export function commitFreshBrowsePicks({
       state.shareDayKey = dayKey;
       state.todayShareCount = 0;
     }
-    const seenSet = new Set(Array.isArray(state.seenKeys) ? state.seenKeys : []);
-    state.items = (Array.isArray(state.items) ? state.items : []).filter((x) => x?.key && !pickedKeys.has(x.key));
-    state.seenKeys = [...seenSet, ...pickedKeys].slice(-MAX_SEEN_KEYS);
-    state.recentShared = [
-      ...picked.map((x) => ({
-        key: x.key,
-        source: x.source,
-        title: x.title,
-        url: x.url,
-        sharedAt: nowMs,
-      })),
-      ...(Array.isArray(state.recentShared) ? state.recentShared : []),
-    ].slice(0, 10);
-    state.todayShareCount = Number(state.todayShareCount || 0) + 1;
+    markPicksConsumedInState(state, stamped);
     return state;
   });
   return picked;
 }
 
 /**
- * Atomically selects up to `maxPick` (default 3) unseen diverse candidates for `<speak-up>`,
+ * Atomically selects up to `maxPick` (default 2) unseen diverse candidates for `<speak-up>`,
  * enforces daily share quota, and marks shown keys in `seenKeys` so headlines never repeat.
  */
 export function consumeFreshBrowsePicks({
@@ -1029,12 +1196,12 @@ export function consumeFreshBrowsePicks({
   config,
   timezone = '',
   nowMs = Date.now(),
-  maxPick = 3,
+  maxPick = 2,
 } = {}) {
   const cfg = normalizeFreshBrowseConfig(config);
   if (!cfg.enabled || cfg.dailyShareLimit <= 0) return [];
 
-  const { dayKey } = formatDayAndHour(nowMs, timezone);
+  const { dayKey } = formatClockInTz(nowMs, timezone);
   let picked = [];
 
   updateJsonLocked(cacheFilePath(root), defaultCacheState(), (raw) => {
@@ -1050,21 +1217,7 @@ export function consumeFreshBrowsePicks({
     if (!selected.length) return state;
 
     picked = selected;
-    const pickedKeys = new Set(selected.map((x) => x.key));
-    const seenSet = new Set(Array.isArray(state.seenKeys) ? state.seenKeys : []);
-    state.items = (Array.isArray(state.items) ? state.items : []).filter((x) => x?.key && !pickedKeys.has(x.key));
-    state.seenKeys = [...seenSet, ...pickedKeys].slice(-MAX_SEEN_KEYS);
-    state.recentShared = [
-      ...selected.map((x) => ({
-        key: x.key,
-        source: x.source,
-        title: x.title,
-        url: x.url,
-        sharedAt: nowMs,
-      })),
-      ...(Array.isArray(state.recentShared) ? state.recentShared : []),
-    ].slice(0, 10);
-    state.todayShareCount = Number(state.todayShareCount || 0) + 1;
+    markPicksConsumedInState(state, selected.map((x) => ({ ...x, sharedAt: nowMs })));
     return state;
   });
 
@@ -1088,30 +1241,30 @@ export function clearFreshBrowseCache(root = getProjectRoot(), { clearSeen = fal
 }
 
 /**
- * Formats selected fresh picks into an optional, explicitly anti-news-anchor block
- * for injection inside `<speak-up>`.
+ * Formats selected fresh picks into a token-lean, non-news-anchor block
+ * strictly injected inside `<speak-up>` only.
  */
 export function formatFreshBrowsePromptBlock(picks = []) {
   if (!Array.isArray(picks) || !picks.length) return '';
   const lines = [
-    '【剛才自己逛網看到的新鮮見聞（完全由你決定要不要聊，不強制採用）】',
+    '【順手逛到的新鮮事（自由選0~1件自然聊、可無視；勿播報條列、不必硬接上輪工作）】',
   ];
   for (const item of picks) {
     const src = item.source ? `[${item.source}] ` : '';
-    const sum = item.summary ? ` — ${item.summary}` : '';
+    const sumText = item.summary && item.summary.length > 72
+      ? `${item.summary.slice(0, 71).trim()}…`
+      : (item.summary || '');
+    const sum = sumText ? ` — ${sumText}` : '';
     const link = item.url ? ` (${item.url})` : '';
     lines.push(`- ${src}${item.title}${sum}${link}`);
   }
-  lines.push(
-    '（說話分寸：這只是你剛才自己滑手機瞄到的幾件外界新鮮事，**千萬不要當成新聞播報員逐條整理或做每日摘要**。只有當其中某 1 件剛好讓你覺得好玩、有吐槽點、或覺得主人可能會感興趣時，才用你平時的人設口吻自然聊這 1 件就好；如果都沒特別想聊的感覺，就乾脆隻字不提，照你本來想說的打聲招呼即可。）',
-  );
   return lines.join('\n');
 }
 
 export function getFreshBrowseSnapshot(root = getProjectRoot(), config, { timezone = '', nowMs = Date.now() } = {}) {
   const cfg = normalizeFreshBrowseConfig(config);
   const cache = loadFreshBrowseCache(root);
-  const { dayKey } = formatDayAndHour(nowMs, timezone);
+  const { dayKey } = formatClockInTz(nowMs, timezone);
   const sameDay = cache.dayKey === dayKey;
   const sameShareDay = cache.shareDayKey === dayKey;
   return {

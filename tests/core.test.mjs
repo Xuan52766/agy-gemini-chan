@@ -52,6 +52,7 @@ import {
   normalizeYouTubeOrFeedUrl,
   parseFeedXml,
   refreshFreshFeedNow,
+  resolveWeatherCity,
   safeFetchExternalText,
   validateAndPreviewFeed,
   validateExternalFeedUrl,
@@ -1529,7 +1530,7 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
 
     const nowMs = new Date('2026-11-23T10:30:00+08:00').getTime();
     const recentPub = new Date(nowMs - 2 * 3600_000).toUTCString();
-    const oldPub = new Date(nowMs - 72 * 3600_000).toUTCString();
+    const oldPub = new Date(nowMs - 96 * 3600_000).toUTCString();
 
     const mockFetch = async (url) => {
       if (url === 'https://www.youtube.com/@demo_cat') {
@@ -1593,13 +1594,28 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
     assert.doesNotMatch(parsedXml.items[0].title, /\[SPEAK_UP_INTERNAL\]|<speak-up>|<b>/);
     assert.match(parsedXml.items[0].summary, /&/);
 
-    // Weather swing check
+    // Weather swing & Taiwan Chinese city resolution check (`高雄` must beat low-pop homonyms and map to Kaohsiung TW)
+    const khLookup = await resolveWeatherCity('高雄', {
+      fetchFn: async (u) => {
+        assert.match(u, /Kaohsiung/);
+        return new Response(JSON.stringify({
+          results: [
+            { name: 'Kaohsiung Farm', country: 'Other', country_code: 'CN', population: 500, latitude: 31.3, longitude: 105.3 },
+            { name: '高雄市', country: '台湾', country_code: 'TW', population: 2770000, latitude: 22.616, longitude: 120.313 },
+          ],
+        }), { status: 200 });
+      },
+    });
+    assert.equal(khLookup.ok, true);
+    assert.equal(khLookup.displayName, '高雄市');
+    assert.equal(khLookup.resolvedLabel, '高雄市（台灣）');
+
     const wNotice = await fetchWeatherNotice({ city: 'Taipei', fetchFn: mockFetch, nowMs });
     assert.equal(wNotice.ok, true);
     assert.ok(wNotice.alert);
     assert.match(wNotice.alert.title, /降溫|降雨/);
 
-    // 4. Enable Fresh Browse + custom YouTube feed + weather; test 2x/day slot scheduling
+    // 4. Enable Fresh Browse + custom YouTube feed + weather; test custom schedule windows
     const spCfg = saveSpeakUpConfig({
       enabled: true,
       dryRun: false,
@@ -1607,31 +1623,36 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
       freshBrowse: {
         enabled: true,
         dailyShareLimit: 2,
-        maxAgeHours: 48,
+        maxAgeHours: 72,
+        fetchTimes: ['10:00', '17:00'],
         presets: ['science', 'acg', 'weather'],
         weatherCity: 'Taipei',
         customFeeds: [{ id: 'yt1', label: 'Cat Studio', url: ytResolved.url, enabled: true }],
       },
     }, root);
 
-    // Partial save preserves customFeeds cleanly!
+    // Zero bloat on in-chat/startup Speak-Up rules (user only wants fresh-browse hints inside Speak-Up roll)
+    assert.doesNotMatch(buildInChatSpeakUpRule(root), /見聞/);
+
+    // Partial save preserves customFeeds & fetchTimes cleanly!
     const afterPartial = saveSpeakUpConfig({ freshBrowse: { dailyShareLimit: 1 } }, root);
     assert.equal(afterPartial.freshBrowse.customFeeds.length, 1);
+    assert.deepEqual(afterPartial.freshBrowse.fetchTimes, ['10:00', '17:00']);
     assert.equal(afterPartial.freshBrowse.dailyShareLimit, 1);
     saveSpeakUpConfig({ freshBrowse: { dailyShareLimit: 2 } }, root);
 
-    // Outside morning/evening window (14:00) skips fetch
-    const midRes = await maybeRefreshFreshFeed({
+    // Outside configured schedule windows (09:00 before 10:00) skips fetch
+    const earlyRes = await maybeRefreshFreshFeed({
       root,
       config: spCfg.freshBrowse,
       timezone: 'Asia/Taipei',
-      nowMs: new Date('2026-11-23T14:00:00+08:00').getTime(),
+      nowMs: new Date('2026-11-23T09:00:00+08:00').getTime(),
       fetchFn: mockFetch,
     });
-    assert.equal(midRes.skipped, true);
-    assert.equal(midRes.reason, 'outside_window');
+    assert.equal(earlyRes.skipped, true);
+    assert.equal(earlyRes.reason, 'outside_window');
 
-    // Inside morning window (10:30) fetches cleanly once
+    // Inside morning window (10:30) fetches cleanly once under default ['10:00', '17:00']
     const mornMs = new Date('2026-11-23T10:30:00+08:00').getTime();
     const mornRes = await maybeRefreshFreshFeed({
       root,
@@ -1653,6 +1674,26 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
     });
     assert.equal(mornDup.skipped, true);
     assert.equal(mornDup.reason, 'slot_already_fetched');
+
+    // Custom single schedule e.g. `14:00` skips 13:30 and runs at 14:15
+    const beforeCustom = await maybeRefreshFreshFeed({
+      root,
+      config: { ...spCfg.freshBrowse, fetchTimes: ['14:00'] },
+      timezone: 'Asia/Taipei',
+      nowMs: new Date('2026-11-23T13:30:00+08:00').getTime(),
+      fetchFn: mockFetch,
+    });
+    assert.equal(beforeCustom.skipped, true);
+    assert.equal(beforeCustom.reason, 'outside_window');
+    const customSchedRes = await maybeRefreshFreshFeed({
+      root,
+      config: { ...spCfg.freshBrowse, fetchTimes: ['14:00'] },
+      timezone: 'Asia/Taipei',
+      nowMs: new Date('2026-11-23T14:15:00+08:00').getTime(),
+      fetchFn: mockFetch,
+    });
+    assert.equal(customSchedRes.ok, true);
+    assert.equal(customSchedRes.itemsCount, 4);
 
     // 5. Dry run MUST NOT consume fresh items; failed sender MUST NOT consume items
     await executeSpeakUpRoll({ root, mode: 'dry', now: new Date(mornMs + 1000), targetConvId: 'conv-1' });
@@ -1681,10 +1722,10 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
     });
     assert.equal(tickRem.action, 'sent_planned');
     assert.equal(tickRem.kind, 'reminder');
-    assert.doesNotMatch(sentMessages[0], /新鮮見聞/);
+    assert.doesNotMatch(sentMessages[0], /順手逛到的新鮮事/);
     assert.equal(getSpeakUpSnapshot(root, 0, new Date(mornMs + 120_000)).freshBrowse.items.length, 4);
 
-    // 6. Real dice send attaches <=3 diverse picks with non-news-anchor framing & respects daily quota
+    // 6. Real dice send attaches <=2 compact diverse picks with lean non-news-anchor framing & respects daily quota
     const roll1 = await executeSpeakUpRoll({
       root,
       mode: 'send',
@@ -1693,13 +1734,14 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
       sender: async (_cid, msg) => { sentMessages.push(msg); },
     });
     assert.equal(roll1.action, 'sent');
-    assert.match(sentMessages[1], /新鮮見聞/);
-    assert.match(sentMessages[1], /千萬不要當成新聞播報員/);
+    assert.match(sentMessages[1], /順手逛到的新鮮事/);
+    assert.match(sentMessages[1], /勿播報條列/);
+    assert.match(sentMessages[1], /不必硬接上輪工作/);
     const snapAfter1 = getSpeakUpSnapshot(root, 0, new Date(mornMs + 200_000)).freshBrowse;
     assert.equal(snapAfter1.status.todayShareCount, 1);
-    assert.equal(snapAfter1.items.length, 1); // 4 - 3 = 1 unseen remaining
+    assert.equal(snapAfter1.items.length, 2); // 4 - maxPick(2) = 2 unseen remaining
 
-    // Second send shares remaining 1 item and hits dailyShareLimit=2
+    // Second send shares remaining 2 items and hits dailyShareLimit=2
     await executeSpeakUpRoll({
       root,
       mode: 'send',
@@ -1707,7 +1749,8 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
       targetConvId: 'conv-1',
       sender: async (_cid, msg) => { sentMessages.push(msg); },
     });
-    assert.match(sentMessages[2], /新鮮見聞/);
+    assert.match(sentMessages[2], /順手逛到的新鮮事/);
+    assert.equal(getSpeakUpSnapshot(root, 0, new Date(mornMs + 300_000)).freshBrowse.items.length, 0);
 
     // Even after refreshing more items, 3rd send same day respects dailyShareLimit=2
     await refreshFreshFeedNow({
@@ -1727,12 +1770,17 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
       targetConvId: 'conv-1',
       sender: async (_cid, msg) => { sentMessages.push(msg); },
     });
-    assert.doesNotMatch(sentMessages[3], /新鮮見聞/);
+    assert.doesNotMatch(sentMessages[3], /順手逛到的新鮮事/);
+
+    // 7. speak_up_plan list exposes freshBrowse summary + items cleanly on demand
+    const listRes = mutateSpeakUpPlan('list', {}, root, { now: mornMs + 405_000 });
+    assert.equal(listRes.freshBrowse.config.enabled, true);
+    assert.equal(listRes.freshBrowse.items.length, 1);
 
     clearFreshBrowseCache(root, { clearSeen: true });
     assert.equal(getSpeakUpSnapshot(root, 0, new Date(mornMs + 410_000)).freshBrowse.items.length, 0);
 
-    // 7. MCP speak_up_plan set_config shortcut toggles freshBrowseEnabled without losing customFeeds
+    // 8. MCP speak_up_plan set_config shortcut toggles freshBrowseEnabled without losing customFeeds
     const mcpToggleOff = mutateSpeakUpPlan('set_config', { freshBrowseEnabled: false }, root);
     assert.equal(mcpToggleOff.ok, true);
     assert.equal(mcpToggleOff.config.freshBrowse.enabled, false);

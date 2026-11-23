@@ -966,7 +966,7 @@
           <div class="block-head">
             <div>
               <h3>外網新鮮見聞（自動找新話題）</h3>
-              <p class="sec-sub">預設關閉。每日最多 2 次靜默抓取設定來源，搭話時她會自行判斷要不要自然提起其中 1 件（不強行播報新聞）。</p>
+              <p class="sec-sub">預設關閉。依下方設定時段靜默抓取來源，僅在擲骰／節律搭話時自由挑 0～1 件帶入（不強行播報新聞）。</p>
             </div>
             <span id="sp-fresh-badge" class="chip tabular">已關閉</span>
           </div>
@@ -991,7 +991,7 @@
             <div class="field-grid-3 compact-top">
               <div class="field">
                 <label for="sp-freshWeatherCity">提醒城市（僅變天/降雨）</label>
-                <input id="sp-freshWeatherCity" type="text" maxlength="60" placeholder="例：Taipei" />
+                <input id="sp-freshWeatherCity" type="text" maxlength="60" placeholder="例：高雄 / Taipei" />
               </div>
               <div class="field">
                 <label for="sp-freshDailyLimit">每日分享輪次上限</label>
@@ -1000,6 +1000,18 @@
               <div class="field">
                 <label for="sp-freshMaxAgeHours">內容保留時效 (小時)</label>
                 <input id="sp-freshMaxAgeHours" type="number" min="6" max="168" />
+              </div>
+            </div>
+            <p id="sp-freshWeatherResolved" class="prompt-hint">未設定城市（勾選「異常天氣」時可填台灣或全球城市名）</p>
+
+            <div class="field-grid-2 compact-top">
+              <div class="field">
+                <label for="sp-freshTime1">自動抓網時段 1 (起算 3h 窗口)</label>
+                <input id="sp-freshTime1" type="time" />
+              </div>
+              <div class="field">
+                <label for="sp-freshTime2">自動抓網時段 2 (清空則只抓 1 次)</label>
+                <input id="sp-freshTime2" type="time" />
               </div>
             </div>
 

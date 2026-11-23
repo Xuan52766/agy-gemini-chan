@@ -98,6 +98,7 @@ async function start() {
                   weatherLat: fbRes.resolvedWeatherCoords.lat,
                   weatherLon: fbRes.resolvedWeatherCoords.lon,
                   weatherResolvedCity: fbRes.resolvedWeatherCoords.city,
+                  weatherResolvedLabel: fbRes.resolvedWeatherCoords.resolvedLabel || '',
                 },
               },
               ROOT,

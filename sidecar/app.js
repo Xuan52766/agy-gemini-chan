@@ -1867,6 +1867,16 @@
     setIfClean($('sp-freshWeatherCity'), fbCfg.weatherCity || '', 'sp');
     setIfClean($('sp-freshDailyLimit'), fbCfg.dailyShareLimit ?? 2, 'sp');
     setIfClean($('sp-freshMaxAgeHours'), fbCfg.maxAgeHours ?? 72, 'sp');
+    const fbTimes = Array.isArray(fbCfg.fetchTimes) ? fbCfg.fetchTimes : ['10:00', '17:00'];
+    setIfClean($('sp-freshTime1'), fbTimes[0] || '', 'sp');
+    setIfClean($('sp-freshTime2'), fbTimes[1] || '', 'sp');
+    if ($('sp-freshWeatherResolved')) {
+      $('sp-freshWeatherResolved').textContent = fbCfg.weatherResolvedLabel
+        ? `目前天氣定位：${fbCfg.weatherResolvedLabel}`
+        : (fbCfg.weatherCity
+            ? `城市「${fbCfg.weatherCity}」尚未定位（按「儲存搭話設定」或「立即逛一逛」驗證）`
+            : '未設定城市（勾選「異常天氣」時可填高雄、台北、Taipei 等）');
+    }
     if ($('sp-fresh-feeds-count')) {
       $('sp-fresh-feeds-count').textContent = `${fbCustomFeeds.length} 個`;
     }
@@ -1910,7 +1920,7 @@
       ...fbItems.map((it) => renderFreshItemRow(it, false)),
       ...fbShared.slice(0, 3).map((it) => renderFreshItemRow(it, true)),
     ].join('');
-    setHtmlStable($('sp-freshItemsList'), combinedFreshHtml || '<p class="muted-meta">目前見聞籃是空的；啟用後每天會在早晚自動各逛一次，也可按右上「立即逛一逛」試抓。</p>');
+    setHtmlStable($('sp-freshItemsList'), combinedFreshHtml || '<p class="muted-meta">目前見聞籃是空的；啟用後會依設定時段自動各逛一次，也可按右上「立即逛一逛」試抓。</p>');
 
     setHtmlStable($('sp-logs'), (speakUp.state.logs || []).map((l) => `
       <div class="row-item">
@@ -2882,6 +2892,9 @@
         freshBrowse: {
           enabled: $('sp-freshEnabled')?.checked || false,
           presets: collectFreshPresets(),
+          fetchTimes: [$('sp-freshTime1')?.value, $('sp-freshTime2')?.value]
+            .map((v) => String(v || '').trim())
+            .filter(Boolean),
           weatherCity: $('sp-freshWeatherCity')?.value.trim() || '',
           dailyShareLimit: Number($('sp-freshDailyLimit')?.value ?? 2),
           maxAgeHours: Number($('sp-freshMaxAgeHours')?.value ?? 72),
@@ -2890,7 +2903,7 @@
     });
     setDirty('sp', false);
     if (res?.snapshot) renderSnapshot(res.snapshot);
-    flashMsg('sp-save-msg', '已儲存搭話設定 ✓');
+    flashMsg('sp-save-msg', res?.weatherError ? `已儲存（天氣提示：${res.weatherError}）` : '已儲存搭話設定 ✓', res?.weatherError ? 5200 : 3200);
   });
 
   $('btn-sp-dry').addEventListener('click', async () => {

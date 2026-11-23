@@ -14,6 +14,7 @@ import {
 import {
   clearFreshBrowseCache,
   refreshFreshFeedNow,
+  resolveWeatherCity,
   validateAndPreviewFeed,
 } from '../core/fresh-browse.mjs';
 import {
@@ -419,9 +420,32 @@ export function registerSidecarRoutes(
   }, 'POST');
 
   // Speak-Up endpoints
-  router.api('/api/speak-up/config', (data = {}) => {
-    const cfg = saveSpeakUpConfig(data, root);
-    return { ok: true, config: cfg, snapshot: getFullStateSnapshot({ root }) };
+  router.api('/api/speak-up/config', async (data = {}) => {
+    let cfg = saveSpeakUpConfig(data, root);
+    let weatherError = '';
+    if (cfg.freshBrowse?.weatherCity && !cfg.freshBrowse.weatherResolvedCity) {
+      try {
+        const geo = await resolveWeatherCity(cfg.freshBrowse.weatherCity, { fetchFn: freshBrowseFetchFn });
+        if (geo.ok) {
+          cfg = saveSpeakUpConfig(
+            {
+              freshBrowse: {
+                weatherLat: geo.lat,
+                weatherLon: geo.lon,
+                weatherResolvedCity: geo.city,
+                weatherResolvedLabel: geo.resolvedLabel,
+              },
+            },
+            root,
+          );
+        } else {
+          weatherError = geo.error || '找不到該城市';
+        }
+      } catch (err) {
+        weatherError = err?.message || '';
+      }
+    }
+    return { ok: true, config: cfg, weatherError, snapshot: getFullStateSnapshot({ root }) };
   }, 'POST');
 
   router.api('/api/speak-up/plan', (data = {}) => {
@@ -483,6 +507,7 @@ export function registerSidecarRoutes(
             weatherLat: res.resolvedWeatherCoords.lat,
             weatherLon: res.resolvedWeatherCoords.lon,
             weatherResolvedCity: res.resolvedWeatherCoords.city,
+            weatherResolvedLabel: res.resolvedWeatherCoords.resolvedLabel || '',
           },
         },
         root,

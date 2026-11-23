@@ -808,6 +808,7 @@ async function deliverSpeakUpThought({
         config: cfg.freshBrowse,
         timezone: cfg.timezone,
         nowMs,
+        maxPick: 2,
       })
     : [];
   const freshBrowseBlock = formatFreshBrowsePromptBlock(freshPicks);
@@ -888,7 +889,14 @@ export function mutateSpeakUpPlan(
 
   switch (action) {
     case 'list': {
-      return { ok: true, config: cfg, state, plans: state.plans, routines: state.routines };
+      return {
+        ok: true,
+        config: cfg,
+        state,
+        plans: state.plans,
+        routines: state.routines,
+        freshBrowse: getFreshBrowseSnapshot(root, cfg.freshBrowse, { timezone: cfg.timezone, nowMs: now }),
+      };
     }
     case 'schedule':
     case 'add_plan': {

@@ -205,7 +205,7 @@ const TOOLS = [
         action: {
           type: 'string',
           enum: ['list', 'schedule', 'schedule_batch', 'add_routine', 'update_routine', 'toggle_routine', 'reroll_routine', 'silence', 'clear_silence', 'remove', 'clear_plans', 'set_config'],
-          description: '排程動作：schedule=單次預約；schedule_batch=一次排入多筆 plans；add_routine=新增固定時間隨機波動節律；silence=設定勿擾到指定時間（避免睡前或忙碌期間打擾）；clear_silence=提前解除勿擾；list=查看目前時刻表與設定；set_config=調整開關或參數；remove=刪除指定 ID；clear_plans=清空預約佇列。',
+          description: '排程動作：schedule=單次預約；schedule_batch=一次排入多筆 plans；add_routine=新增固定時間隨機波動節律；silence=設定勿擾到指定時間；clear_silence=提前解除勿擾；list=查看目前時刻表、設定與見聞籃；set_config=調整開關或參數；remove=刪除指定 ID；clear_plans=清空預約佇列。',
         },
         id: { type: 'string', description: '要修改、切換或移除的預約／節律 ID' },
         kind: {
@@ -526,6 +526,17 @@ async function callTool(name, args = {}) {
           nextTriggerAt: r.nextTriggerAt ? localClockDisplay(r.nextTriggerAt) : '',
           thought: r.thought,
         })),
+        freshBrowse: {
+          enabled: Boolean(snap.freshBrowse?.config?.enabled),
+          fetchTimes: snap.freshBrowse?.config?.fetchTimes || [],
+          presets: snap.freshBrowse?.config?.presets || [],
+          weatherCity: snap.freshBrowse?.config?.weatherResolvedLabel || snap.freshBrowse?.config?.weatherCity || '',
+          pendingItems: (snap.freshBrowse?.items || []).slice(0, 5).map((i) => ({
+            source: i.source,
+            title: i.title,
+            url: i.url,
+          })),
+        },
       };
       return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
     }

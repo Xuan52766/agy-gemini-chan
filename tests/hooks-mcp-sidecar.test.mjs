@@ -553,7 +553,10 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
       name: 'speak_up_plan',
       arguments: { action: 'clear_silence' },
     });
-    assert.equal(JSON.parse(clrSilRes.result.content[0].text).silence.active, false);
+    const clrSilObj = JSON.parse(clrSilRes.result.content[0].text);
+    assert.equal(clrSilObj.silence.active, false);
+    assert.equal(clrSilObj.freshBrowse.enabled, false);
+    assert.deepEqual(clrSilObj.freshBrowse.fetchTimes, ['10:00', '17:00']);
 
     const rem = await rpc(3, 'tools/call', {
       name: 'remember',
@@ -1422,6 +1425,9 @@ test('Sidecar fresh-browse routes, HTML/JS UI controls, and XSS/URL safety work 
     const appJs = readFileSync(join(REPO_ROOT, 'sidecar', 'app.js'), 'utf-8');
     assert.match(html, /id="sp-freshEnabled"/);
     assert.match(html, /id="sp-freshPresets"/);
+    assert.match(html, /id="sp-freshTime1"/);
+    assert.match(html, /id="sp-freshTime2"/);
+    assert.match(html, /id="sp-freshWeatherResolved"/);
     assert.match(html, /id="btn-sp-fresh-refresh"/);
     assert.match(appJs, /\/api\/speak-up\/fresh\/test-feed/);
     new vm.Script(appJs, { filename: 'sidecar/app.js' });
