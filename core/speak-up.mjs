@@ -19,6 +19,15 @@ import {
   wakeFromSleep,
 } from './nest.mjs';
 import {
+  commitFreshBrowsePicks,
+  DEFAULT_FRESH_BROWSE_CONFIG,
+  formatFreshBrowsePromptBlock,
+  getFreshBrowseSnapshot,
+  mergeFreshBrowseConfig,
+  normalizeFreshBrowseConfig,
+  peekFreshBrowsePicks,
+} from './fresh-browse.mjs';
+import {
   clampNum,
   getDataPaths,
   localClockDisplay,
@@ -128,6 +137,7 @@ export const DEFAULT_SPEAK_UP_CONFIG = {
     '晃過來瞄一眼。想到什麼好玩的、想吐槽的事，或單純冒個泡就隨手丟一兩句。',
   inChatRulePrompt: '',
   followUpHintPrompt: '',
+  freshBrowse: { ...DEFAULT_FRESH_BROWSE_CONFIG },
 };
 
 export function buildDefaultSpeakUpRulePrompt(cfg = DEFAULT_SPEAK_UP_CONFIG) {
@@ -190,6 +200,7 @@ export function loadSpeakUpConfig(root) {
     const init = {
       ...DEFAULT_SPEAK_UP_CONFIG,
       peakWindows: parsePeakWindows(DEFAULT_PEAK_WINDOWS_TEXT),
+      freshBrowse: normalizeFreshBrowseConfig(DEFAULT_FRESH_BROWSE_CONFIG),
     };
     writeJsonAtomic(configPath(root), init);
     return init;
@@ -240,6 +251,7 @@ export function loadSpeakUpConfig(root) {
       : DEFAULT_SPEAK_UP_CONFIG.triggerPrompt,
     inChatRulePrompt: '',
     followUpHintPrompt: '',
+    freshBrowse: normalizeFreshBrowseConfig(m.freshBrowse),
   };
   normalized.followUpHintPrompt = normalizeCustomPrompt(
     m.followUpHintPrompt,
@@ -269,6 +281,9 @@ export function saveSpeakUpConfig(patch, root) {
     inChatRulePrompt: typeof rawStored.inChatRulePrompt === 'string' ? rawStored.inChatRulePrompt : '',
     followUpHintPrompt: typeof rawStored.followUpHintPrompt === 'string' ? rawStored.followUpHintPrompt : '',
     ...(patch || {}),
+    freshBrowse: patch && patch.freshBrowse !== undefined
+      ? mergeFreshBrowseConfig(curResolved.freshBrowse, patch.freshBrowse)
+      : curResolved.freshBrowse,
   };
   const ruleDefaults = ['high', 'normal', 'low'].map((t) => buildDefaultSpeakUpRulePrompt({ ...next, scheduleTendency: t }));
   const followDefaults = ['high', 'normal', 'low'].map((t) => buildDefaultFollowUpHintPrompt({ ...next, scheduleTendency: t }));
@@ -631,7 +646,7 @@ export function formatCurrentTimeLine(date = new Date()) {
 export function wrapInnerThought(
   promptText,
   date = new Date(),
-  { wokeFromSleep = false, followUpHint = '', kind = '', label = '', unansweredCount = 0 } = {},
+  { wokeFromSleep = false, followUpHint = '', kind = '', label = '', unansweredCount = 0, freshBrowseBlock = '' } = {},
 ) {
   const clean = String(promptText || DEFAULT_SPEAK_UP_CONFIG.triggerPrompt).trim();
   const lines = [
@@ -651,6 +666,9 @@ export function wrapInnerThought(
     lines.push(`（註：這是連續第 ${unansweredCount} 則未獲回覆的搭話；若覺得他多半還在睡或在忙，呼叫 \`speak_up_plan\` 的 \`silence\` 保持安靜就好。）`);
   }
   lines.push(formatCurrentTimeLine(date), clean);
+  if (freshBrowseBlock) {
+    lines.push('', String(freshBrowseBlock).trim());
+  }
   if (followUpHint) {
     lines.push(String(followUpHint).trim());
   }
@@ -767,6 +785,7 @@ async function deliverSpeakUpThought({
   label = '',
   logText = '',
   allowWakeFromSleep = true,
+  includeFreshBrowse = false,
 }) {
   let wokeRes = { woke: false, prevSleepStartedAt: 0 };
   if (nestState.sleeping && allowWakeFromSleep) {
@@ -783,12 +802,22 @@ async function deliverSpeakUpThought({
   const followUpHint = cfg.aiPlanEnabled
     ? (cfg.followUpHintPrompt || buildDefaultFollowUpHintPrompt(cfg))
     : '';
+  const freshPicks = (includeFreshBrowse && kind !== 'reminder' && cfg.freshBrowse?.enabled)
+    ? peekFreshBrowsePicks({
+        root,
+        config: cfg.freshBrowse,
+        timezone: cfg.timezone,
+        nowMs,
+      })
+    : [];
+  const freshBrowseBlock = formatFreshBrowsePromptBlock(freshPicks);
   const wrapped = wrapInnerThought(promptText, nowDate, {
     wokeFromSleep: wokeRes.woke,
     followUpHint,
     kind,
     label,
     unansweredCount: nextUnanswered,
+    freshBrowseBlock,
   });
 
   try {
@@ -800,10 +829,20 @@ async function deliverSpeakUpThought({
     throw err;
   }
 
+  if (freshPicks.length) {
+    commitFreshBrowsePicks({
+      root,
+      picked: freshPicks,
+      timezone: cfg.timezone,
+      nowMs,
+    });
+  }
+
   state.lastSpeakAt = nowMs;
   state.unansweredCount = nextUnanswered;
-  appendSpeakLog(state, `${wokeRes.woke ? '睡醒並' : ''}${logText}`, nowMs);
-  return { wokeFromSleep: wokeRes.woke, message: wrapped };
+  const freshTag = freshPicks.length ? `（含 ${freshPicks.length} 則見聞候選）` : '';
+  appendSpeakLog(state, `${wokeRes.woke ? '睡醒並' : ''}${logText}${freshTag}`, nowMs);
+  return { wokeFromSleep: wokeRes.woke, freshCount: freshPicks.length, message: wrapped };
 }
 
 function buildPlanRecord(item, cfg, nowMs, randomUnitFn) {
@@ -1021,8 +1060,15 @@ export function mutateSpeakUpPlan(
         'triggerPrompt', 'intervalMinutes', 'cooldownMin',
         'diceBlockActiveChat', 'suppressDiceBeforeReminder', 'suppressBeforeReminderMin',
         'maxUnansweredSpontaneous', 'scheduleTendency', 'proactiveCueEnabled',
+        'freshBrowse',
       ]) {
         if (args[k] !== undefined) allowed[k] = args[k];
+      }
+      if (args.freshBrowseEnabled !== undefined) {
+        allowed.freshBrowse = {
+          ...(allowed.freshBrowse && typeof allowed.freshBrowse === 'object' ? allowed.freshBrowse : {}),
+          enabled: Boolean(args.freshBrowseEnabled),
+        };
       }
       const nextCfg = saveSpeakUpConfig(allowed, root);
       return { ok: true, config: nextCfg, state };
@@ -1241,6 +1287,7 @@ export async function executeSpeakUpTick({
         kind,
         label: dueItem.label,
         allowWakeFromSleep: kind !== 'reminder' || dueItem.allowWakeFromSleep !== false,
+        includeFreshBrowse: kind === 'routine',
         logText: `已依【${dueType === 'routine' ? `波動節律:${dueItem.timeHHMM}±${dueItem.jitterMin}m` : (kind === 'reminder' ? '約定提醒' : '自主排程')}】開口（${dueItem.label || targetConvId.slice(-8)}）`,
       });
       consumeDueItem();
@@ -1461,6 +1508,7 @@ export async function executeSpeakUpRoll({
     sender,
     promptText: cfg.triggerPrompt,
     kind: 'dice',
+    includeFreshBrowse: true,
     logText: `已主動搭話（目標 ${targetConvId.slice(-8)}）：${eq}`,
   });
   saveSpeakUpState(state, root);
@@ -1493,9 +1541,11 @@ export function getSpeakUpSnapshot(root, lastUserSpeechAt = 0, now = new Date())
   const base = calcBaseHitLine(cfg, nowDate);
   const { bonus, line } = calcHitLine(base.baseLine, factor, state.missStreak, cfg.missBonus, cfg.bonusCap);
   const { hour } = getDayAndMinutes(nowDate, cfg.timezone);
+  const freshBrowse = getFreshBrowseSnapshot(root, cfg.freshBrowse, { timezone: cfg.timezone, nowMs });
 
   return {
     config: cfg,
+    freshBrowse,
     defaultInChatRulePrompt: buildDefaultSpeakUpRulePrompt(cfg),
     defaultFollowUpHintPrompt: buildDefaultFollowUpHintPrompt(cfg),
     defaultTriggerPrompt: DEFAULT_SPEAK_UP_CONFIG.triggerPrompt,

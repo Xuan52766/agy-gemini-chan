@@ -12,6 +12,11 @@ import {
   registerProjectConversation,
 } from '../core/bridge.mjs';
 import {
+  clearFreshBrowseCache,
+  refreshFreshFeedNow,
+  validateAndPreviewFeed,
+} from '../core/fresh-browse.mjs';
+import {
   batchRememberMemories,
   mutateMemory,
   recallMemories,
@@ -124,7 +129,11 @@ function computeDataVersionToken(root, convId, inProject) {
  * Registers static pages and JSON APIs onto any `SidecarApp`-compatible router (`page`, `api`).
  * `sendMessageFn(conversationId, text)` may be injected by SidecarApp or mocked in tests.
  */
-export function registerSidecarRoutes(router, ResponseClass, { root = getProjectRoot(), sendMessageFn = null } = {}) {
+export function registerSidecarRoutes(
+  router,
+  ResponseClass,
+  { root = getProjectRoot(), sendMessageFn = null, freshBrowseFetchFn = fetch } = {},
+) {
   const serveStatic = (filePath, contentType) => () => {
     if (!existsSync(filePath)) {
       return new ResponseClass('Not found', { status: 404, contentType: 'text/plain; charset=utf-8' });
@@ -456,6 +465,70 @@ export function registerSidecarRoutes(router, ResponseClass, { root = getProject
       sender: typeof sendMessageFn === 'function' && targetConvId ? sendMessageFn : null,
     });
     return { ok: true, result, snapshot: getFullStateSnapshot({ root, sessionId: targetConvId }) };
+  }, 'POST');
+
+  router.api('/api/speak-up/fresh/refresh', async () => {
+    const spCfg = loadSpeakUpConfig(root);
+    const res = await refreshFreshFeedNow({
+      root,
+      config: spCfg.freshBrowse,
+      timezone: spCfg.timezone,
+      slotName: 'manual',
+      fetchFn: freshBrowseFetchFn,
+    });
+    if (res?.resolvedWeatherCoords && !spCfg.freshBrowse?.weatherResolvedCity) {
+      saveSpeakUpConfig(
+        {
+          freshBrowse: {
+            weatherLat: res.resolvedWeatherCoords.lat,
+            weatherLon: res.resolvedWeatherCoords.lon,
+            weatherResolvedCity: res.resolvedWeatherCoords.city,
+          },
+        },
+        root,
+      );
+    }
+    return {
+      ok: Boolean(res?.ok),
+      fetchedCount: Number(res?.fetchedCount || 0),
+      addedCount: Number(res?.addedCount || 0),
+      itemsCount: Number(res?.itemsCount || 0),
+      error: String(res?.error || ''),
+      snapshot: getFullStateSnapshot({ root }),
+    };
+  }, 'POST');
+
+  router.api('/api/speak-up/fresh/test-feed', async (data = {}) => {
+    const rawUrl = String(data.url || '').trim();
+    const customLabel = String(data.label || '').trim();
+    const preview = await validateAndPreviewFeed(rawUrl, { fetchFn: freshBrowseFetchFn });
+    if (!preview.ok) {
+      return { ok: false, error: preview.error || '無法解析此來源' };
+    }
+    if (data.add) {
+      const spCfg = loadSpeakUpConfig(root);
+      const curList = Array.isArray(spCfg.freshBrowse?.customFeeds) ? spCfg.freshBrowse.customFeeds : [];
+      const nextList = [
+        ...curList.filter((f) => f.url !== preview.url),
+        {
+          id: `feed-${Date.now().toString(36)}`,
+          label: customLabel || preview.label,
+          url: preview.url,
+          enabled: true,
+        },
+      ];
+      saveSpeakUpConfig({ freshBrowse: { customFeeds: nextList } }, root);
+    }
+    return {
+      ok: true,
+      preview,
+      snapshot: getFullStateSnapshot({ root }),
+    };
+  }, 'POST');
+
+  router.api('/api/speak-up/fresh/clear', (data = {}) => {
+    clearFreshBrowseCache(root, { clearSeen: Boolean(data.clearSeen) });
+    return { ok: true, snapshot: getFullStateSnapshot({ root }) };
   }, 'POST');
 
   // Telegram Bridge endpoints

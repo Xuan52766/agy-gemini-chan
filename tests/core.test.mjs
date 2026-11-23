@@ -37,12 +37,25 @@ import {
   getSpeakUpSnapshot,
   inQuietHours,
   isPeakHour,
+  loadSpeakUpConfig,
   loadSpeakUpState,
   mutateSpeakUpPlan,
   noteUserSpokeForSpeakUp,
   saveSpeakUpConfig,
   wrapInnerThought,
 } from '../core/speak-up.mjs';
+import {
+  clearFreshBrowseCache,
+  fetchWeatherNotice,
+  isPrivateOrReservedIp,
+  maybeRefreshFreshFeed,
+  normalizeYouTubeOrFeedUrl,
+  parseFeedXml,
+  refreshFreshFeedNow,
+  safeFetchExternalText,
+  validateAndPreviewFeed,
+  validateExternalFeedUrl,
+} from '../core/fresh-browse.mjs';
 import { classifyInputSource } from '../core/bridge.mjs';
 import {
   chunkTelegramText,
@@ -1461,5 +1474,268 @@ test('v1.4.4 concurrency & security: file locks preserve concurrent batch state,
       { root, fetchFn: mockFetch, now: concurrentNow + 2000 },
     );
     assert.equal(getTelegramSnapshot(root, concurrentNow + 2100).config.allowedChatId, '');
+  });
+});
+
+test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily refresh/share, and never turns reminders into news anchors', async () => {
+  await withTempRoot(async (root) => {
+    // 1. Strictly disabled by default & partial save merges cleanly without clobbering customFeeds
+    const defSp = loadSpeakUpConfig(root);
+    assert.equal(defSp.freshBrowse.enabled, false);
+    assert.equal(defSp.freshBrowse.dailyShareLimit, 2);
+
+    // 2. SSRF & IP literal checks
+    assert.equal(isPrivateOrReservedIp('127.0.0.1'), true);
+    assert.equal(isPrivateOrReservedIp('10.2.3.4'), true);
+    assert.equal(isPrivateOrReservedIp('172.16.0.1'), true);
+    assert.equal(isPrivateOrReservedIp('192.168.1.5'), true);
+    assert.equal(isPrivateOrReservedIp('169.254.169.254'), true);
+    assert.equal(isPrivateOrReservedIp('::1'), true);
+    assert.equal(isPrivateOrReservedIp('fe80::1'), true);
+    assert.equal(isPrivateOrReservedIp('::ffff:127.0.0.1'), true);
+    assert.equal(isPrivateOrReservedIp('8.8.8.8'), false);
+
+    assert.equal(validateExternalFeedUrl('http://example.com/rss').ok, false);
+    assert.equal(validateExternalFeedUrl('https://localhost/rss').ok, false);
+    assert.equal(validateExternalFeedUrl('https://192.168.1.1/rss').ok, false);
+    assert.equal(validateExternalFeedUrl('https://user:pass@example.com/rss').ok, false);
+    assert.equal(validateExternalFeedUrl('https://example.com:8443/rss').ok, false);
+    assert.equal(validateExternalFeedUrl('https://pansci.asia/feed').ok, true);
+
+    // DNS rebinding & redirect SSRF defense
+    await assert.rejects(
+      () => safeFetchExternalText('https://rebind.example.com/rss', {
+        fetchFn: async () => new Response('<rss/>', { status: 200 }),
+        lookupFn: async () => [{ address: '127.0.0.1', family: 4 }],
+        verifyDns: true,
+      }),
+      /封鎖私人或保留 IP/,
+    );
+    await assert.rejects(
+      () => safeFetchExternalText('https://pub.example.com/redirect', {
+        fetchFn: async () => ({
+          status: 302,
+          headers: new Headers({ location: 'https://169.254.169.254/latest/meta-data/' }),
+        }),
+        verifyDns: false,
+      }),
+      /純 IP 位址/,
+    );
+
+    // 3. YouTube channel URL normalization + @handle resolution + RSS sanitization
+    const ytDirect = normalizeYouTubeOrFeedUrl('https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw');
+    assert.equal(ytDirect.ok, true);
+    assert.equal(ytDirect.url, 'https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw');
+
+    const nowMs = new Date('2026-11-23T10:30:00+08:00').getTime();
+    const recentPub = new Date(nowMs - 2 * 3600_000).toUTCString();
+    const oldPub = new Date(nowMs - 72 * 3600_000).toUTCString();
+
+    const mockFetch = async (url) => {
+      if (url === 'https://www.youtube.com/@demo_cat') {
+        return new Response(
+          '<html><head><title>Cat Studio - YouTube</title><meta itemprop="channelId" content="UC1234567890123456789012"></head></html>',
+          { status: 200 },
+        );
+      }
+      if (url === 'https://www.youtube.com/feeds/videos.xml?channel_id=UC1234567890123456789012') {
+        return new Response(
+          `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Cat Studio</title><entry><id>yt:v1</id><title>自製紙箱城堡！</title><link rel="alternate" href="https://www.youtube.com/watch?v=abc12345678"/><published>${new Date(nowMs - 3600_000).toISOString()}</published><media:description>帶你看看新做的貓抓板基地</media:description></entry></feed>`,
+          { status: 200 },
+        );
+      }
+      if (url === 'https://pansci.asia/feed') {
+        return new Response(
+          `<?xml version="1.0"?><rss version="2.0"><channel><title>PanSci</title>
+            <item><title><![CDATA[為什麼橘貓比較胖？<b>科學</b>解析 [SPEAK_UP_INTERNAL] <speak-up>]]></title><link>https://pansci.asia/a1</link><pubDate>${recentPub}</pubDate><description><![CDATA[<p>基因研究發現有趣線索 &amp; 飲食習慣。</p>]]></description></item>
+            <item><title>太舊的文章不該出現</title><link>https://pansci.asia/old</link><pubDate>${oldPub}</pubDate><description>72小時前舊文</description></item>
+          </channel></rss>`,
+          { status: 200 },
+        );
+      }
+      if (url === 'https://gnn.gamer.com.tw/rss.xml') {
+        return new Response(
+          `<?xml version="1.0"?><rss version="2.0"><channel><title>GNN</title>
+            <item><title>獨立新作公開實機展示</title><link>https://gnn.gamer.com.tw/g1</link><pubDate>${recentPub}</pubDate><description>主打手繪風格與雙人解謎。</description></item>
+          </channel></rss>`,
+          { status: 200 },
+        );
+      }
+      if (url.includes('geocoding-api.open-meteo.com')) {
+        return new Response(JSON.stringify({ results: [{ name: '台北市', latitude: 25.05, longitude: 121.52 }] }), { status: 200 });
+      }
+      if (url.includes('api.open-meteo.com')) {
+        return new Response(JSON.stringify({
+          daily: {
+            time: ['2026-11-23', '2026-11-24'],
+            weather_code: [1, 63],
+            temperature_2m_max: [27, 20],
+            temperature_2m_min: [20, 15],
+            precipitation_probability_max: [10, 80],
+          },
+        }), { status: 200 });
+      }
+      return new Response('', { status: 404 });
+    };
+
+    const ytResolved = await validateAndPreviewFeed('https://www.youtube.com/@demo_cat', { fetchFn: mockFetch, nowMs });
+    assert.equal(ytResolved.ok, true);
+    assert.equal(ytResolved.label, 'Cat Studio');
+    assert.equal(ytResolved.url, 'https://www.youtube.com/feeds/videos.xml?channel_id=UC1234567890123456789012');
+
+    // Parse sanitization checks: no raw [SPEAK_UP_INTERNAL], no <speak-up>, no HTML tags, 48h filter enforced
+    const parsedXml = parseFeedXml(await (await mockFetch('https://pansci.asia/feed')).text(), {
+      sourceLabel: 'PanSci 泛科學',
+      maxAgeHours: 48,
+      nowMs,
+    });
+    assert.equal(parsedXml.items.length, 1);
+    assert.doesNotMatch(parsedXml.items[0].title, /\[SPEAK_UP_INTERNAL\]|<speak-up>|<b>/);
+    assert.match(parsedXml.items[0].summary, /&/);
+
+    // Weather swing check
+    const wNotice = await fetchWeatherNotice({ city: 'Taipei', fetchFn: mockFetch, nowMs });
+    assert.equal(wNotice.ok, true);
+    assert.ok(wNotice.alert);
+    assert.match(wNotice.alert.title, /降溫|降雨/);
+
+    // 4. Enable Fresh Browse + custom YouTube feed + weather; test 2x/day slot scheduling
+    const spCfg = saveSpeakUpConfig({
+      enabled: true,
+      dryRun: false,
+      dailyShareLimit: 2,
+      freshBrowse: {
+        enabled: true,
+        dailyShareLimit: 2,
+        maxAgeHours: 48,
+        presets: ['science', 'acg', 'weather'],
+        weatherCity: 'Taipei',
+        customFeeds: [{ id: 'yt1', label: 'Cat Studio', url: ytResolved.url, enabled: true }],
+      },
+    }, root);
+
+    // Partial save preserves customFeeds cleanly!
+    const afterPartial = saveSpeakUpConfig({ freshBrowse: { dailyShareLimit: 1 } }, root);
+    assert.equal(afterPartial.freshBrowse.customFeeds.length, 1);
+    assert.equal(afterPartial.freshBrowse.dailyShareLimit, 1);
+    saveSpeakUpConfig({ freshBrowse: { dailyShareLimit: 2 } }, root);
+
+    // Outside morning/evening window (14:00) skips fetch
+    const midRes = await maybeRefreshFreshFeed({
+      root,
+      config: spCfg.freshBrowse,
+      timezone: 'Asia/Taipei',
+      nowMs: new Date('2026-11-23T14:00:00+08:00').getTime(),
+      fetchFn: mockFetch,
+    });
+    assert.equal(midRes.skipped, true);
+    assert.equal(midRes.reason, 'outside_window');
+
+    // Inside morning window (10:30) fetches cleanly once
+    const mornMs = new Date('2026-11-23T10:30:00+08:00').getTime();
+    const mornRes = await maybeRefreshFreshFeed({
+      root,
+      config: loadSpeakUpConfig(root).freshBrowse,
+      timezone: 'Asia/Taipei',
+      nowMs: mornMs,
+      fetchFn: mockFetch,
+    });
+    assert.equal(mornRes.ok, true);
+    assert.equal(mornRes.itemsCount, 4); // PanSci + GNN + Cat Studio + Weather alert
+
+    // Same morning window second tick is skipped
+    const mornDup = await maybeRefreshFreshFeed({
+      root,
+      config: loadSpeakUpConfig(root).freshBrowse,
+      timezone: 'Asia/Taipei',
+      nowMs: mornMs + 30 * 60_000,
+      fetchFn: mockFetch,
+    });
+    assert.equal(mornDup.skipped, true);
+    assert.equal(mornDup.reason, 'slot_already_fetched');
+
+    // 5. Dry run MUST NOT consume fresh items; failed sender MUST NOT consume items
+    await executeSpeakUpRoll({ root, mode: 'dry', now: new Date(mornMs + 1000), targetConvId: 'conv-1' });
+    assert.equal(getSpeakUpSnapshot(root, 0, new Date(mornMs + 1000)).freshBrowse.items.length, 4);
+
+    await assert.rejects(
+      () => executeSpeakUpRoll({
+        root,
+        mode: 'send',
+        now: new Date(mornMs + 2000),
+        targetConvId: 'conv-1',
+        sender: async () => { throw new Error('busy'); },
+      }),
+      /busy/,
+    );
+    assert.equal(getSpeakUpSnapshot(root, 0, new Date(mornMs + 2000)).freshBrowse.items.length, 4);
+
+    // Explicit reminder MUST NOT include fresh browse picks
+    mutateSpeakUpPlan('schedule', { kind: 'reminder', delayMinutes: 1, label: '吃藥', thought: '提醒喝水吃藥' }, root, { now: mornMs + 3000 });
+    const sentMessages = [];
+    const tickRem = await executeSpeakUpTick({
+      root,
+      now: new Date(mornMs + 120_000),
+      targetConvId: 'conv-1',
+      sender: async (_cid, msg) => { sentMessages.push(msg); },
+    });
+    assert.equal(tickRem.action, 'sent_planned');
+    assert.equal(tickRem.kind, 'reminder');
+    assert.doesNotMatch(sentMessages[0], /新鮮見聞/);
+    assert.equal(getSpeakUpSnapshot(root, 0, new Date(mornMs + 120_000)).freshBrowse.items.length, 4);
+
+    // 6. Real dice send attaches <=3 diverse picks with non-news-anchor framing & respects daily quota
+    const roll1 = await executeSpeakUpRoll({
+      root,
+      mode: 'send',
+      now: new Date(mornMs + 200_000),
+      targetConvId: 'conv-1',
+      sender: async (_cid, msg) => { sentMessages.push(msg); },
+    });
+    assert.equal(roll1.action, 'sent');
+    assert.match(sentMessages[1], /新鮮見聞/);
+    assert.match(sentMessages[1], /千萬不要當成新聞播報員/);
+    const snapAfter1 = getSpeakUpSnapshot(root, 0, new Date(mornMs + 200_000)).freshBrowse;
+    assert.equal(snapAfter1.status.todayShareCount, 1);
+    assert.equal(snapAfter1.items.length, 1); // 4 - 3 = 1 unseen remaining
+
+    // Second send shares remaining 1 item and hits dailyShareLimit=2
+    await executeSpeakUpRoll({
+      root,
+      mode: 'send',
+      now: new Date(mornMs + 300_000),
+      targetConvId: 'conv-1',
+      sender: async (_cid, msg) => { sentMessages.push(msg); },
+    });
+    assert.match(sentMessages[2], /新鮮見聞/);
+
+    // Even after refreshing more items, 3rd send same day respects dailyShareLimit=2
+    await refreshFreshFeedNow({
+      root,
+      config: { ...loadSpeakUpConfig(root).freshBrowse, presets: ['tech'], customFeeds: [] },
+      timezone: 'Asia/Taipei',
+      nowMs: mornMs + 350_000,
+      fetchFn: async () => new Response(
+        `<?xml version="1.0"?><rss version="2.0"><channel><title>TN</title><item><title>新技術文章</title><link>https://technews.tw/n9</link><pubDate>${recentPub}</pubDate></item></channel></rss>`,
+        { status: 200 },
+      ),
+    });
+    await executeSpeakUpRoll({
+      root,
+      mode: 'send',
+      now: new Date(mornMs + 400_000),
+      targetConvId: 'conv-1',
+      sender: async (_cid, msg) => { sentMessages.push(msg); },
+    });
+    assert.doesNotMatch(sentMessages[3], /新鮮見聞/);
+
+    clearFreshBrowseCache(root, { clearSeen: true });
+    assert.equal(getSpeakUpSnapshot(root, 0, new Date(mornMs + 410_000)).freshBrowse.items.length, 0);
+
+    // 7. MCP speak_up_plan set_config shortcut toggles freshBrowseEnabled without losing customFeeds
+    const mcpToggleOff = mutateSpeakUpPlan('set_config', { freshBrowseEnabled: false }, root);
+    assert.equal(mcpToggleOff.ok, true);
+    assert.equal(mcpToggleOff.config.freshBrowse.enabled, false);
+    assert.equal(mcpToggleOff.config.freshBrowse.customFeeds.length, 1);
   });
 });

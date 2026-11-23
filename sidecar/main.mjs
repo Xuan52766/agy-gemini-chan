@@ -11,8 +11,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getFullStateSnapshot } from '../core/bridge.mjs';
+import { maybeRefreshFreshFeed } from '../core/fresh-browse.mjs';
 import { loadMoodState } from '../core/mood.mjs';
-import { executeSpeakUpTick, loadSpeakUpConfig } from '../core/speak-up.mjs';
+import { executeSpeakUpTick, loadSpeakUpConfig, saveSpeakUpConfig } from '../core/speak-up.mjs';
 import {
   flushTelegramOutbox,
   loadTelegramConfig,
@@ -80,6 +81,32 @@ async function start() {
         targetConvId: xingxiTarget?.conversationId || '',
         sender: sendToConversation,
       });
+
+      // Background fresh-browse refresh (at most twice/day inside configured windows, opt-in only)
+      if (spCfg.enabled && spCfg.freshBrowse?.enabled) {
+        try {
+          const fbRes = await maybeRefreshFreshFeed({
+            root: ROOT,
+            config: spCfg.freshBrowse,
+            timezone: spCfg.timezone,
+            nowMs,
+          });
+          if (fbRes?.resolvedWeatherCoords && !spCfg.freshBrowse.weatherResolvedCity) {
+            saveSpeakUpConfig(
+              {
+                freshBrowse: {
+                  weatherLat: fbRes.resolvedWeatherCoords.lat,
+                  weatherLon: fbRes.resolvedWeatherCoords.lon,
+                  weatherResolvedCity: fbRes.resolvedWeatherCoords.city,
+                },
+              },
+              ROOT,
+            );
+          }
+        } catch (err) {
+          appendLogLine(LOG_PATH, `Fresh browse refresh error: ${err?.message || err}`);
+        }
+      }
 
       // Check Speak-Up (AI-scheduled plans & jittered routines checked every 60s; dice fallback obeys intervalMinutes)
       if (!spCfg.enabled || !targetEntry) return;

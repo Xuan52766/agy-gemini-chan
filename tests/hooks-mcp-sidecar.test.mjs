@@ -1352,3 +1352,80 @@ test('updater backups, archive overlay, and runUpdate preserve all user data and
     rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+test('Sidecar fresh-browse routes, HTML/JS UI controls, and XSS/URL safety work cleanly', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gcat-fresh-routes-'));
+  try {
+    const routes = {};
+    const pages = {};
+    const router = {
+      page(path, fn) { pages[path] = fn; },
+      api(path, fn, method = 'POST') { routes[`${method.toUpperCase()} ${path}`] = fn; },
+    };
+    class FakeResponse {
+      constructor(body, opts = {}) {
+        this.body = body;
+        this.status = opts.status || 200;
+        this.contentType = opts.contentType || 'text/plain';
+      }
+    }
+
+    const mockFetch = async (url) => {
+      if (url === 'https://evil-script-feed.example.com/rss') {
+        return new Response(
+          `<?xml version="1.0"?><rss version="2.0"><channel><title>&lt;img src=x onerror=alert(1)&gt;</title>
+            <item><title>安全標題 &lt;script&gt;alert(1)&lt;/script&gt;</title><link>javascript:alert(1)</link><description>測試摘要</description></item>
+            <item><title>正常 HTTPS 項目</title><link>https://evil-script-feed.example.com/post-1</link><description>正常描述</description></item>
+          </channel></rss>`,
+          { status: 200 },
+        );
+      }
+      return new Response('', { status: 404 });
+    };
+
+    registerSidecarRoutes(router, FakeResponse, { root, freshBrowseFetchFn: mockFetch });
+
+    // SSRF attempt blocked at test-feed endpoint
+    const ssrfRes = await routes['POST /api/speak-up/fresh/test-feed']({
+      url: 'http://127.0.0.1:8080/internal',
+      add: true,
+    });
+    assert.equal(ssrfRes.ok, false);
+
+    // Valid custom RSS added via test-feed
+    const addRes = await routes['POST /api/speak-up/fresh/test-feed']({
+      url: 'https://evil-script-feed.example.com/rss',
+      add: true,
+    });
+    assert.equal(addRes.ok, true);
+    assert.equal(addRes.snapshot.speakUp.freshBrowse.config.customFeeds.length, 1);
+
+    // Refresh populates items, stripping invalid javascript: URL while preserving valid HTTPS link
+    await routes['POST /api/speak-up/config']({
+      freshBrowse: { enabled: true, presets: [] },
+    });
+    const refRes = await routes['POST /api/speak-up/fresh/refresh']({});
+    assert.equal(refRes.ok, true);
+    assert.equal(refRes.itemsCount, 2);
+    const jsLinkItem = refRes.snapshot.speakUp.freshBrowse.items.find((i) => i.title.includes('安全標題'));
+    assert.equal(jsLinkItem.url, '');
+    const validItem = refRes.snapshot.speakUp.freshBrowse.items.find((i) => i.title === '正常 HTTPS 項目');
+    assert.equal(validItem.url, 'https://evil-script-feed.example.com/post-1');
+
+    // Clear removes cached basket cleanly
+    const clrRes = await routes['POST /api/speak-up/fresh/clear']({});
+    assert.equal(clrRes.ok, true);
+    assert.equal(clrRes.snapshot.speakUp.freshBrowse.items.length, 0);
+
+    // Verify served HTML & JS contain Fresh Browse controls and compile cleanly
+    const html = readFileSync(join(REPO_ROOT, 'sidecar', 'index.html'), 'utf-8');
+    const appJs = readFileSync(join(REPO_ROOT, 'sidecar', 'app.js'), 'utf-8');
+    assert.match(html, /id="sp-freshEnabled"/);
+    assert.match(html, /id="sp-freshPresets"/);
+    assert.match(html, /id="btn-sp-fresh-refresh"/);
+    assert.match(appJs, /\/api\/speak-up\/fresh\/test-feed/);
+    new vm.Script(appJs, { filename: 'sidecar/app.js' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

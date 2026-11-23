@@ -1844,6 +1844,74 @@
     setIfClean($('sp-prompt'), speakUp.config.triggerPrompt, 'sp');
     setIfClean($('sp-followUpPrompt'), speakUp.config.followUpHintPrompt || speakUp.defaultFollowUpHintPrompt || '', 'sp');
 
+    const fb = speakUp.freshBrowse || {};
+    const fbCfg = fb.config || {};
+    const fbStat = fb.status || {};
+    const fbItems = Array.isArray(fb.items) ? fb.items : [];
+    const fbShared = Array.isArray(fb.recentShared) ? fb.recentShared : [];
+    const fbCustomFeeds = Array.isArray(fbCfg.customFeeds) ? fbCfg.customFeeds : [];
+    const fbBadge = $('sp-fresh-badge');
+    if (fbBadge) {
+      fbBadge.textContent = fbCfg.enabled
+        ? `已啟用 · 今日分享 ${fbStat.todayShareCount || 0}/${fbCfg.dailyShareLimit ?? 2}`
+        : '已關閉';
+    }
+    setIfClean($('sp-freshEnabled'), Boolean(fbCfg.enabled), 'sp');
+    const fbPresetSet = new Set(Array.isArray(fbCfg.presets) ? fbCfg.presets : []);
+    const fbPresetsWrap = $('sp-freshPresets');
+    if (fbPresetsWrap && !fbPresetsWrap.contains(document.activeElement) && !state.dirty.sp) {
+      fbPresetsWrap.querySelectorAll('input[data-fresh-preset]').forEach((cb) => {
+        cb.checked = fbPresetSet.has(cb.dataset.freshPreset);
+      });
+    }
+    setIfClean($('sp-freshWeatherCity'), fbCfg.weatherCity || '', 'sp');
+    setIfClean($('sp-freshDailyLimit'), fbCfg.dailyShareLimit ?? 2, 'sp');
+    setIfClean($('sp-freshMaxAgeHours'), fbCfg.maxAgeHours ?? 48, 'sp');
+    if ($('sp-fresh-feeds-count')) {
+      $('sp-fresh-feeds-count').textContent = `${fbCustomFeeds.length} 個`;
+    }
+    setHtmlStable($('sp-freshFeedsList'), fbCustomFeeds.map((f) => `
+      <div class="row-item">
+        <div class="row-top">
+          <span><strong>${esc(f.label)}</strong>${f.enabled === false ? '（停用中）' : ''}</span>
+          <div class="btn-group-compact">
+            <button type="button" class="btn-mini" data-sp-toggle-feed="${esc(f.id)}">${f.enabled === false ? '啟用' : '停用'}</button>
+            <button type="button" class="btn-mini btn-danger" data-sp-del-feed="${esc(f.id)}">移除</button>
+          </div>
+        </div>
+        <div class="row-body muted-meta">${esc(f.url)}</div>
+      </div>
+    `).join('') || '<p class="muted-meta">尚未加入自訂 RSS 或 YouTube 頻道；可直接沿用上方精選分類。</p>');
+
+    if ($('sp-fresh-status-line')) {
+      const checkTime = fbStat.lastCheckedAt ? fmtClock(fbStat.lastCheckedAt) : '尚未檢查';
+      const errNote = fbStat.lastError ? ` ｜ 注意：${fbStat.lastError}` : '';
+      $('sp-fresh-status-line').textContent = `最近檢查：${checkTime} ｜ 今日抓取 ${fbStat.todayFetchCount || 0} 次 ｜ 待挑選 ${fbItems.length} 則${errNote}`;
+    }
+
+    const renderFreshItemRow = (item, isShared = false) => {
+      const safeHref = /^https:\/\//i.test(String(item.url || '')) ? item.url : '';
+      const titleHtml = safeHref
+        ? `<a href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>`
+        : esc(item.title);
+      const timeRef = isShared ? item.sharedAt : (item.publishedAt || item.fetchedAt);
+      const tag = isShared ? '<span class="pill-kind">已提供參考</span> ' : '';
+      return `
+        <div class="row-item">
+          <div class="row-top">
+            <span>${tag}<strong>${esc(item.source || '外部見聞')}</strong></span>
+            <span class="muted-meta tabular">${timeRef ? esc(fmtClock(timeRef)) : ''}</span>
+          </div>
+          <div class="row-body">${titleHtml}${item.summary ? `<div class="thought-note">${esc(item.summary)}</div>` : ''}</div>
+        </div>
+      `;
+    };
+    const combinedFreshHtml = [
+      ...fbItems.map((it) => renderFreshItemRow(it, false)),
+      ...fbShared.slice(0, 3).map((it) => renderFreshItemRow(it, true)),
+    ].join('');
+    setHtmlStable($('sp-freshItemsList'), combinedFreshHtml || '<p class="muted-meta">目前見聞籃是空的；啟用後每天會在早晚自動各逛一次，也可按右上「立即逛一逛」試抓。</p>');
+
     setHtmlStable($('sp-logs'), (speakUp.state.logs || []).map((l) => `
       <div class="row-item">
         <div class="row-top"><span>${esc(l.time)}</span></div>
@@ -2624,10 +2692,121 @@
 
   function isInstantSpeakUpTarget(el) {
     if (!el) return true;
-    if (Object.hasOwn(INSTANT_SP_SWITCHES, el.id) || el.id === 'sp-followActive' || el.id === 'sp-scheduleTendency') return true;
-    if (el.classList?.contains('sp-target-cb')) return true;
+    if (
+      Object.hasOwn(INSTANT_SP_SWITCHES, el.id)
+      || el.id === 'sp-followActive'
+      || el.id === 'sp-scheduleTendency'
+      || el.id === 'sp-freshEnabled'
+      || el.id === 'sp-freshCustomUrl'
+      || el.id === 'sp-freshCustomLabel'
+    ) return true;
+    if (el.classList?.contains('sp-target-cb') || $('sp-freshPresets')?.contains(el)) return true;
     return Boolean($('drawer-sp-add-routine')?.contains(el));
   }
+
+  function collectFreshPresets() {
+    return [...document.querySelectorAll('#sp-freshPresets input[data-fresh-preset]:checked')]
+      .map((cb) => cb.dataset.freshPreset)
+      .filter(Boolean);
+  }
+
+  $('sp-freshEnabled')?.addEventListener('change', async () => {
+    const res = await apiFetch('/api/speak-up/config', {
+      method: 'POST',
+      body: JSON.stringify({ freshBrowse: { enabled: $('sp-freshEnabled').checked } }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+  });
+
+  $('sp-freshPresets')?.addEventListener('change', async () => {
+    const res = await apiFetch('/api/speak-up/config', {
+      method: 'POST',
+      body: JSON.stringify({ freshBrowse: { presets: collectFreshPresets() } }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+  });
+
+  $('btn-sp-add-feed')?.addEventListener('click', () => {
+    const btn = $('btn-sp-add-feed');
+    const url = $('sp-freshCustomUrl')?.value.trim() || '';
+    const label = $('sp-freshCustomLabel')?.value.trim() || '';
+    if (!url) {
+      flashMsg('sp-fresh-feed-msg', '請先貼上 HTTPS RSS 或 YouTube 頻道網址');
+      return;
+    }
+    withBusy(btn, async () => {
+      const res = await apiFetch('/api/speak-up/fresh/test-feed', {
+        method: 'POST',
+        body: JSON.stringify({ url, label, add: true }),
+      });
+      if (res?.ok) {
+        if ($('sp-freshCustomUrl')) $('sp-freshCustomUrl').value = '';
+        if ($('sp-freshCustomLabel')) $('sp-freshCustomLabel').value = '';
+        if (res.snapshot) renderSnapshot(res.snapshot);
+        flashMsg('sp-fresh-feed-msg', `已加入「${res.preview?.label || '來源'}」 ✓`);
+      } else if (res?.error) {
+        flashMsg('sp-fresh-feed-msg', res.error, 5000);
+      }
+    });
+  });
+
+  $('sp-freshFeedsList')?.addEventListener('click', (e) => {
+    const togBtn = e.target.closest('button[data-sp-toggle-feed]');
+    if (togBtn) {
+      const fid = togBtn.dataset.spToggleFeed;
+      const curList = state.snap?.speakUp?.freshBrowse?.config?.customFeeds || [];
+      const nextList = curList.map((f) => (f.id === fid ? { ...f, enabled: f.enabled === false } : f));
+      return withBusy(togBtn, async () => {
+        const res = await apiFetch('/api/speak-up/config', {
+          method: 'POST',
+          body: JSON.stringify({ freshBrowse: { customFeeds: nextList } }),
+        });
+        if (res?.snapshot) renderSnapshot(res.snapshot);
+      });
+    }
+    const delBtn = e.target.closest('button[data-sp-del-feed]');
+    if (delBtn) {
+      const fid = delBtn.dataset.spDelFeed;
+      const sel = `[data-sp-del-feed="${CSS.escape(fid)}"]`;
+      return confirmBtnAction(delBtn, `sp-del-feed:${fid}`, sel, async () => {
+        const curList = state.snap?.speakUp?.freshBrowse?.config?.customFeeds || [];
+        const nextList = curList.filter((f) => f.id !== fid);
+        const res = await apiFetch('/api/speak-up/config', {
+          method: 'POST',
+          body: JSON.stringify({ freshBrowse: { customFeeds: nextList } }),
+        });
+        if (res?.snapshot) renderSnapshot(res.snapshot);
+      });
+    }
+  });
+
+  $('btn-sp-fresh-refresh')?.addEventListener('click', () => {
+    const btn = $('btn-sp-fresh-refresh');
+    withBusy(btn, async () => {
+      const res = await apiFetch('/api/speak-up/fresh/refresh', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      if (res?.ok) {
+        flashMsg('sp-fresh-feed-msg', `逛完回來了（見聞籃現有 ${res.itemsCount || 0} 則） ✓`);
+      } else if (res?.error) {
+        flashMsg('sp-fresh-feed-msg', res.error, 5000);
+      }
+    });
+  });
+
+  $('btn-sp-fresh-clear')?.addEventListener('click', () => {
+    const btn = $('btn-sp-fresh-clear');
+    confirmBtnAction(btn, 'sp-fresh-clear', '#btn-sp-fresh-clear', async () => {
+      const res = await apiFetch('/api/speak-up/fresh/clear', {
+        method: 'POST',
+        body: JSON.stringify({ clearSeen: false }),
+      });
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      flashMsg('sp-fresh-feed-msg', '已清空目前待選見聞籃 ✓');
+    });
+  });
 
   $('tab-speakup').addEventListener('input', (e) => {
     if (isInstantSpeakUpTarget(e.target)) return;
@@ -2700,6 +2879,13 @@
         inChatRulePrompt: $('sp-rulePrompt').value,
         triggerPrompt: $('sp-prompt').value,
         followUpHintPrompt: $('sp-followUpPrompt').value,
+        freshBrowse: {
+          enabled: $('sp-freshEnabled')?.checked || false,
+          presets: collectFreshPresets(),
+          weatherCity: $('sp-freshWeatherCity')?.value.trim() || '',
+          dailyShareLimit: Number($('sp-freshDailyLimit')?.value ?? 2),
+          maxAgeHours: Number($('sp-freshMaxAgeHours')?.value ?? 48),
+        },
       }),
     });
     setDirty('sp', false);

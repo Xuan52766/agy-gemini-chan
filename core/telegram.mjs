@@ -30,6 +30,7 @@ import {
   getProjectRoot,
   localClockDisplay,
   localDayKey,
+  neutralizeControlMarkers,
   normalizePathOrUri,
   readJsonSafe,
   unwrapSidecarSystemEnvelope,
@@ -920,17 +921,7 @@ export async function telegramDownloadIncomingFile(
  * Neutralizes internal control markers / Antigravity XML envelope tags inside
  * external Telegram messages so remote text cannot forge hook modes or prompts.
  */
-export function neutralizeTelegramMarkers(text = '') {
-  return String(text || '')
-    .replace(
-      /\[(SPEAK_UP_INTERNAL|XINGXI_AUTO_PICKUP|CAT_NEST_EVENT|TELEGRAM_INCOMING|WORK_SCAN|CRON|AUTOMATION|YOUTUBE_PATROL)\]/gi,
-      '［$1］',
-    )
-    .replace(
-      /<(\/?)(speak-up|SYSTEM_MESSAGE|SYSTEM_REMINDER|USER_REQUEST|ADDITIONAL_METADATA|CONTEXT_SUMMARY)/gi,
-      '＜$1$2',
-    );
-}
+export const neutralizeTelegramMarkers = neutralizeControlMarkers;
 
 export function formatTelegramIncomingPrompt({
   text = '',

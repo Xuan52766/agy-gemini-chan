@@ -365,6 +365,22 @@ export function stripAntigravityWrappers(text) {
   return s.trim();
 }
 
+/**
+ * Neutralizes internal control markers and envelope tags embedded in untrusted external
+ * messages (Telegram inputs, RSS headlines/summaries) so they cannot spoof system turns.
+ */
+export function neutralizeControlMarkers(text = '') {
+  return String(text || '')
+    .replace(
+      /\[(SPEAK_UP_INTERNAL|XINGXI_AUTO_PICKUP|CAT_NEST_EVENT|TELEGRAM_INCOMING|WORK_SCAN|CRON|AUTOMATION|YOUTUBE_PATROL)\]/gi,
+      '［$1］',
+    )
+    .replace(
+      /<(\/?)(speak-up|SYSTEM_MESSAGE|SYSTEM_REMINDER|USER_REQUEST|ADDITIONAL_METADATA|CONTEXT_SUMMARY)/gi,
+      '＜$1$2',
+    );
+}
+
 export function statMtimeMs(filePath) {
   try {
     return statSync(filePath).mtimeMs;

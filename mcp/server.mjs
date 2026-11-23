@@ -259,6 +259,7 @@ const TOOLS = [
         quietEndHour: { type: 'number', description: 'set_config 專用：安靜時段結束小時 (0~23)' },
         respectActiveChatGapMin: { type: 'number', description: 'set_config 專用：對話進行中防打擾順延分鐘數' },
         triggerPrompt: { type: 'string', description: 'set_config 專用：修改預設內心念頭文案' },
+        freshBrowseEnabled: { type: 'boolean', description: 'set_config 專用：開關外網新鮮見聞（預設 false，開啟後主動搭話偶爾可自由帶入外界新事）' },
       },
     },
   },

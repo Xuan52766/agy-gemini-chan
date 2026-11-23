@@ -961,6 +961,84 @@
           </div>
         </details>
 
+        <!-- Fresh Web Discovery (Opt-in, disabled by default) -->
+        <div class="surface-block" id="sp-fresh-section">
+          <div class="block-head">
+            <div>
+              <h3>外網新鮮見聞（自動找新話題）</h3>
+              <p class="sec-sub">預設關閉。每日最多 2 次靜默抓取設定來源，搭話時她會自行判斷要不要自然提起其中 1 件（不強行播報新聞）。</p>
+            </div>
+            <span id="sp-fresh-badge" class="chip tabular">已關閉</span>
+          </div>
+
+          <label class="check-row" for="sp-freshEnabled">
+            <input type="checkbox" id="sp-freshEnabled" />
+            <span>啟用外網新鮮見聞（僅在主動搭話或未指定念頭的節律時作為可選靈感）</span>
+          </label>
+
+          <div id="sp-fresh-body" class="sub-divider">
+            <div class="field">
+              <label>內建精選主題分類（免 API Key）</label>
+              <div id="sp-freshPresets" class="day-pills" role="group" aria-label="新鮮見聞分類">
+                <label class="day-pill"><input type="checkbox" data-fresh-preset="science" /><span>科學冷知識</span></label>
+                <label class="day-pill"><input type="checkbox" data-fresh-preset="acg" /><span>遊戲 / ACG</span></label>
+                <label class="day-pill"><input type="checkbox" data-fresh-preset="tech" /><span>科技生活</span></label>
+                <label class="day-pill"><input type="checkbox" data-fresh-preset="dev" /><span>程式社群</span></label>
+                <label class="day-pill"><input type="checkbox" data-fresh-preset="weather" /><span>異常天氣</span></label>
+              </div>
+            </div>
+
+            <div class="field-grid-3 compact-top">
+              <div class="field">
+                <label for="sp-freshWeatherCity">提醒城市（僅變天/降雨）</label>
+                <input id="sp-freshWeatherCity" type="text" maxlength="60" placeholder="例：Taipei" />
+              </div>
+              <div class="field">
+                <label for="sp-freshDailyLimit">每日分享輪次上限</label>
+                <input id="sp-freshDailyLimit" type="number" min="0" max="6" />
+              </div>
+              <div class="field">
+                <label for="sp-freshMaxAgeHours">內容保留時效 (小時)</label>
+                <input id="sp-freshMaxAgeHours" type="number" min="6" max="168" />
+              </div>
+            </div>
+
+            <div class="sub-divider">
+              <div class="block-head">
+                <h4>自訂 RSS / YouTube 頻道來源</h4>
+                <span id="sp-fresh-feeds-count" class="muted-meta tabular">0 個</span>
+              </div>
+              <div class="field-grid-2 compact-top">
+                <div class="field">
+                  <label for="sp-freshCustomUrl" class="sr-only">RSS / YouTube 頻道網址</label>
+                  <input id="sp-freshCustomUrl" type="url" placeholder="貼上 HTTPS RSS 網址或 YouTube @handle / 頻道網址" />
+                </div>
+                <div class="field">
+                  <label for="sp-freshCustomLabel" class="sr-only">來源名稱（選填）</label>
+                  <input id="sp-freshCustomLabel" type="text" maxlength="40" placeholder="自訂顯示名稱（選填）" />
+                </div>
+              </div>
+              <div class="action-row-between compact-top">
+                <span id="sp-fresh-feed-msg" class="muted-meta" role="status"></span>
+                <button id="btn-sp-add-feed" type="button" class="btn-secondary">檢查並加入來源</button>
+              </div>
+              <div id="sp-freshFeedsList" class="item-list compact-top"></div>
+            </div>
+
+            <div class="sub-divider">
+              <div class="block-head">
+                <h4>目前口袋見聞籃（待她挑選）</h4>
+                <div class="btn-group-compact">
+                  <button id="btn-sp-fresh-refresh" type="button" class="btn-mini">立即逛一逛</button>
+                  <button id="btn-sp-fresh-clear" type="button" class="btn-mini btn-danger">清空籃子</button>
+                </div>
+              </div>
+              <p id="sp-fresh-status-line" class="muted-meta">尚未抓取任何見聞</p>
+              <div id="sp-freshItemsList" class="item-list scroll-list compact-top"></div>
+            </div>
+          </div>
+        </div>
+
         <div class="action-row-end">
           <span id="sp-save-msg" class="muted-meta" role="status"></span>
           <button id="btn-sp-save" type="button" class="btn-primary">儲存搭話設定</button>
