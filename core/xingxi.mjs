@@ -971,26 +971,69 @@ export function replaceChapterTwo(newContent, root, quoteLimit = 10) {
   return { ok: true, trimmedQuotes };
 }
 
+function stripLeadingDiaryHeading(body, day) {
+  const safeDay = String(day || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^\\s*#\\s*${safeDay}(?:\\s*日記|\\s*日记)?[^\\n]*(?:\\r?\\n)+`, 'i');
+  let out = String(body || '').trim();
+  while (re.test(out)) {
+    out = out.replace(re, '').trim();
+  }
+  return out;
+}
+
+export function advanceXingxiWatermark(root, ts = Date.now()) {
+  const val = Number(ts) || 0;
+  if (val <= 0) return 0;
+  const { ledgerPath } = ensureXingxiArchive(root);
+  const ledger = readJsonSafe(ledgerPath, { 已整理到: '' }) || { 已整理到: '' };
+  const next = Math.max(Number(ledger['水位Ms'] || 0), val);
+  ledger['水位Ms'] = next;
+  ledger.updatedAt = new Date().toISOString();
+  writeJsonAtomic(ledgerPath, ledger);
+  return next;
+}
+
+export function readExistingDiarySnippet(root, day, maxChars = 1500) {
+  const { diaryDir } = ensureXingxiArchive(root);
+  const cleanDay = /^\d{4}-\d{2}-\d{2}$/.test(String(day || '').trim()) ? String(day).trim() : localDayKey();
+  const path = join(diaryDir, `${cleanDay}.md`);
+  if (!existsSync(path)) return '';
+  const body = stripLeadingDiaryHeading(readTextSafe(path, ''), cleanDay);
+  if (!body) return '';
+  if (maxChars <= 0 || body.length <= maxChars) return body;
+  return `…${body.slice(-maxChars)}`;
+}
+
 /**
- * Appends a diary section to `日記/YYYY-MM-DD.md` and advances `.xingxi.json`.
+ * Appends a diary section to `日記/YYYY-MM-DD.md`, strips duplicate date headings,
+ * and advances `.xingxi.json` progress (+ same-day `水位Ms` watermark).
  */
-export function appendDiary({ date = localDayKey(), entry = '' } = {}, root) {
+export function appendDiary({ date = localDayKey(), entry = '', now = Date.now() } = {}, root) {
   const { diaryDir, ledgerPath } = ensureXingxiArchive(root);
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date).trim()) ? String(date).trim() : localDayKey();
-  const body = String(entry || '').trim();
+  const nowMs = Number(now) || Date.now();
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date).trim()) ? String(date).trim() : localDayKey(nowMs);
+  const body = stripLeadingDiaryHeading(entry, day);
   if (!body) return { ok: false, error: '日記內容不可為空' };
 
   const path = join(diaryDir, `${day}.md`);
   const prev = readTextSafe(path, '');
-  const header = prev ? '' : `# ${day} 日記\n\n`;
-  const sep = prev && !prev.endsWith('\n\n') ? (prev.endsWith('\n') ? '\n' : '\n\n') : '';
+  const prevClean = prev.trim();
+  if (prevClean && prevClean.includes(body)) {
+    return { ok: true, path, date: day, skippedDuplicate: true };
+  }
+
+  const header = prevClean ? '' : `# ${day} 日記\n\n`;
+  const sep = prevClean && !prev.endsWith('\n\n') ? (prev.endsWith('\n') ? '\n' : '\n\n') : '';
   writeTextAtomic(path, `${prev}${sep}${header}${body}\n`);
 
   const ledger = readJsonSafe(ledgerPath, {}) || {};
   if (!ledger['已整理到'] || day > ledger['已整理到']) {
     ledger['已整理到'] = day;
   }
-  ledger.updatedAt = new Date().toISOString();
+  if (day === localDayKey(nowMs)) {
+    ledger['水位Ms'] = Math.max(Number(ledger['水位Ms'] || 0), nowMs);
+  }
+  ledger.updatedAt = new Date(nowMs).toISOString();
   writeJsonAtomic(ledgerPath, ledger);
   return { ok: true, path, date: day };
 }
@@ -1181,6 +1224,7 @@ export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = 
     date: day,
     turnCount,
     hasContent: linesOut.length > 0 || existingChars > 0,
+    hasNewDelta: linesOut.length > 0,
     appended,
     maxSeenTs,
     filePath: rawFilePath,
@@ -1195,8 +1239,8 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
   const modeNote = scheduleMode === 'card_only'
     ? '本次模式為「只拾星更新記憶卡」：請只整理有長期價值的條目呼叫 `xingxi_append` 寫入記憶卡對應章節，這次不必生成日記。'
     : scheduleMode === 'diary_only'
-      ? '本次模式為「只寫今日日記」：請替今天發生的事與心情脈絡呼叫 `xingxi_diary` 寫進今日日記。'
-      : '本次模式為「拾星（更新記憶卡 ＋ 寫今日日記）」：長期仍有用的重點用 `xingxi_append` 加到記憶卡第 1~8 章，今天發生的日常細節與情緒脈絡用 `xingxi_diary` 寫成今日日記。';
+      ? `本次模式為「只寫今日日記」：請替今天發生的事與心情脈絡呼叫 \`xingxi_diary\`（參數為 \`entry\` 與 \`date: "${day}"\`）寫進今日日記。`
+      : `本次模式為「拾星（更新記憶卡 ＋ 寫今日日記）」：長期仍有用的重點用 \`xingxi_append\` 加到記憶卡第 1~8 章，今天發生的日常細節與情緒脈絡用 \`xingxi_diary\`（參數為 \`entry\` 與 \`date: "${day}"\`）寫成今日日記。`;
 
   const parts = [
     XINGXI_PICKUP_MARKER,
@@ -1204,8 +1248,19 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
     '',
     modeNote,
     `- 記憶卡位置：\`${cardPath}\`（先呼叫 \`xingxi\` 確認現有內容，避免重複）`,
-    `- 日記資料夾：\`${diaryDir}\`（目標日期：\`${day}\`）`,
+    `- 日記資料夾：\`${diaryDir}\`（目標日期：\`${day}\`，\`entry\` 開頭不必自帶 \`# ${day} 日記\` 標題，系統會自動補上）`,
   ];
+
+  const existingDiary = scheduleMode === 'card_only' ? '' : readExistingDiarySnippet(root, day, 1500);
+  if (existingDiary) {
+    parts.push(
+      '',
+      `⚠️ 注意：今日 \`日記/${day}.md\` 已經寫好前半段內容（如下）。**請只接續補寫之後的新發展與情緒，絕對不要重寫前面已記錄過的時段**：`,
+      '```text',
+      existingDiary,
+      '```',
+    );
+  }
 
   if (material?.hasContent) {
     parts.push(`- 原始對話料已切好存於：\`${material.filePath}\`（本次新切片 ${material.turnCount} 段）`);
@@ -1282,10 +1337,12 @@ export async function executeXingxiPickup({
   }
 
   const material = prepareXingxiPickupMaterial(root, { date: targetDateStr, now: nowMs });
-  if (trigger === 'scheduled' && !force && !material.hasContent) {
+  const existingDiary = readExistingDiarySnippet(root, targetDateStr, 200);
+  const nothingNewToArchive = !material.hasContent || (!material.hasNewDelta && Boolean(existingDiary));
+  if (trigger === 'scheduled' && !force && nothingNewToArchive) {
     cfg.lastScheduledDate = targetDateStr;
     cfg.lastScheduledAt = nowMs;
-    appendXingxiLog(cfg, `${targetDateStr} ${isCatchUp ? '補跑檢查' : '到點檢查'}：尚無對話／記憶料，已略過不打擾`, nowMs);
+    appendXingxiLog(cfg, `${targetDateStr} ${isCatchUp ? '補跑檢查' : '到點檢查'}：尚無新增對話／記憶料，已略過不打擾`, nowMs);
     saveXingxiConfig(cfg, root);
     return { action: 'empty_skipped', date: targetDateStr, catchUp: isCatchUp, material, cfg };
   }
@@ -1310,11 +1367,7 @@ export async function executeXingxiPickup({
 
   // Advance millisecond watermark after clean dispatch
   if (material.maxSeenTs > 0) {
-    const { ledgerPath } = ensureXingxiArchive(root);
-    const ledger = readJsonSafe(ledgerPath, { 已整理到: '' }) || { 已整理到: '' };
-    ledger['水位Ms'] = Math.max(Number(ledger['水位Ms'] || 0), material.maxSeenTs);
-    ledger.updatedAt = new Date().toISOString();
-    writeJsonAtomic(ledgerPath, ledger);
+    advanceXingxiWatermark(root, material.maxSeenTs);
   }
 
   const tag = trigger === 'scheduled'
@@ -1340,13 +1393,18 @@ const DIARY_STOP_WORDS = new Set([
 ]);
 
 function extractExplicitDiaryKeywords(rawText) {
-  const m = /^(?:關鍵詞|关键词|標籤|标签)[:：]\s*(.+)$/m.exec(String(rawText || ''));
-  if (!m) return [];
-  return m[1]
-    .split(/[、,，;；|]+/)
-    .map((s) => s.replace(/^[#*`\s]+|[`*.\s]+$/g, '').trim())
-    .filter((s) => s.length >= 2 && s.length <= 20)
-    .slice(0, 5);
+  const out = [];
+  const seen = new Set();
+  for (const m of String(rawText || '').matchAll(/^(?:關鍵詞|关键词|標籤|标签)[:：]\s*(.+)$/gm)) {
+    for (const part of m[1].split(/[、,，;；|]+/)) {
+      const clean = part.replace(/^[#*`\s]+|[`*.\s]+$/g, '').trim();
+      if (clean.length < 2 || clean.length > 20 || seen.has(clean)) continue;
+      seen.add(clean);
+      out.push(clean);
+      if (out.length >= 6) return out;
+    }
+  }
+  return out;
 }
 
 function extractDiaryKeywordCandidates(rawText) {

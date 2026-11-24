@@ -21,9 +21,11 @@ import {
   telegramSendText,
 } from '../core/telegram.mjs';
 import {
+  advanceXingxiWatermark,
   appendDiary,
   appendToChapter,
   prepareXingxiPickupMaterial,
+  readExistingDiarySnippet,
   readMemoryCard,
   replaceChapterTwo,
   searchXingxiArchive,
@@ -343,17 +345,28 @@ async function callTool(name, args = {}) {
       return {
         content: [{
           type: 'text',
-          text: res.ok ? `已寫入 ${res.date} 日記（${res.path}）。` : `✗ ${res.error}`,
+          text: res.ok
+            ? (res.skippedDuplicate
+              ? `${res.date} 日記已包含相同內容，已略過重複寫入（${res.path}）。`
+              : `已寫入 ${res.date} 日記（${res.path}）。`)
+            : `✗ ${res.error}`,
         }],
       };
     }
     case 'xingxi_pickup': {
       const mat = prepareXingxiPickupMaterial(ROOT, { date: args.date });
+      if (mat.maxSeenTs > 0) advanceXingxiWatermark(ROOT, mat.maxSeenTs);
+      const existingDiary = readExistingDiarySnippet(ROOT, mat.date, 1200);
       const header = `【拾星原料切片完成】日期：${mat.date}｜新切片段落：${mat.turnCount}｜檔案：${mat.filePath}`;
+      const existingSection = existingDiary
+        ? `\n\n【今日日記已有前半段（呼叫 xingxi_diary 時請只接續補寫這之後的新發展，不要重寫已記錄的時段或再加 # ${mat.date} 日記 標題）】\n${existingDiary}`
+        : '';
       return {
         content: [{
           type: 'text',
-          text: mat.previewText ? `${header}\n\n${mat.previewText}` : `${header}\n（目前這一天沒有待整理的新對話段落，請直接依上下文補寫或略過）`,
+          text: (mat.previewText
+            ? `${header}\n\n${mat.previewText}`
+            : `${header}\n（目前這一天沒有待整理的新對話段落，請直接依上下文補寫或略過）`) + existingSection,
         }],
       };
     }

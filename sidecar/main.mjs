@@ -74,7 +74,7 @@ async function start() {
 
       // Scheduled Xingxi pickup & diary archival (independent of Speak-Up enabled toggle)
       const xingxiTarget = activeEntry || targetEntry;
-      await executeXingxiPickup({
+      const xingxiRes = await executeXingxiPickup({
         root: ROOT,
         trigger: 'scheduled',
         now: new Date(nowMs),
@@ -110,7 +110,7 @@ async function start() {
       }
 
       // Check Speak-Up (AI-scheduled plans & jittered routines checked every 60s; dice fallback obeys intervalMinutes)
-      if (!spCfg.enabled || !targetEntry) return;
+      if (!spCfg.enabled || !targetEntry || xingxiRes?.action === 'dispatched') return;
 
       await executeSpeakUpTick({
         root: ROOT,

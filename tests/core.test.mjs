@@ -415,6 +415,91 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
   });
 });
 
+test('xingxi diary strips duplicate date headings, advances same-day watermark, and keeps scheduled pickup incremental', async () => {
+  await withTempRoot(async (root) => {
+    const dayDate = '2026-11-24';
+    const dFirst = appendDiary(
+      {
+        date: dayDate,
+        entry: `# ${dayDate} 日記\n\n# ${dayDate} 日記\n\n中午點了摩斯和牛堡。`,
+        now: new Date(`${dayDate}T14:33:00`).getTime(),
+      },
+      root,
+    );
+    assert.equal(dFirst.ok, true);
+    const diaryTxt1 = readFileSync(dFirst.path, 'utf8');
+    assert.equal((diaryTxt1.match(new RegExp(`# ${dayDate} 日記`, 'g')) || []).length, 1);
+
+    // Exact re-append is skipped without duplicating content
+    const dDup = appendDiary({ date: dayDate, entry: '中午點了摩斯和牛堡。' }, root);
+    assert.equal(dDup.skippedDuplicate, true);
+
+    // Afternoon + evening transcript: earlier 12:50 turn must be skipped because manual appendDiary ran at 14:33
+    const paths = getDataPaths(root);
+    mkdirSync(paths.runtimeDir, { recursive: true });
+    const transcript = join(paths.runtimeDir, 'conv-inc.jsonl');
+    writeFileSync(transcript, [
+      JSON.stringify({ type: 'USER_INPUT', content: '中午下雨吃摩斯', created_at: `${dayDate}T12:50:00` }),
+      JSON.stringify({ type: 'PLANNER_RESPONSE', content: '真快送到！', created_at: `${dayDate}T12:50:10` }),
+      JSON.stringify({ type: 'USER_INPUT', content: '晚上收到感謝函好煩', created_at: `${dayDate}T17:00:00` }),
+      JSON.stringify({ type: 'PLANNER_RESPONSE', content: '我陪你罵回去。', created_at: `${dayDate}T17:00:10` }),
+    ].join('\n'), 'utf-8');
+    writeFileSync(join(paths.runtimeDir, 'sessions.json'), JSON.stringify({
+      sessions: [{ conversationId: 'conv-inc', transcriptPath: transcript }],
+    }), 'utf-8');
+
+    // Before evening turn, if nothing new happened after 14:33, scheduled pickup should skip cleanly
+    saveXingxiConfig({ autoScheduleEnabled: true, scheduleHour: 23, scheduleMinute: 30, scheduleMode: 'both' }, root);
+    const emptyEvening = await executeXingxiPickup({
+      root,
+      trigger: 'scheduled',
+      date: dayDate,
+      now: new Date(`${dayDate}T15:00:00`),
+      targetConvId: 'conv-inc',
+      sender: async () => {},
+    });
+    assert.equal(emptyEvening.action, 'before_time');
+
+    const sent = [];
+    const nightPickup = await executeXingxiPickup({
+      root,
+      trigger: 'scheduled',
+      date: dayDate,
+      now: new Date(`${dayDate}T23:31:00`),
+      targetConvId: 'conv-inc',
+      sender: async (_id, prompt) => sent.push(prompt),
+    });
+    assert.equal(nightPickup.action, 'dispatched');
+    assert.equal(sent.length, 1);
+    assert.match(sent[0], /已經寫好前半段內容/);
+    assert.match(sent[0], /中午點了摩斯和牛堡/);
+    assert.match(sent[0], /晚上收到感謝函好煩/);
+    assert.doesNotMatch(sent[0], /中午下雨吃摩斯/);
+    assert.match(sent[0], /參數為 `entry` 與 `date: "2026-11-24"`/);
+
+    // Subsequent scheduled pickup with no new delta after diary already exists skips cleanly
+    saveXingxiConfig({ lastScheduledDate: '' }, root);
+    const noDeltaAgain = await executeXingxiPickup({
+      root,
+      trigger: 'scheduled',
+      date: dayDate,
+      now: new Date(`${dayDate}T23:40:00`),
+      targetConvId: 'conv-inc',
+      force: false,
+      sender: async () => {},
+    });
+    assert.equal(noDeltaAgain.action, 'empty_skipped');
+
+    // Appending part 2 merges keywords across multiple 關鍵詞 lines
+    appendDiary({ date: dayDate, entry: `# ${dayDate} 日記\n\n關鍵詞：和牛堡\n傍晚收到感謝函。\n關鍵詞：矽品感謝函` }, root);
+    const diaryTxt2 = readFileSync(dFirst.path, 'utf8');
+    assert.equal((diaryTxt2.match(new RegExp(`# ${dayDate} 日記`, 'g')) || []).length, 1);
+    assert.match(diaryTxt2, /傍晚收到感謝函/);
+    const idxMerged = buildSessionStartupContext(root, { maxDiaryDays: 0, olderIndexDays: 1 });
+    assert.match(idxMerged, /2026-11-24：和牛堡、矽品感謝函/);
+  });
+});
+
 test('speak-up customizable peak/valley schedule, cross-midnight windows, quiet hours, miss-streak bonus, and dry-run default', async () => {
   await withTempRoot(async (root) => {
     // Default Mon-Fri 09:00-12:00, 14:00-18:00
