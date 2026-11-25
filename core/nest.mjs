@@ -630,22 +630,76 @@ export function consumePendingNestContext(root, { consume = true, now = Date.now
 }
 
 /**
- * Selects matching chibi asset filename from `mood` & `sleeping` state.
+ * Normalizes 8-dim emotion values from either a plain object (`{ happy: 20 }`)
+ * or snapshot array (`[{ key: 'happy', value: 20 }]`).
  */
-export function resolveSpriteFile(moodValue, sleeping = false) {
-  if (sleeping) return 'mood_sleep.jpg';
-  const tier = moodTier(moodValue);
-  switch (tier) {
-    case 'great': return 'mood_great.jpg';
-    case 'good': return 'chibi_base.png';
-    case 'ok': return 'mood_ok.jpg';
-    case 'worry': return 'mood_worry.jpg';
-    case 'sad': return 'mood_sad.jpg';
-    default: return 'chibi_base.png';
+function normalizeDimsMap(dims) {
+  const map = {
+    happy: 0,
+    calm: 0,
+    sweet: 0,
+    heartache: 0,
+    worry: 0,
+    sad: 0,
+    jealous: 0,
+    angry: 0,
+  };
+  if (!dims) return map;
+  if (Array.isArray(dims)) {
+    for (const item of dims) {
+      if (item && typeof item.key === 'string' && Object.hasOwn(map, item.key)) {
+        map[item.key] = Math.max(0, Number(item.value) || 0);
+      }
+    }
+    return map;
   }
+  if (typeof dims === 'object') {
+    for (const key of Object.keys(map)) {
+      map[key] = Math.max(0, Number(dims[key]) || 0);
+    }
+  }
+  return map;
 }
 
-export function getNestSnapshot(root, moodValue = 70, now = Date.now()) {
+/**
+ * Selects matching chibi asset filename from `sleeping`, active 8-dim emotions,
+ * and tightened `mood` thresholds around baseline (`66–74` uses `chibi_base.png`).
+ */
+export function resolveSpriteFile(moodValue, sleeping = false, dims = null) {
+  if (sleeping) return 'mood_sleep.jpg';
+
+  const n = Math.round(Number(moodValue ?? 70));
+  const d = normalizeDimsMap(dims);
+
+  // 1. Dominant 8-dim emotion override (reacts immediately before big mood shifts)
+  const sadScore = d.sad >= 18 ? d.sad : 0;
+  const worryPeak = Math.max(d.worry, d.heartache, d.jealous, d.angry);
+  const worryScore = worryPeak >= 15 ? worryPeak : 0;
+  const greatPeak = Math.max(d.happy, d.sweet, Math.round((d.happy + d.sweet) * 0.65));
+  const greatScore = greatPeak >= 18 ? greatPeak : 0;
+  const calmScore = (d.calm >= 18 && n >= 50 && n <= 74) ? d.calm * 0.9 : 0;
+
+  const candidates = [
+    { sprite: 'mood_sad.jpg', score: sadScore, priority: 4 },
+    { sprite: 'mood_worry.jpg', score: worryScore, priority: 3 },
+    { sprite: 'mood_great.jpg', score: greatScore, priority: 2 },
+    { sprite: 'mood_ok.jpg', score: calmScore, priority: 1 },
+  ].filter((c) => c.score > 0);
+
+  if (candidates.length) {
+    candidates.sort((a, b) => (b.score - a.score) || (b.priority - a.priority));
+    return candidates[0].sprite;
+  }
+
+  // 2. Narrowed mood score thresholds around baseline 70
+  if (n >= 75) return 'mood_great.jpg';
+  if (n >= 66) return 'chibi_base.png';
+  if (n >= 50) return 'mood_ok.jpg';
+  if (n >= 32) return 'mood_worry.jpg';
+  return 'mood_sad.jpg';
+}
+
+export function getNestSnapshot(root, moodValue = 70, now = Date.now(), moodDims = null) {
   const state = loadNestState(root, now);
   const bondLevel = Math.floor((state.bond || 0) / 50) + 1;
   const bondInLevel = (state.bond || 0) % 50;
@@ -689,7 +743,7 @@ export function getNestSnapshot(root, moodValue = 70, now = Date.now()) {
     lastCareAt: Number(state.lastCareAt || 0),
     sleeping: Boolean(state.sleeping),
     syncChatOnCare: Boolean(state.syncChatOnCare),
-    sprite: resolveSpriteFile(moodValue, state.sleeping),
+    sprite: resolveSpriteFile(moodValue, state.sleeping, moodDims),
     moodLabel: moodLabel(moodValue),
     moodTier: moodTier(moodValue),
     activity: state.activity,

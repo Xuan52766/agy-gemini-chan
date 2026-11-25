@@ -42,7 +42,7 @@ function main() {
   );
 
   const mood = getMoodSnapshot({ root: ROOT });
-  const nest = getNestSnapshot(ROOT, mood.mood);
+  const nest = getNestSnapshot(ROOT, mood.mood, Date.now(), mood.dims);
   setNestActivity({ phase: nest.sleeping ? 'sleeping' : 'idle', label: '剛連上這個新對話～準備好從星汐檔案回憶起你們的事' }, ROOT);
 
   appendLogLine(LOG, `SessionStart ok: sid=${sid}`);

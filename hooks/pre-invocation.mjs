@@ -260,7 +260,7 @@ function main() {
     if (memRule) sections.push(memRule);
     const spRule = buildInChatSpeakUpRule(ROOT);
     if (spRule) sections.push(spRule);
-    const nest = getNestSnapshot(ROOT, moodSnap.mood);
+    const nest = getNestSnapshot(ROOT, moodSnap.mood, Date.now(), moodSnap.dims);
     sections.push(
       `【貓窩即時狀態】羈絆 Lv.${nest.bondLevel}（${nest.bond}）｜今日陪伴 ${nest.todayCareCount || 0} 次${nest.sleeping ? '｜打盹中' : ''}${nest.pendingCount ? `｜待帶入互動 ${nest.pendingCount} 項` : ''}`,
     );

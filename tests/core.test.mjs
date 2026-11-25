@@ -597,10 +597,22 @@ test('cat nest actions do not inflate mood, build bond & daily warmth + variety 
     assert.equal(capHit.limitReason, 'daily_cap');
 
     assert.equal(resolveSpriteFile(85, false), 'mood_great.jpg');
+    assert.equal(resolveSpriteFile(75, false), 'mood_great.jpg');
     assert.equal(resolveSpriteFile(70, false), 'chibi_base.png');
-    assert.equal(resolveSpriteFile(70, true), 'mood_sleep.jpg');
+    assert.equal(resolveSpriteFile(65, false), 'mood_ok.jpg');
+    assert.equal(resolveSpriteFile(45, false), 'mood_worry.jpg');
+    assert.equal(resolveSpriteFile(30, false), 'mood_sad.jpg');
+    assert.equal(resolveSpriteFile(70, true, { happy: 50 }), 'mood_sleep.jpg');
+    assert.equal(resolveSpriteFile(70, false, { happy: 20 }), 'mood_great.jpg');
+    assert.equal(resolveSpriteFile(70, false, { happy: 14, sweet: 14 }), 'mood_great.jpg');
+    assert.equal(resolveSpriteFile(70, false, { heartache: 16 }), 'mood_worry.jpg');
+    assert.equal(resolveSpriteFile(70, false, [{ key: 'sad', value: 20 }]), 'mood_sad.jpg');
+    assert.equal(resolveSpriteFile(70, false, { calm: 20 }), 'mood_ok.jpg');
+    assert.equal(resolveSpriteFile(78, false, { calm: 20 }), 'mood_great.jpg');
 
     const snap = getNestSnapshot(root, 70, curTs);
+    assert.equal(snap.sprite, 'chibi_base.png');
+    assert.equal(getNestSnapshot(root, 70, curTs, { worry: 18 }).sprite, 'mood_worry.jpg');
     assert.equal(snap.varietyBonusClaimed, true);
     assert.ok(snap.todayCareCount >= 17);
     assert.ok(snap.todayWarmth === 100);

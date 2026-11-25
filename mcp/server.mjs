@@ -372,7 +372,7 @@ async function callTool(name, args = {}) {
     }
     case 'mood_status': {
       const mood = getMoodSnapshot({ root: ROOT });
-      const nest = getNestSnapshot(ROOT, mood.mood);
+      const nest = getNestSnapshot(ROOT, mood.mood, Date.now(), mood.dims);
       const persona = getPersonaSnapshot({ root: ROOT });
       const sp = getSpeakUpSnapshot(ROOT);
       const tg = getTelegramSnapshot(ROOT);

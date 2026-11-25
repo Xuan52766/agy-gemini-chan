@@ -152,7 +152,7 @@ export function getFullStateSnapshot({ root = getProjectRoot(), sessionId = '', 
     (s) => canonicalSessionKey(s.conversationId) === canonicalSessionKey(activeSid),
   );
   const mood = getMoodSnapshot({ root, now });
-  const nest = getNestSnapshot(root, mood.mood, now);
+  const nest = getNestSnapshot(root, mood.mood, now, mood.dims);
   const persona = getPersonaSnapshot({ root, sessionId: activeSid, cwd: cwd || root });
   const memory = getMemorySnapshot(root, now);
   const xingxi = getXingxiSnapshot(root);
