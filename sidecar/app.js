@@ -363,13 +363,24 @@
   // ---------- 2. Chibi Sprite Loader with Border Flood-Fill Chroma Cleanup ----------
   const cleanedSprites = new Map();
 
+  function drawContained(ctx, img, cw, ch) {
+    const iw = img.naturalWidth || img.width || cw;
+    const ih = img.naturalHeight || img.height || ch;
+    const scale = Math.min(cw / iw, ch / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = (cw - dw) * 0.5;
+    const dy = (ch - dh) * 0.5;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
   function removeOuterWhiteBackground(img) {
     const off = document.createElement('canvas');
     const size = 420;
     off.width = size;
     off.height = size;
     const ctx = off.getContext('2d');
-    ctx.drawImage(img, 0, 0, size, size);
+    drawContained(ctx, img, size, size);
 
     const imgData = ctx.getImageData(0, 0, size, size);
     const data = imgData.data;
@@ -427,9 +438,9 @@
     state.currentSpriteUrl = file;
     const targetCanvas = $('sprite-canvas');
     const tCtx = targetCanvas.getContext('2d');
-    const draw = (sourceCanvas) => {
+    const draw = (source) => {
       tCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-      tCtx.drawImage(sourceCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
+      drawContained(tCtx, source, targetCanvas.width, targetCanvas.height);
     };
 
     if (cleanedSprites.has(file)) {
@@ -585,7 +596,8 @@
       isCore: false,
     }));
 
-    const core = cloned.find((s) => Number(s.chapter) === 1) || cloned[0];
+    // Only real Chapter 1 ("我是誰") becomes the central core star; never hijack other chapters
+    const core = cloned.find((s) => Number(s.chapter) === 1) || null;
     if (core) {
       core.isCore = true;
       core.x = 0;
@@ -593,30 +605,52 @@
       core.z = 0;
     }
 
+    // Outer shell (Diaries & dated events): chronological 3D golden-angle spiral expanding outward (年輪)
     const outer = cloned
       .filter((s) => !s.isCore && (s.kind === 'diary' || s.eventDate))
       .sort((a, b) => (a.ts || 0) - (b.ts || 0));
     const outerLen = outer.length || 1;
+    const goldenStep = 2.399963229728653; // ~137.5° golden angle
     outer.forEach((s, i) => {
-      const rank = outerLen === 1 ? 0.5 : i / (outerLen - 1);
-      const [vx, vy, vz] = randomSphereVec(`${s.id}|d`);
+      const rank = outerLen === 1 ? 0.45 : i / (outerLen - 1);
       const h = hashStr(`${s.id}|dr`);
-      const jitter = (((h % 200) - 100) / 1000) * 0.08;
-      const dist = R * Math.max(0.54, Math.min(1.14, 0.56 + rank * 0.54 + jitter));
-      s.x = vx * dist;
-      s.y = vy * dist;
-      s.z = vz * dist;
+      const theta = i * goldenStep + (((h & 0xff) / 255) - 0.5) * 0.18;
+      const elev = Math.sin(i * 0.72 + ((h >>> 8) & 0xff) * 0.02) * 0.34;
+      const dist = R * (0.62 + rank * 0.46);
+      const cosE = Math.cos(elev);
+      s.x = Math.cos(theta) * cosE * dist;
+      s.y = Math.sin(elev) * dist * 0.85;
+      s.z = Math.sin(theta) * cosE * dist;
       s.ringRank = rank;
     });
 
+    // Inner shell (8-chapter memory card entries): grouped into 8 constellation sectors by chapter
     const inner = cloned.filter((s) => !s.isCore && s.kind === 'card' && !s.eventDate);
+    const byChapter = new Map();
     for (const s of inner) {
-      const [vx, vy, vz] = randomSphereVec(`${s.id}|c`);
-      const h = hashStr(`${s.id}|r`);
-      const dist = R * (0.16 + ((h % 1000) / 1000) * 0.44);
-      s.x = vx * dist;
-      s.y = vy * dist;
-      s.z = vz * dist;
+      const ch = Number(s.chapter) || 0;
+      if (!byChapter.has(ch)) byChapter.set(ch, []);
+      byChapter.get(ch).push(s);
+    }
+    for (const [ch, list] of byChapter.entries()) {
+      list.sort((a, b) => (a.order || 0) - (b.order || 0));
+      const sectorIdx = ch >= 2 ? (ch - 2) : 6; // Chapters 2..8 span 7 even sectors around the core
+      const baseTheta = (sectorIdx / 7) * Math.PI * 2;
+      const baseElev = ((sectorIdx % 3) - 1) * 0.28;
+      const total = list.length || 1;
+      list.forEach((s, idx) => {
+        const h = hashStr(`${s.id}|r`);
+        const frac = total === 1 ? 0.5 : idx / (total - 1);
+        const dTheta = (frac - 0.5) * 0.52 + ((((h & 0xff) / 255) - 0.5) * 0.16);
+        const dElev = ((((h >>> 8) & 0xff) / 255) - 0.5) * 0.38;
+        const theta = baseTheta + dTheta;
+        const elev = baseElev + dElev;
+        const dist = R * (0.24 + frac * 0.28 + (((h >>> 16) & 0xff) / 255) * 0.05);
+        const cosE = Math.cos(elev);
+        s.x = Math.cos(theta) * cosE * dist;
+        s.y = Math.sin(elev) * dist * 0.85;
+        s.z = Math.sin(theta) * cosE * dist;
+      });
     }
 
     for (const s of cloned) {
@@ -831,7 +865,7 @@
       s._proj = pr;
       if (pr) projected.push({ s, pr });
     }
-    projected.sort((a, b) => a.pr.z - b.pr.z);
+    projected.sort((a, b) => b.pr.z - a.pr.z);
     state.starsLayout = projected.map(({ s, pr }) => ({
       ...s,
       x: pr.sx,
@@ -839,6 +873,79 @@
       r: Math.max(4, s.baseSize * pr.k * 2.1),
     }));
     $('xx-map-hits').textContent = q ? `${hitsCount} 顆` : '';
+
+    // 2b. Subtle 3D celestial orbital reference rings (inner memory-card shell & outer diary shell)
+    ctx.save();
+    for (const [ringR, ringAlpha] of [[210 * 0.56, 0.11], [210 * 1.06, 0.07]]) {
+      ctx.beginPath();
+      let started = false;
+      const segs = 64;
+      for (let i = 0; i <= segs; i++) {
+        const a = (i / segs) * Math.PI * 2;
+        const pt = projectStar3D(Math.cos(a) * ringR, 0, Math.sin(a) * ringR, w, h);
+        if (!pt) continue;
+        if (!started) {
+          ctx.moveTo(pt.sx, pt.sy);
+          started = true;
+        } else {
+          ctx.lineTo(pt.sx, pt.sy);
+        }
+      }
+      ctx.strokeStyle = `rgba(165, 180, 252, ${ringAlpha})`;
+      ctx.lineWidth = 0.75;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    const drawMainStarBody = (sx, sy, k, isFocused) => {
+      const pulse = 0.94 + 0.08 * Math.sin(tSec * 1.4);
+      const baseR = Math.max(6, 11.5 * k * pulse * (isFocused ? 1.15 : 1));
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      // Outer amber-gold & ivory corona
+      for (const [mult, col, al] of [
+        [5.2, '234,179,84', 0.09],
+        [3.1, '255,214,138', 0.18],
+        [1.8, '255,244,214', 0.42],
+      ]) {
+        const rad = baseR * mult;
+        const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad);
+        g.addColorStop(0, `rgba(255,252,240,${al * 1.4})`);
+        g.addColorStop(0.45, `rgba(${col},${al})`);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(sx, sy, rad, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // 4-point primary & diagonal secondary starlight diffraction spikes
+      const drawSpike = (len, width, angle, alpha) => {
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        const sg = ctx.createLinearGradient(-len, 0, len, 0);
+        sg.addColorStop(0, 'rgba(255,235,180,0)');
+        sg.addColorStop(0.42, `rgba(255,244,214,${alpha * 0.65})`);
+        sg.addColorStop(0.5, `rgba(255,255,255,${alpha})`);
+        sg.addColorStop(0.58, `rgba(255,244,214,${alpha * 0.65})`);
+        sg.addColorStop(1, 'rgba(255,235,180,0)');
+        ctx.fillStyle = sg;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, len, width, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      };
+      drawSpike(baseR * 3.4, Math.max(0.9, baseR * 0.13), 0, 0.85);
+      drawSpike(baseR * 3.4, Math.max(0.9, baseR * 0.13), Math.PI / 2, 0.85);
+      drawSpike(baseR * 1.9, Math.max(0.7, baseR * 0.09), Math.PI / 4, 0.48);
+      drawSpike(baseR * 1.9, Math.max(0.7, baseR * 0.09), -Math.PI / 4, 0.48);
+      // Incandescent core nucleus
+      ctx.fillStyle = 'rgba(255,255,255,0.98)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, baseR * 0.48, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
 
     const focusId = state.hoveredStarId || state.selectedStarId;
     const focusNeighbors = focusId ? state.neighborsById.get(focusId) : null;
@@ -909,30 +1016,18 @@
       }
     }
 
-    // 4. Render 3D Pearl Stars & Core Star ("我是誰")
+    // 4. Render 3D Pearl Stars & Luminous Central Core Star
+    const hasCoreStar = stars.some((s) => s.isCore);
+    if (!hasCoreStar) {
+      const originProj = projectStar3D(0, 0, 0, w, h);
+      if (originProj) drawMainStarBody(originProj.sx, originProj.sy, originProj.k * 0.85, false);
+    }
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const { s, pr } of projected) {
       if (q && !s.matched) continue;
       if (s.isCore) {
-        const pulse = 0.92 + 0.14 * Math.sin(tSec * 1.6);
-        const coreR = Math.max(4.5, 9.5 * pr.k * pulse);
-        const [cr, cg, cb] = s.rgb;
-        for (const [mult, al] of [[6.8, 0.07], [4.0, 0.16], [2.3, 0.34]]) {
-          const rad = coreR * mult;
-          const g = ctx.createRadialGradient(pr.sx, pr.sy, 0, pr.sx, pr.sy, rad);
-          g.addColorStop(0, `rgba(255,252,240,${al * 1.4})`);
-          g.addColorStop(0.45, `rgba(${cr},${cg},${cb},${al})`);
-          g.addColorStop(1, 'rgba(0,0,0,0)');
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.arc(pr.sx, pr.sy, rad, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.fillStyle = 'rgba(255,255,255,0.98)';
-        ctx.beginPath();
-        ctx.arc(pr.sx, pr.sy, coreR * 0.55, 0, Math.PI * 2);
-        ctx.fill();
+        drawMainStarBody(pr.sx, pr.sy, pr.k, s.id === focusId);
         continue;
       }
 
@@ -957,17 +1052,9 @@
     }
     ctx.restore();
 
-    // 5. Labels for Core Star, Focused Star, and Selected Star
+    // 5. Labels ONLY for hovered or selected star (never permanently stuck on screen)
     ctx.save();
     ctx.textBaseline = 'middle';
-    const coreStar = stars.find((s) => s.isCore);
-    if (coreStar && coreStar._proj && (!q || coreStar.matched)) {
-      const cp = coreStar._proj;
-      ctx.font = '600 11.5px "Microsoft JhengHei UI", system-ui, sans-serif';
-      ctx.fillStyle = 'rgba(255, 248, 228, 0.94)';
-      ctx.fillText('我是誰', cp.sx + 12, cp.sy);
-    }
-
     for (const targetId of new Set([state.selectedStarId, state.hoveredStarId].filter(Boolean))) {
       const st = stars.find((x) => x.id === targetId);
       if (!st || !st._proj) continue;
@@ -977,12 +1064,12 @@
         : 'rgba(255, 255, 255, 0.72)';
       ctx.lineWidth = 1.25;
       ctx.beginPath();
-      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+      ctx.arc(sx, sy, st.isCore ? 14 : 10, 0, Math.PI * 2);
       ctx.stroke();
-      if (!st.isCore) {
-        ctx.font = '500 11px "Microsoft JhengHei UI", system-ui, sans-serif';
-        ctx.fillStyle = 'rgba(245, 247, 255, 0.95)';
-        ctx.fillText((st.title || '').slice(0, 18), sx + 13, sy);
+      if (targetId === state.selectedStarId && state.hoveredStarId !== targetId) {
+        ctx.font = '500 11.5px "Microsoft JhengHei UI", system-ui, sans-serif';
+        ctx.fillStyle = st.isCore ? 'rgba(255, 244, 214, 0.96)' : 'rgba(245, 247, 255, 0.95)';
+        ctx.fillText((st.title || '').slice(0, 18), sx + (st.isCore ? 17 : 13), sy);
       }
     }
     ctx.restore();
@@ -2118,6 +2205,9 @@
     tabPanels.forEach((p) => {
       p.hidden = p.id !== `tab-${btn.dataset.tab}`;
     });
+    if (btn.dataset.tab === 'xingxi') {
+      requestAnimationFrame(() => drawStarMap(null));
+    }
     if (moveFocus) btn.focus();
   }
 
@@ -2504,7 +2594,7 @@
     flashMsg('pol-save-msg', '已儲存記憶策略 ✓');
   }));
 
-  $('btn-pol-reset').addEventListener('click', async () => {
+  $('btn-pol-reset').addEventListener('click', () => withBusy($('btn-pol-reset'), async () => {
     const res = await apiFetch('/api/memory/mutate', {
       method: 'POST',
       body: JSON.stringify({ action: 'resetPolicy' }),
@@ -2512,7 +2602,7 @@
     setDirty('policy', false);
     if (res?.snapshot) renderSnapshot(res.snapshot);
     flashMsg('pol-save-msg', '已恢復預設參數 ✓');
-  });
+  }));
 
   // ---------- 9. Xingxi Tab Events ----------
   $('xingxi-diary-list').addEventListener('click', (e) => {
@@ -2567,7 +2657,7 @@
     if (res?.snapshot) renderSnapshot(res.snapshot);
   }));
 
-  $('btn-xingxi-sched-save').addEventListener('click', async () => {
+  $('btn-xingxi-sched-save').addEventListener('click', () => withBusy($('btn-xingxi-sched-save'), async () => {
     const [hh, mm] = String($('xingxi-sched-time').value || '23:30').split(':').map((n) => Number(n));
     const res = await apiFetch('/api/xingxi/schedule', {
       method: 'POST',
@@ -2580,9 +2670,10 @@
       }),
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+    showToast('已儲存定時拾星設定', 'ok', 2200);
+  }));
 
-  $('btn-xingxi-pickup').addEventListener('click', async () => {
+  $('btn-xingxi-pickup').addEventListener('click', () => withBusy($('btn-xingxi-pickup'), async () => {
     const res = await apiFetch('/api/xingxi/pickup', {
       method: 'POST',
       body: JSON.stringify({
@@ -2598,7 +2689,7 @@
     } else if (res?.action === 'no_target') {
       $('xingxi-sched-summary').textContent = `已切存 ${res.date} 素材（${res.material?.turnCount || 0} 段），但目前無在線 gemini_cat 對話可派發。`;
     }
-  });
+  }));
 
   // ---------- 10. Speak-Up Tab Events ----------
   function collectSelectedTargets() {
@@ -2693,7 +2784,7 @@
     }
   });
 
-  $('btn-sp-add-routine')?.addEventListener('click', async () => {
+  $('btn-sp-add-routine')?.addEventListener('click', () => withBusy($('btn-sp-add-routine'), async () => {
     const timeHHMM = $('sp-new-rt-time')?.value || '12:30';
     const jitterMin = Number($('sp-new-rt-jitter')?.value ?? 20);
     const label = $('sp-new-rt-label')?.value.trim() || '';
@@ -2712,7 +2803,7 @@
       if ($('sp-new-rt-thought')) $('sp-new-rt-thought').value = '';
       flashMsg('sp-save-msg', '已新增固定波動節律 ✓');
     }
-  });
+  }));
 
   function isInstantSpeakUpTarget(el) {
     if (!el) return true;
@@ -2865,7 +2956,7 @@
     msgId: 'sp-save-msg',
   });
 
-  $('btn-sp-save').addEventListener('click', async () => {
+  $('btn-sp-save').addEventListener('click', () => withBusy($('btn-sp-save'), async () => {
     const peakDays = [...document.querySelectorAll('#sp-peakDays input[data-day]:checked')]
       .map((cb) => Number(cb.dataset.day));
     const res = await apiFetch('/api/speak-up/config', {
@@ -2918,23 +3009,23 @@
     setDirty('sp', false);
     if (res?.snapshot) renderSnapshot(res.snapshot);
     flashMsg('sp-save-msg', res?.weatherError ? `已儲存（天氣提示：${res.weatherError}）` : '已儲存搭話設定 ✓', res?.weatherError ? 5200 : 3200);
-  });
+  }));
 
-  $('btn-sp-dry').addEventListener('click', async () => {
+  $('btn-sp-dry').addEventListener('click', () => withBusy($('btn-sp-dry'), async () => {
     const res = await apiFetch('/api/speak-up/roll', {
       method: 'POST',
       body: JSON.stringify({ mode: 'dry', conversationId: activeConversationId() }),
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+  }));
 
-  $('btn-sp-send').addEventListener('click', async () => {
+  $('btn-sp-send').addEventListener('click', () => withBusy($('btn-sp-send'), async () => {
     const res = await apiFetch('/api/speak-up/roll', {
       method: 'POST',
       body: JSON.stringify({ mode: 'send', conversationId: activeConversationId() }),
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
-  });
+  }));
 
   $('btn-sp-reset-streak').addEventListener('click', async () => {
     const res = await apiFetch('/api/speak-up/reset-streak', { method: 'POST', body: '{}' });
@@ -2987,7 +3078,7 @@
 
   $('btn-per-cancel-edit').addEventListener('click', resetPersonaEditor);
 
-  $('btn-per-create').addEventListener('click', async () => {
+  $('btn-per-create').addEventListener('click', () => withBusy($('btn-per-create'), async () => {
     const name = $('per-new-name').value.trim();
     const text = $('per-new-text').value;
     if (!name) return;
@@ -2995,7 +3086,7 @@
       ? await postPersonaMutate({ action: 'update', id: state.editingPersonaId, name, text })
       : await postPersonaMutate({ action: 'create', name, text, activate: true });
     if (res?.ok) resetPersonaEditor();
-  });
+  }));
 
   $('per-import-file').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
@@ -3237,7 +3328,7 @@
     };
 
     const placeHintFallback = (trigger, tip) => {
-      if (supportsAnchorArea || !trigger || !tip) return;
+      if ((supportsAnchorArea && supportsInterest) || !trigger || !tip) return;
       tip.classList.add('js-placed');
       const rect = trigger.getBoundingClientRect();
       const pad = 10;
@@ -3315,7 +3406,9 @@
         activeTrigger = trig;
         if (supportsPopover) {
           if (!isPopoverOpen(tip)) {
-            try { tip.showPopover(); } catch { /* ignore */ }
+            try { tip.showPopover({ source: trig }); } catch {
+              try { tip.showPopover(); } catch { /* ignore */ }
+            }
           }
           placeHintFallback(trig, tip);
         } else {

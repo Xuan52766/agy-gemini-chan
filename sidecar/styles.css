@@ -32,12 +32,13 @@
   --scroll-thumb: color-mix(in srgb, var(--fg) 24%, transparent);
   --scroll-track: transparent;
 
-  /* Typography: 1 versatile sans family, 3 disciplined body sizes */
+  /* Typography: 1 versatile sans family, strictly monotonic heading hierarchy */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "Consolas", monospace;
-  --text-brand: 1rem;        /* 16px — header wordmark */
-  --text-heading: 0.9375rem; /* 15px — section headings & primary readout */
-  --text-body: 0.8125rem;    /* 13px — body, labels, inputs, tabs, buttons */
+  --text-brand: 1.125rem;    /* 18px — top bar wordmark (h1) */
+  --text-h2: 1rem;           /* 16px — tab main title (h2) */
+  --text-heading: 0.875rem;  /* 14px — section headings (h3) & top-level drawers */
+  --text-body: 0.8125rem;    /* 13px — body, sub-group h4, labels, inputs, tabs, buttons */
   --text-sm: 0.75rem;        /* 12px — secondary metadata & compact counters */
 
   --radius-sm: 6px;
@@ -657,9 +658,9 @@ input[type="checkbox"] {
 
 .sec-head h2 {
   margin: 0;
-  font-size: var(--text-heading);
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  font-size: var(--text-h2);
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--fg);
 }
 
@@ -686,7 +687,7 @@ input[type="checkbox"] {
   border-top: none;
 }
 
-.sub-group h4 {
+.tab-panel h4 {
   margin: 0;
   font-size: var(--text-body);
   font-weight: 600;
@@ -828,6 +829,7 @@ input[type="checkbox"] {
 
 .hint-popover.js-placed {
   position: fixed;
+  position-area: none;
   inset: auto;
   margin: 0;
 }
@@ -1112,12 +1114,17 @@ button:disabled {
   align-items: center;
   gap: 7px;
   padding: 11px 2px;
-  font-size: var(--text-body);
+  font-size: var(--text-heading);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--fg);
   cursor: pointer;
   user-select: none;
   transition: color 150ms var(--ease-out);
+}
+
+.panel-section .drawer > summary {
+  font-size: var(--text-body);
 }
 
 .drawer > summary:hover {
