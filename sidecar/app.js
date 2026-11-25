@@ -40,8 +40,9 @@
     dragOriginRotX: 0,
     tlPos: 1.0,
     tlPlaying: false,
-    tlCutTs: Infinity,
-    tlTsList: [],
+    tlStage: 'all', // 'empty' | 'core' | 'day' | 'all'
+    tlDayIdx: -1,
+    tlDays: [],
     prevVisibleIds: new Set(),
     starNovaMap: new Map(),
     starGraphSig: '',
@@ -1031,17 +1032,33 @@
       pushLink(a, b, l.kind, { label: l.label, weight: l.weight });
     }
 
-    const tsList = [...new Set(cloned.map((s) => s.ts).filter((t) => t > 0))].sort((a, b) => a - b);
+    // Assign calendar day keys (`YYYY-MM-DD`) so timeline unfolds cleanly: empty -> core -> day 1 -> day 2 ...
+    const daySet = new Set();
+    for (const s of cloned) {
+      if (s.isCore) {
+        s._dayKey = '';
+        continue;
+      }
+      const explicitDate = /^\d{4}-\d{2}-\d{2}$/.test(String(s.eventDate || ''))
+        ? String(s.eventDate)
+        : /^\d{4}-\d{2}-\d{2}$/.test(String(s.date || ''))
+          ? String(s.date)
+          : '';
+      s._dayKey = explicitDate || fmtDateTs(s.ts);
+      if (s._dayKey && s._dayKey !== '--') daySet.add(s._dayKey);
+    }
+    const tlDays = [...daySet].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
     state.stars3D = cloned;
     state.starLinks3D = resolvedLinks;
     state.neighborsById = neighbors;
-    state.tlTsList = tsList;
+    state.tlDays = tlDays;
     state.mapAutoZoom = true;
 
     const firstEl = $('xx-tl-first');
     const lastEl = $('xx-tl-last');
-    if (firstEl) firstEl.textContent = tsList.length ? fmtDateTs(tsList[0]).slice(5) : '--';
-    if (lastEl) lastEl.textContent = tsList.length ? fmtDateTs(tsList[tsList.length - 1]).slice(5) : '--';
+    if (firstEl) firstEl.textContent = tlDays.length ? tlDays[0].slice(5) : '--';
+    if (lastEl) lastEl.textContent = tlDays.length ? tlDays[tlDays.length - 1].slice(5) : '--';
     state.prevVisibleIds = new Set(cloned.map((s) => s.id));
     state.starNovaMap.clear();
     renderChapterSpotlightBar();
@@ -1049,28 +1066,48 @@
   }
 
   function syncTimelineCut(emitNova = true) {
-    const tsList = state.tlTsList;
+    const days = state.tlDays || [];
     const curEl = $('xx-tl-cur');
     const rangeEl = $('xx-tl-range');
     if (rangeEl && document.activeElement !== rangeEl) {
       rangeEl.value = String(Math.round(state.tlPos * 1000));
     }
-    if (!tsList.length || (state.tlPos >= 0.999 && !state.tlPlaying)) {
-      state.tlCutTs = Infinity;
+
+    // Stages across [0..1]:
+    //   step 0            -> 'empty' (blank night sky, nothing shown)
+    //   step 1            -> 'core'  (only core star emerges)
+    //   step 2..days+1    -> 'day'   (day 1, day 2, ... up to final day)
+    //   tlPos >= 0.999 (not playing) -> 'all' (all memories)
+    const totalStages = days.length + 2; // 0: empty, 1: core, 2..days.length+1: days
+    if (state.tlPos >= 0.999 && !state.tlPlaying) {
+      state.tlStage = 'all';
+      state.tlDayIdx = days.length - 1;
       if (curEl) curEl.textContent = '全部記憶';
     } else {
-      const idx = Math.min(tsList.length - 1, Math.max(0, Math.floor(state.tlPos * tsList.length)));
-      state.tlCutTs = tsList[idx];
-      if (curEl) {
-        curEl.textContent = `${fmtDateTs(state.tlCutTs)} · ${Math.round(state.tlPos * 100)}%`;
+      const step = Math.min(totalStages - 1, Math.max(0, Math.floor(state.tlPos * totalStages)));
+      if (step === 0) {
+        state.tlStage = 'empty';
+        state.tlDayIdx = -1;
+        if (curEl) curEl.textContent = '尚未亮起';
+      } else if (step === 1) {
+        state.tlStage = 'core';
+        state.tlDayIdx = -1;
+        if (curEl) curEl.textContent = '主星誕生';
+      } else {
+        const dayIdx = Math.min(days.length - 1, step - 2);
+        state.tlStage = 'day';
+        state.tlDayIdx = dayIdx;
+        const dayKey = days[dayIdx] || '';
+        if (curEl) curEl.textContent = `第 ${dayIdx + 1} 天 · ${dayKey.slice(5)}`;
       }
     }
+
     const nextVisible = new Set();
     const nowMs = performance.now();
     for (const s of state.stars3D) {
       if (isStarInTimeline(s)) {
         nextVisible.add(s.id);
-        if (emitNova && !prefersReducedMotion && !state.prevVisibleIds.has(s.id) && !s.isCore) {
+        if (emitNova && !prefersReducedMotion && !state.prevVisibleIds.has(s.id)) {
           state.starNovaMap.set(s.id, nowMs);
         }
       }
@@ -1079,9 +1116,13 @@
   }
 
   function isStarInTimeline(s) {
+    if (state.tlStage === 'empty') return false;
+    if (state.tlStage === 'core') return Boolean(s.isCore);
+    if (state.tlStage === 'all') return true;
     if (s.isCore) return true;
-    if (state.tlCutTs === Infinity) return true;
-    return (s.ts || 0) <= state.tlCutTs;
+    const cutDay = state.tlDays[state.tlDayIdx];
+    if (!cutDay) return true;
+    return !s._dayKey || s._dayKey === '--' || s._dayKey <= cutDay;
   }
 
   function projectStar3D(x, y, z, w, h) {
@@ -1106,6 +1147,54 @@
     };
   }
 
+  function getFullStarHeadline(star) {
+    if (!star) return '';
+    const rawTitle = String(star.title || '').trim();
+    const firstLine = String(star.text || '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find(Boolean) || '';
+    const cleanFirst = firstLine
+      .replace(/^\s*(?:-\s+|\*\*\d+[.．]\s*|\d+[.．]\s*)/, '')
+      .replace(/[*_`>#]/g, '')
+      .trim();
+    // Bullet-split stars truncate `title` at 26 chars; recover the complete sentence from `text`
+    if (cleanFirst && rawTitle && cleanFirst.startsWith(rawTitle) && cleanFirst.length > rawTitle.length) {
+      return cleanFirst;
+    }
+    return rawTitle || cleanFirst;
+  }
+
+  function wrapCanvasLines(ctx, text, maxW, maxLines = 3) {
+    const src = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!src) return [];
+    const lines = [];
+    let cur = '';
+    for (const ch of src) {
+      const next = cur + ch;
+      if (ctx.measureText(next).width > maxW && cur) {
+        lines.push(cur);
+        cur = ch;
+        if (lines.length >= maxLines) break;
+      } else {
+        cur = next;
+      }
+    }
+    if (lines.length < maxLines && cur) {
+      lines.push(cur);
+    } else if (lines.length === maxLines) {
+      const usedLen = lines.reduce((acc, s) => acc + s.length, 0);
+      if (usedLen < src.length) {
+        let last = lines[maxLines - 1];
+        while (last.length > 1 && ctx.measureText(`${last}…`).width > maxW) {
+          last = last.slice(0, -1);
+        }
+        lines[maxLines - 1] = `${last}…`;
+      }
+    }
+    return lines;
+  }
+
   function renderSelectedStarDetail(star) {
     const detail = $('star-detail');
     if (!detail) return;
@@ -1113,11 +1202,13 @@
       detail.textContent = '點選任一星點檢視關聯星座與全文。';
       return;
     }
-    const bridgeLabels = [];
+    const bridges = [];
     for (const l of state.starLinks3D) {
       if (l.kind === 'bridge' && l.label && (l.a.id === star.id || l.b.id === star.id)) {
         const other = l.a.id === star.id ? l.b : l.a;
-        bridgeLabels.push(`「${l.label}」→ ${other.title}`);
+        const fullOther = getFullStarHeadline(other);
+        const previewOther = fullOther.length > 34 ? `${fullOther.slice(0, 34)}…` : fullOther;
+        bridges.push({ label: l.label, targetId: other.id, preview: previewOther });
       }
     }
     const kindTag = star.isCore
@@ -1125,10 +1216,29 @@
       : star.kind === 'diary'
         ? `星曆日記｜${star.date || star.doc}`
         : `八章記憶卡｜${star.chapterName || star.doc}${star.eventDate ? `（事件日 ${star.eventDate}）` : ''}`;
-    const bridgeLine = bridgeLabels.length
-      ? `\n✦ 共詞橋連線：${bridgeLabels.slice(0, 6).join('、')}`
+
+    const fullBody = String(star.text || '').trim();
+    const rawTitle = String(star.title || '').trim();
+    const cleanBodyHead = fullBody
+      .replace(/^\s*(?:-\s+|\*\*\d+[.．]\s*|\d+[.．]\s*)/, '')
+      .replace(/[*_`>#]/g, '')
+      .trim();
+    // Only show separate title in header if it isn't just a truncated prefix of the body text
+    const titleIsBodyPrefix = Boolean(rawTitle && cleanBodyHead && cleanBodyHead.startsWith(rawTitle));
+    const headTitleHtml = !titleIsBodyPrefix && rawTitle
+      ? `<span>${esc(rawTitle)}</span>`
       : '';
-    detail.textContent = `【${kindTag}】${star.title}${bridgeLine}\n\n${star.text || '（暫無條目正文）'}`;
+
+    const bridgeHtml = bridges.length
+      ? `<div class="star-detail-bridges"><span>✦ 共詞橋：</span>${bridges.map((b) =>
+          `<button type="button" class="star-bridge-chip" data-jump-star="${esc(b.targetId)}"><em>「${esc(b.label)}」</em><span>→ ${esc(b.preview)}</span></button>`,
+        ).join('')}</div>`
+      : '';
+
+    detail.innerHTML =
+      `<div class="star-detail-head"><span class="star-detail-tag">${esc(kindTag)}</span>${headTitleHtml}</div>` +
+      `<div class="star-detail-body">${esc(fullBody || rawTitle || '（暫無條目正文）')}</div>` +
+      bridgeHtml;
   }
 
   function drawStarMap(xingxi, nowMs = performance.now()) {
@@ -1519,9 +1629,40 @@
         ctx.stroke();
         if (state.hoveredStarId !== st.id) {
           ctx.font = '500 11.5px "Microsoft JhengHei UI", system-ui, sans-serif';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = st.isCore ? 'rgba(255, 244, 214, 0.96)' : 'rgba(245, 247, 255, 0.95)';
-          ctx.fillText((st.title || '').slice(0, 18), sx + selR + 6, sy);
+          const caption = getFullStarHeadline(st);
+          const maxTextW = Math.min(220, Math.max(120, w - 32));
+          const lines = wrapCanvasLines(ctx, caption, maxTextW, 3);
+          if (lines.length) {
+            const lineH = 15.5;
+            const padX = 8;
+            const padY = 5;
+            let textW = 0;
+            for (const ln of lines) textW = Math.max(textW, ctx.measureText(ln).width);
+            const boxW = textW + padX * 2;
+            const boxH = lines.length * lineH + padY * 2;
+            // Prefer right of star; flip left if overflowing right edge, then clamp strictly inside viewport
+            let bx = sx + selR + 8;
+            if (bx + boxW > w - 8) bx = sx - selR - 8 - boxW;
+            bx = Math.max(8, Math.min(w - boxW - 8, bx));
+            let by = sy - boxH * 0.5;
+            if (by < 26) by = sy + selR + 8;
+            by = Math.max(26, Math.min(h - boxH - 30, by));
+
+            ctx.fillStyle = 'rgba(8, 12, 26, 0.86)';
+            ctx.strokeStyle = hexAlpha(st.hex, 0.48);
+            ctx.lineWidth = 0.85;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, boxW, boxH, 7);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillStyle = st.isCore ? 'rgba(255, 244, 214, 0.96)' : 'rgba(245, 247, 255, 0.96)';
+            for (let li = 0; li < lines.length; li++) {
+              ctx.fillText(lines[li], bx + padX, by + padY + li * lineH + 1);
+            }
+          }
         }
         ctx.restore();
       }
@@ -1551,7 +1692,8 @@
       }
 
       if (state.tlPlaying) {
-        state.tlPos += dt / 9.0;
+        const totalDur = Math.max(8, Math.min(18, ((state.tlDays?.length || 1) + 2) * 0.72));
+        state.tlPos += dt / totalDur;
         if (state.tlPos >= 1) {
           state.tlPos = 1;
           state.tlPlaying = false;
@@ -1770,17 +1912,21 @@
     state.tlPlaying = false;
     if ($('xx-tl-play')) $('xx-tl-play').textContent = '▶';
     state.tlPos = Math.max(0, Math.min(1, Number(e.target.value) / 1000));
-    syncTimelineCut();
+    syncTimelineCut(true);
     drawStarMap(null);
   });
 
   $('xx-tl-play')?.addEventListener('click', () => {
     state.tlPlaying = !state.tlPlaying;
     if (state.tlPlaying && state.tlPos >= 0.995) {
+      // Restart cleanly from blank sky -> core star -> Day 1 -> Day 2 ...
       state.tlPos = 0;
+      state.starNovaMap.clear();
+      syncTimelineCut(false);
+    } else {
+      syncTimelineCut(true);
     }
     if ($('xx-tl-play')) $('xx-tl-play').textContent = state.tlPlaying ? 'Ⅱ' : '▶';
-    syncTimelineCut();
     drawStarMap(null);
   });
 
@@ -1788,7 +1934,19 @@
     state.tlPlaying = false;
     state.tlPos = 1;
     if ($('xx-tl-play')) $('xx-tl-play').textContent = '▶';
-    syncTimelineCut();
+    syncTimelineCut(false);
+    drawStarMap(null);
+  });
+
+  $('star-detail')?.addEventListener('click', (e) => {
+    const chip = e.target.closest?.('[data-jump-star]');
+    if (!chip) return;
+    const targetId = chip.dataset.jumpStar || '';
+    const target = state.stars3D.find((s) => s.id === targetId);
+    if (!target) return;
+    state.selectedStarId = target.id;
+    focusCameraOnStar(target);
+    renderSelectedStarDetail(target);
     drawStarMap(null);
   });
 
