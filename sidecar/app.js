@@ -1780,7 +1780,7 @@
       const dx = e.clientX - state.dragStartX;
       const dy = e.clientY - state.dragStartY;
       if (Math.hypot(dx, dy) > 4) state.dragMoved = true;
-      state.mapRotY = state.dragOriginRotY + dx * 0.0065;
+      state.mapRotY = state.dragOriginRotY - dx * 0.0065;
       state.mapRotX = Math.max(-1.25, Math.min(1.25, state.dragOriginRotX + dy * 0.0065));
       drawStarMap(null);
       return;
