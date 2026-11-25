@@ -1331,6 +1331,55 @@ button:disabled {
   padding: 4px 8px;
 }
 
+.layout-select {
+  width: auto;
+  min-height: 26px;
+  padding: 2px 6px;
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+/* Custom Nest Sprites Grid (Inside Persona Drawer) */
+.sprites-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sprite-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.sprite-thumb {
+  width: 68px;
+  height: 68px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.sprite-slot-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.sprite-slot-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .starmap-viewport {
   position: relative;
   width: 100%;
@@ -1582,7 +1631,8 @@ button:disabled {
   .care-btn {
     padding: 6px 2px;
   }
-  .field-grid-3 {
+  .field-grid-3,
+  .sprites-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

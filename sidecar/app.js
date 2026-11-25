@@ -16,6 +16,13 @@
     hoveredStarId: '',
     // Xingxi 3D Star Universe view & timeline state
     mapLinksOn: true,
+    mapLayout: (() => {
+      try {
+        const saved = localStorage.getItem('gcat.mapLayout');
+        if (saved === 'cluster' || saved === 'random' || saved === 'ring') return saved;
+      } catch { /* ignore */ }
+      return 'cluster';
+    })(),
     mapZoom: 1,
     mapRotY: 0.42,
     mapRotX: -0.18,
@@ -433,9 +440,25 @@
     return off;
   }
 
-  function renderSprite(file) {
-    if (!file || state.currentSpriteUrl === file) return;
-    state.currentSpriteUrl = file;
+  function hasTransparentBorder(img) {
+    try {
+      const probe = document.createElement('canvas');
+      probe.width = 32;
+      probe.height = 32;
+      const pCtx = probe.getContext('2d');
+      pCtx.drawImage(img, 0, 0, 32, 32);
+      const d = pCtx.getImageData(0, 0, 32, 32).data;
+      const corners = [0, 31, 31 * 32, 31 * 32 + 31];
+      return corners.some((idx) => d[idx * 4 + 3] < 200);
+    } catch {
+      return false;
+    }
+  }
+
+  function renderSprite(file, spriteUrl = '') {
+    const resolvedUrl = spriteUrl || (file ? `/assets/${file}` : '');
+    if (!resolvedUrl || state.currentSpriteUrl === resolvedUrl) return;
+    state.currentSpriteUrl = resolvedUrl;
     const targetCanvas = $('sprite-canvas');
     const tCtx = targetCanvas.getContext('2d');
     const draw = (source) => {
@@ -443,18 +466,18 @@
       drawContained(tCtx, source, targetCanvas.width, targetCanvas.height);
     };
 
-    if (cleanedSprites.has(file)) {
-      draw(cleanedSprites.get(file));
+    if (cleanedSprites.has(resolvedUrl)) {
+      draw(cleanedSprites.get(resolvedUrl));
       return;
     }
 
     const img = new Image();
     img.onload = () => {
-      const processed = file.endsWith('.png') ? img : removeOuterWhiteBackground(img);
-      cleanedSprites.set(file, processed);
-      if (state.currentSpriteUrl === file) draw(processed);
+      const processed = hasTransparentBorder(img) ? img : removeOuterWhiteBackground(img);
+      cleanedSprites.set(resolvedUrl, processed);
+      if (state.currentSpriteUrl === resolvedUrl) draw(processed);
     };
-    img.src = `/assets/${file}`;
+    img.src = resolvedUrl;
   }
 
   function spawnParticles(text) {
@@ -585,10 +608,19 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
 
+  function fibonacciSpherePoint(index, total) {
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const y = total <= 1 ? 0 : 1 - (index / (total - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = goldenAngle * index;
+    return [Math.cos(theta) * r, y, Math.sin(theta) * r];
+  }
+
   function rebuildUniverse3D(xingxi) {
     const rawStars = Array.isArray(xingxi?.stars) ? xingxi.stars : [];
     const rawLinks = Array.isArray(xingxi?.links) ? xingxi.links : [];
     const R = 210;
+    const layout = state.mapLayout || 'cluster';
 
     const cloned = rawStars.map((s, idx) => ({
       ...s,
@@ -605,51 +637,76 @@
       core.z = 0;
     }
 
-    // Outer shell (Diaries & dated events): chronological 3D golden-angle spiral expanding outward (年輪)
-    const outer = cloned
-      .filter((s) => !s.isCore && (s.kind === 'diary' || s.eventDate))
-      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    const outerLen = outer.length || 1;
-    const goldenStep = 2.399963229728653; // ~137.5° golden angle
-    outer.forEach((s, i) => {
-      const rank = outerLen === 1 ? 0.45 : i / (outerLen - 1);
-      const h = hashStr(`${s.id}|dr`);
-      const theta = i * goldenStep + (((h & 0xff) / 255) - 0.5) * 0.18;
-      const elev = Math.sin(i * 0.72 + ((h >>> 8) & 0xff) * 0.02) * 0.34;
-      const dist = R * (0.62 + rank * 0.46);
-      const cosE = Math.cos(elev);
-      s.x = Math.cos(theta) * cosE * dist;
-      s.y = Math.sin(elev) * dist * 0.85;
-      s.z = Math.sin(theta) * cosE * dist;
-      s.ringRank = rank;
-    });
+    const nonCore = cloned.filter((s) => !s.isCore);
 
-    // Inner shell (8-chapter memory card entries): grouped into 8 constellation sectors by chapter
-    const inner = cloned.filter((s) => !s.isCore && s.kind === 'card' && !s.eventDate);
-    const byChapter = new Map();
-    for (const s of inner) {
-      const ch = Number(s.chapter) || 0;
-      if (!byChapter.has(ch)) byChapter.set(ch, []);
-      byChapter.get(ch).push(s);
-    }
-    for (const [ch, list] of byChapter.entries()) {
-      list.sort((a, b) => (a.order || 0) - (b.order || 0));
-      const sectorIdx = ch >= 2 ? (ch - 2) : 6; // Chapters 2..8 span 7 even sectors around the core
-      const baseTheta = (sectorIdx / 7) * Math.PI * 2;
-      const baseElev = ((sectorIdx % 3) - 1) * 0.28;
-      const total = list.length || 1;
-      list.forEach((s, idx) => {
-        const h = hashStr(`${s.id}|r`);
-        const frac = total === 1 ? 0.5 : idx / (total - 1);
-        const dTheta = (frac - 0.5) * 0.52 + ((((h & 0xff) / 255) - 0.5) * 0.16);
-        const dElev = ((((h >>> 8) & 0xff) / 255) - 0.5) * 0.38;
-        const theta = baseTheta + dTheta;
-        const elev = baseElev + dElev;
-        const dist = R * (0.24 + frac * 0.28 + (((h >>> 16) & 0xff) / 255) * 0.05);
+    if (layout === 'random') {
+      // Full 3D isotropic spherical random scatter
+      for (const s of nonCore) {
+        const h = hashStr(`${s.id}|rand`);
+        const u = ((h & 0xffff) / 0xffff) * 2 - 1;
+        const theta = (((h >>> 16) & 0xffff) / 0xffff) * Math.PI * 2;
+        const sr = Math.sqrt(Math.max(0, 1 - u * u));
+        const h2 = hashStr(`${s.id}|randR`);
+        const dist = R * (0.28 + Math.cbrt((h2 % 1000) / 1000) * 0.78);
+        s.x = sr * Math.cos(theta) * dist;
+        s.y = u * dist;
+        s.z = sr * Math.sin(theta) * dist;
+      }
+    } else if (layout === 'ring') {
+      // Chronological growth rings (inner card stars + outer chronological diaries)
+      const outer = nonCore
+        .filter((s) => s.kind === 'diary' || s.eventDate)
+        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      const outerLen = outer.length || 1;
+      const goldenStep = 2.399963229728653;
+      outer.forEach((s, i) => {
+        const rank = outerLen === 1 ? 0.5 : i / (outerLen - 1);
+        const h = hashStr(`${s.id}|dr`);
+        const theta = i * goldenStep + (((h & 0xff) / 255) - 0.5) * 0.2;
+        const elev = Math.sin(i * 0.9 + ((h >>> 8) & 0xff) * 0.03) * 0.55;
+        const dist = R * (0.60 + rank * 0.46);
         const cosE = Math.cos(elev);
         s.x = Math.cos(theta) * cosE * dist;
-        s.y = Math.sin(elev) * dist * 0.85;
+        s.y = Math.sin(elev) * dist;
         s.z = Math.sin(theta) * cosE * dist;
+        s.ringRank = rank;
+      });
+      const inner = nonCore.filter((s) => s.kind === 'card' && !s.eventDate);
+      for (const s of inner) {
+        const [vx, vy, vz] = randomSphereVec(`${s.id}|c`);
+        const h = hashStr(`${s.id}|r`);
+        const dist = R * (0.22 + ((h % 1000) / 1000) * 0.34);
+        s.x = vx * dist;
+        s.y = vy * dist;
+        s.z = vz * dist;
+      }
+    } else {
+      // Default: 'cluster' — distinct 3D star clusters arranged across a full 3D Fibonacci sphere
+      const groups = new Map();
+      for (const s of nonCore) {
+        const gKey = (s.kind === 'diary')
+          ? `diary:${String(s.date || '').slice(0, 7) || 'all'}`
+          : `ch:${Number(s.chapter) || 0}`;
+        if (!groups.has(gKey)) groups.set(gKey, []);
+        groups.get(gKey).push(s);
+      }
+      const groupEntries = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      const gTotal = Math.max(1, groupEntries.length);
+      groupEntries.forEach(([gKey, list], gIdx) => {
+        const [cx, cy, cz] = fibonacciSpherePoint(gIdx, gTotal);
+        const gh = hashStr(`grp|${gKey}`);
+        const isDiaryGrp = gKey.startsWith('diary:');
+        const anchorDist = R * (isDiaryGrp ? 0.78 : 0.56 + ((gh % 100) / 100) * 0.22);
+        const spread = R * (0.16 + Math.min(0.18, Math.sqrt(list.length) * 0.038));
+        list.sort((a, b) => (a.ts || 0) - (b.ts || 0) || (a.order || 0) - (b.order || 0));
+        list.forEach((s, idx) => {
+          const [ox, oy, oz] = randomSphereVec(`${s.id}|cl|${idx}`);
+          const h = hashStr(`${s.id}|cld`);
+          const localR = spread * (0.28 + Math.cbrt((h % 1000) / 1000) * 0.72);
+          s.x = cx * anchorDist + ox * localR;
+          s.y = cy * anchorDist + oy * localR;
+          s.z = cz * anchorDist + oz * localR;
+        });
       });
     }
 
@@ -766,7 +823,7 @@
     if (xingxi) {
       const stars = xingxi.stars || [];
       const links = xingxi.links || [];
-      const sig = `${stars.length}:${links.length}:${stars.map((s) => `${s.id}:${s.title}:${s.ts || 0}`).join('|')}`;
+      const sig = `${state.mapLayout}:${stars.length}:${links.length}:${stars.map((s) => `${s.id}:${s.title}:${s.ts || 0}`).join('|')}`;
       if (sig !== state.starGraphSig) {
         state.starGraphSig = sig;
         rebuildUniverse3D(xingxi);
@@ -874,43 +931,20 @@
     }));
     $('xx-map-hits').textContent = q ? `${hitsCount} 顆` : '';
 
-    // 2b. Subtle 3D celestial orbital reference rings (inner memory-card shell & outer diary shell)
-    ctx.save();
-    for (const [ringR, ringAlpha] of [[210 * 0.56, 0.11], [210 * 1.06, 0.07]]) {
-      ctx.beginPath();
-      let started = false;
-      const segs = 64;
-      for (let i = 0; i <= segs; i++) {
-        const a = (i / segs) * Math.PI * 2;
-        const pt = projectStar3D(Math.cos(a) * ringR, 0, Math.sin(a) * ringR, w, h);
-        if (!pt) continue;
-        if (!started) {
-          ctx.moveTo(pt.sx, pt.sy);
-          started = true;
-        } else {
-          ctx.lineTo(pt.sx, pt.sy);
-        }
-      }
-      ctx.strokeStyle = `rgba(165, 180, 252, ${ringAlpha})`;
-      ctx.lineWidth = 0.75;
-      ctx.stroke();
-    }
-    ctx.restore();
-
     const drawMainStarBody = (sx, sy, k, isFocused) => {
-      const pulse = 0.94 + 0.08 * Math.sin(tSec * 1.4);
-      const baseR = Math.max(6, 11.5 * k * pulse * (isFocused ? 1.15 : 1));
+      const pulse = 0.96 + 0.05 * Math.sin(tSec * 1.4);
+      const baseR = Math.max(4.2, 6.8 * k * pulse * (isFocused ? 1.15 : 1));
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      // Outer amber-gold & ivory corona
+      // Compact warm amber-gold & ivory corona
       for (const [mult, col, al] of [
-        [5.2, '234,179,84', 0.09],
-        [3.1, '255,214,138', 0.18],
-        [1.8, '255,244,214', 0.42],
+        [3.1, '234,179,84', 0.08],
+        [1.9, '255,214,138', 0.18],
+        [1.25, '255,244,214', 0.42],
       ]) {
         const rad = baseR * mult;
         const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad);
-        g.addColorStop(0, `rgba(255,252,240,${al * 1.4})`);
+        g.addColorStop(0, `rgba(255,252,240,${al * 1.35})`);
         g.addColorStop(0.45, `rgba(${col},${al})`);
         g.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = g;
@@ -918,16 +952,16 @@
         ctx.arc(sx, sy, rad, 0, Math.PI * 2);
         ctx.fill();
       }
-      // 4-point primary & diagonal secondary starlight diffraction spikes
+      // Subtle, fine 4-point primary & diagonal secondary starlight spikes
       const drawSpike = (len, width, angle, alpha) => {
         ctx.save();
         ctx.translate(sx, sy);
         ctx.rotate(angle);
         const sg = ctx.createLinearGradient(-len, 0, len, 0);
         sg.addColorStop(0, 'rgba(255,235,180,0)');
-        sg.addColorStop(0.42, `rgba(255,244,214,${alpha * 0.65})`);
+        sg.addColorStop(0.44, `rgba(255,244,214,${alpha * 0.55})`);
         sg.addColorStop(0.5, `rgba(255,255,255,${alpha})`);
-        sg.addColorStop(0.58, `rgba(255,244,214,${alpha * 0.65})`);
+        sg.addColorStop(0.56, `rgba(255,244,214,${alpha * 0.55})`);
         sg.addColorStop(1, 'rgba(255,235,180,0)');
         ctx.fillStyle = sg;
         ctx.beginPath();
@@ -935,14 +969,14 @@
         ctx.fill();
         ctx.restore();
       };
-      drawSpike(baseR * 3.4, Math.max(0.9, baseR * 0.13), 0, 0.85);
-      drawSpike(baseR * 3.4, Math.max(0.9, baseR * 0.13), Math.PI / 2, 0.85);
-      drawSpike(baseR * 1.9, Math.max(0.7, baseR * 0.09), Math.PI / 4, 0.48);
-      drawSpike(baseR * 1.9, Math.max(0.7, baseR * 0.09), -Math.PI / 4, 0.48);
+      drawSpike(baseR * 1.85, Math.max(0.6, baseR * 0.10), 0, 0.72);
+      drawSpike(baseR * 1.85, Math.max(0.6, baseR * 0.10), Math.PI / 2, 0.72);
+      drawSpike(baseR * 1.05, Math.max(0.45, baseR * 0.065), Math.PI / 4, 0.36);
+      drawSpike(baseR * 1.05, Math.max(0.45, baseR * 0.065), -Math.PI / 4, 0.36);
       // Incandescent core nucleus
       ctx.fillStyle = 'rgba(255,255,255,0.98)';
       ctx.beginPath();
-      ctx.arc(sx, sy, baseR * 0.48, 0, Math.PI * 2);
+      ctx.arc(sx, sy, baseR * 0.46, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     };
@@ -1213,6 +1247,19 @@
     drawStarMap(null);
   });
 
+  const layoutSel = $('xx-layout-mode');
+  if (layoutSel) {
+    layoutSel.value = state.mapLayout;
+    layoutSel.addEventListener('change', (e) => {
+      const next = e.target.value;
+      if (next !== 'cluster' && next !== 'random' && next !== 'ring') return;
+      state.mapLayout = next;
+      try { localStorage.setItem('gcat.mapLayout', next); } catch { /* ignore */ }
+      state.starGraphSig = '';
+      if (state.snap?.xingxi) drawStarMap(state.snap.xingxi);
+    });
+  }
+
   $('xx-toggle-links').addEventListener('click', () => {
     state.mapLinksOn = !state.mapLinksOn;
     const btn = $('xx-toggle-links');
@@ -1308,6 +1355,7 @@
     'btn-mem-test',
     'btn-mem-export',
     'xx-map-search',
+    'xx-layout-mode',
     'xx-raw-select',
     'btn-xx-raw-view',
     'xx-tl-play',
@@ -1513,6 +1561,30 @@
     setHtmlStable(wrap, nextHtml, { preserveSelectors: ['.preview-box[data-preview-id]'] });
   }
 
+  function renderSpritesGrid(sprites) {
+    const wrap = $('per-sprites-grid');
+    if (!wrap) return;
+    const list = Array.isArray(sprites) ? sprites : [];
+    const anyCustom = list.some((s) => s.isCustom);
+    const resetAllBtn = $('btn-per-sprites-reset-all');
+    if (resetAllBtn) resetAllBtn.classList.toggle('hidden', !anyCustom);
+
+    const nextHtml = list.map((s) => `
+      <div class="sprite-slot" data-sprite-slot="${esc(s.key)}">
+        <img class="sprite-thumb" src="${esc(s.url)}" alt="${esc(s.label)}立繪" loading="lazy" />
+        <span class="sprite-slot-title">${esc(s.label)}</span>
+        <div class="sprite-slot-actions">
+          <label class="btn-mini file-btn">
+            更換
+            <input type="file" accept="image/png,image/jpeg,image/webp" class="sr-only" data-sprite-upload="${esc(s.key)}" />
+          </label>
+          ${s.isCustom ? `<button type="button" class="btn-mini" data-sprite-reset="${esc(s.key)}">恢復</button>` : ''}
+        </div>
+      </div>
+    `).join('');
+    setHtmlStable(wrap, nextHtml);
+  }
+
   function renderSpeakUpTargets(speakUp, verifiedConversations) {
     const follow = Boolean($('sp-followActive')?.checked ?? speakUp.config.followActive);
     const wrap = $('sp-targets-wrap');
@@ -1593,7 +1665,7 @@
       : ''
     );
 
-    renderSprite(nest.sprite);
+    renderSprite(nest.sprite, nest.spriteUrl);
 
     if ($('bar-mood')) $('bar-mood').style.width = `${mood.mood}%`;
     const bondInLevel = nest.bondInLevel ?? ((nest.bond || 0) % 50);
@@ -2065,6 +2137,7 @@
     }
 
     renderPersonaCatalog(persona);
+    renderSpritesGrid(nest.sprites || []);
 
     // Tab 6: Telegram Bridge
     const tg = snap.telegram;
@@ -3169,6 +3242,71 @@
       return;
     }
     await withBusy(btn, () => postPersonaMutate({ action: act, id }));
+  });
+
+  // Custom Nest Sprites (inside Persona drawer)
+  $('per-sprites-grid')?.addEventListener('change', async (e) => {
+    const input = e.target.closest('input[data-sprite-upload]');
+    if (!input) return;
+    const slot = input.dataset.spriteUpload;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      if (file.size > 5 * 1024 * 1024) {
+        flashMsg('per-sprite-msg', '圖片不可超過 5 MB', 4000);
+        return;
+      }
+      const dataUrl = await new Promise((resolveFn, rejectFn) => {
+        const reader = new FileReader();
+        reader.onload = () => resolveFn(String(reader.result || ''));
+        reader.onerror = () => rejectFn(new Error('讀取圖片失敗'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiFetch('/api/nest/sprite', {
+        method: 'POST',
+        body: JSON.stringify({ slot, dataUrl, conversationId: activeConversationId() }),
+      });
+      if (res?.ok) {
+        cleanedSprites.clear();
+        state.currentSpriteUrl = '';
+        if (res.snapshot) renderSnapshot(res.snapshot);
+        flashMsg('per-sprite-msg', '已更新立繪 ✓');
+      } else if (res?.error) {
+        flashMsg('per-sprite-msg', res.error, 4000);
+      }
+    } finally {
+      input.value = '';
+    }
+  });
+
+  $('per-sprites-grid')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-sprite-reset]');
+    if (!btn) return;
+    const slot = btn.dataset.spriteReset;
+    withBusy(btn, async () => {
+      const res = await apiFetch('/api/nest/sprite/reset', {
+        method: 'POST',
+        body: JSON.stringify({ slot, conversationId: activeConversationId() }),
+      });
+      cleanedSprites.clear();
+      state.currentSpriteUrl = '';
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      flashMsg('per-sprite-msg', '已恢復預設立繪 ✓');
+    });
+  });
+
+  $('btn-per-sprites-reset-all')?.addEventListener('click', () => {
+    const btn = $('btn-per-sprites-reset-all');
+    confirmBtnAction(btn, 'per-sprites-reset-all', '#btn-per-sprites-reset-all', async () => {
+      const res = await apiFetch('/api/nest/sprite/reset', {
+        method: 'POST',
+        body: JSON.stringify({ slot: 'all', conversationId: activeConversationId() }),
+      });
+      cleanedSprites.clear();
+      state.currentSpriteUrl = '';
+      if (res?.snapshot) renderSnapshot(res.snapshot);
+      flashMsg('per-sprite-msg', '已全部恢復預設立繪 ✓');
+    }, '確定恢復？');
   });
 
   // ---------- 11b. Telegram Tab Events ----------

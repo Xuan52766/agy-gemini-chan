@@ -10,6 +10,7 @@
  * chores (`飽食/精力`), and feed naturally into real dialogue.
  */
 
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { moodLabel, moodTier } from './mood.mjs';
 import {
@@ -20,6 +21,122 @@ import {
   readJsonSafe,
   writeJsonAtomic,
 } from './storage.mjs';
+
+export const SPRITE_SLOTS = [
+  { key: 'base', label: '常態', defaultFile: 'chibi_base.png' },
+  { key: 'great', label: '歡喜', defaultFile: 'mood_great.jpg' },
+  { key: 'ok', label: '放鬆', defaultFile: 'mood_ok.jpg' },
+  { key: 'worry', label: '擔心', defaultFile: 'mood_worry.jpg' },
+  { key: 'sad', label: '難過', defaultFile: 'mood_sad.jpg' },
+  { key: 'sleep', label: '睡覺', defaultFile: 'mood_sleep.jpg' },
+];
+
+const SPRITE_SLOT_BY_KEY = new Map(SPRITE_SLOTS.map((s) => [s.key, s]));
+const CUSTOM_SPRITE_EXTS = ['.png', '.jpg', '.jpeg', '.webp'];
+const MAX_CUSTOM_SPRITE_BYTES = 5 * 1024 * 1024;
+
+export function customSpritesDir(root) {
+  return join(getDataPaths(root).nestDir, 'sprites');
+}
+
+export function findCustomSpritePath(slotKey, root) {
+  if (!SPRITE_SLOT_BY_KEY.has(slotKey)) return null;
+  const dir = customSpritesDir(root);
+  for (const ext of CUSTOM_SPRITE_EXTS) {
+    const filePath = join(dir, `${slotKey}${ext}`);
+    if (existsSync(filePath)) {
+      try {
+        const st = statSync(filePath);
+        if (st.isFile() && st.size > 0) {
+          return { path: filePath, ext, mtimeMs: Math.round(st.mtimeMs || 0) };
+        }
+      } catch { /* ignore */ }
+    }
+  }
+  return null;
+}
+
+function detectImageExtFromBytes(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return '';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return '.png';
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return '.jpg';
+  if (
+    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46
+    && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+  ) return '.webp';
+  return '';
+}
+
+export function getSpriteRegistry(root) {
+  return SPRITE_SLOTS.map((slot) => {
+    const custom = findCustomSpritePath(slot.key, root);
+    const ver = custom ? custom.mtimeMs : 0;
+    return {
+      key: slot.key,
+      label: slot.label,
+      defaultFile: slot.defaultFile,
+      isCustom: Boolean(custom),
+      updatedAt: ver,
+      url: ver ? `/assets/${slot.defaultFile}?v=${ver}` : `/assets/${slot.defaultFile}`,
+    };
+  });
+}
+
+export function saveCustomSprite(slotKey, dataUrl, root) {
+  const key = String(slotKey || '').trim();
+  if (!SPRITE_SLOT_BY_KEY.has(key)) {
+    return { ok: false, error: '無效的立繪槽位' };
+  }
+  const raw = String(dataUrl || '').trim();
+  const m = /^data:image\/(?:png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=\s]+)$/i.exec(raw);
+  if (!m) {
+    return { ok: false, error: '僅支援 PNG、JPG 或 WebP 圖片格式' };
+  }
+  const buf = Buffer.from(m[1].replace(/\s+/g, ''), 'base64');
+  if (!buf.length || buf.length > MAX_CUSTOM_SPRITE_BYTES) {
+    return { ok: false, error: '圖片檔案大小須介於 1 B 至 5 MB 之間' };
+  }
+  const ext = detectImageExtFromBytes(buf);
+  if (!ext) {
+    return { ok: false, error: '圖片內容格式無效（僅支援 PNG、JPG、WebP）' };
+  }
+
+  const dir = customSpritesDir(root);
+  mkdirSync(dir, { recursive: true });
+  for (const oldExt of CUSTOM_SPRITE_EXTS) {
+    const oldPath = join(dir, `${key}${oldExt}`);
+    if (existsSync(oldPath)) {
+      try { rmSync(oldPath, { force: true }); } catch { /* ignore */ }
+    }
+  }
+  const targetPath = join(dir, `${key}${ext}`);
+  writeFileSync(targetPath, buf);
+  return { ok: true, slot: key, ext, bytes: buf.length };
+}
+
+export function resetCustomSprite(slotKey, root) {
+  const key = String(slotKey || '').trim();
+  const dir = customSpritesDir(root);
+  const targets = key === 'all'
+    ? SPRITE_SLOTS.map((s) => s.key)
+    : (SPRITE_SLOT_BY_KEY.has(key) ? [key] : []);
+  if (!targets.length) {
+    return { ok: false, error: '無效的立繪槽位' };
+  }
+  let removed = 0;
+  for (const t of targets) {
+    for (const ext of CUSTOM_SPRITE_EXTS) {
+      const p = join(dir, `${t}${ext}`);
+      if (existsSync(p)) {
+        try {
+          rmSync(p, { force: true });
+          removed += 1;
+        } catch { /* ignore */ }
+      }
+    }
+  }
+  return { ok: true, removed };
+}
 
 function nestStatePath(root) {
   return join(getDataPaths(root).nestDir, 'state.json');
@@ -728,6 +845,10 @@ export function getNestSnapshot(root, moodValue = 70, now = Date.now(), moodDims
     blockedReason: whisperRes.blocked ? (whisperRes.message || whisperRes.limitReason) : '',
   };
 
+  const spriteFile = resolveSpriteFile(moodValue, state.sleeping, moodDims);
+  const sprites = getSpriteRegistry(root);
+  const activeSpriteEntry = sprites.find((s) => s.defaultFile === spriteFile);
+
   return {
     satiety: 100,
     energy: 100,
@@ -743,7 +864,9 @@ export function getNestSnapshot(root, moodValue = 70, now = Date.now(), moodDims
     lastCareAt: Number(state.lastCareAt || 0),
     sleeping: Boolean(state.sleeping),
     syncChatOnCare: Boolean(state.syncChatOnCare),
-    sprite: resolveSpriteFile(moodValue, state.sleeping, moodDims),
+    sprite: spriteFile,
+    spriteUrl: activeSpriteEntry ? activeSpriteEntry.url : `/assets/${spriteFile}`,
+    sprites,
     moodLabel: moodLabel(moodValue),
     moodTier: moodTier(moodValue),
     activity: state.activity,

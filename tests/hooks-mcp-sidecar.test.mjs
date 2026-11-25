@@ -673,12 +673,37 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.match(html.body, /tg-chat-history/);
     assert.match(html.body, /xingxi-backups-list/);
     assert.match(html.body, /xx-map-search/);
+    assert.match(html.body, /xx-layout-mode/);
+    assert.match(html.body, /drawer-nest-sprites/);
+    assert.match(html.body, />通訊<\/button>/);
     assert.equal(pages.get('/styles.css')().status, 200);
     const appJs = pages.get('/app.js')();
     assert.equal(appJs.status, 200);
     assert.doesNotMatch(appJs.body, /\$\('character-wrap'\)\.addEventListener\('click'/);
     assert.match(appJs.body, /activateSpriteMotion/);
     assert.equal(pages.get('/assets/mood_great.jpg')().status, 200);
+
+    // Custom sprite upload (magic bytes guard + serve override + reset)
+    const badSprite = await apis.get('/api/nest/sprite').get('POST')({
+      slot: 'base',
+      dataUrl: 'data:image/png;base64,bm90LWEtcG5n',
+    });
+    assert.equal(badSprite.ok, false);
+    const tinyPngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+    const okSprite = await apis.get('/api/nest/sprite').get('POST')({
+      slot: 'base',
+      dataUrl: `data:image/png;base64,${tinyPngB64}`,
+    });
+    assert.equal(okSprite.ok, true);
+    const baseMeta = okSprite.snapshot.nest.sprites.find((s) => s.key === 'base');
+    assert.equal(baseMeta.isCustom, true);
+    assert.match(baseMeta.url, /\?v=\d+/);
+    const servedCustom = pages.get('/assets/chibi_base.png')();
+    assert.equal(servedCustom.status, 200);
+    assert.equal(servedCustom.body.length, Buffer.from(tinyPngB64, 'base64').length);
+    const rstSprite = await apis.get('/api/nest/sprite/reset').get('POST')({ slot: 'base' });
+    assert.equal(rstSprite.ok, true);
+    assert.equal(rstSprite.snapshot.nest.sprites.find((s) => s.key === 'base').isCustom, false);
 
     // State outside project flags `inProject: false`
     const stateOut = await apis.get('/api/state').get('GET')({

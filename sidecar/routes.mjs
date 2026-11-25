@@ -31,9 +31,13 @@ import {
 } from '../core/mood.mjs';
 import {
   clearPendingNestEvents,
+  findCustomSpritePath,
   getNestSnapshot,
   performNestAction,
+  resetCustomSprite,
+  saveCustomSprite,
   setNestPreferences,
+  SPRITE_SLOTS,
 } from '../core/nest.mjs';
 import { mutatePersona } from '../core/persona.mjs';
 import {
@@ -81,6 +85,7 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.json': 'application/json; charset=utf-8',
 };
 
@@ -96,6 +101,7 @@ function computeDataVersionToken(root, convId, inProject) {
   const dirs = [
     p.runtimeDir,
     p.nestDir,
+    join(p.nestDir, 'sprites'),
     p.moodDir,
     p.personaDir,
     p.memoryDir,
@@ -114,7 +120,7 @@ function computeDataVersionToken(root, convId, inProject) {
       const names = readdirSync(dir);
       totalEntries += names.length;
       for (const name of names) {
-        if (!name.endsWith('.json') && !name.endsWith('.md')) continue;
+        if (!/\.(?:json|md|png|jpe?g|webp)$/i.test(name)) continue;
         const m = statMtimeMs(join(dir, name));
         if (m > maxMtime) maxMtime = m;
       }
@@ -154,18 +160,28 @@ export function registerSidecarRoutes(
   router.page('/app.js', serveStatic(join(__dirname, 'app.js'), MIME['.js']));
 
   const { assetsDir } = getDataPaths(root);
+  const slotByDefaultFile = new Map(SPRITE_SLOTS.map((s) => [s.defaultFile, s.key]));
   const spriteFiles = [
-    'chibi_base.png',
-    'mood_great.jpg',
-    'mood_ok.jpg',
-    'mood_worry.jpg',
-    'mood_sad.jpg',
-    'mood_sleep.jpg',
+    ...SPRITE_SLOTS.map((s) => s.defaultFile),
     'ref_sheet.jpg',
   ];
   for (const name of spriteFiles) {
-    const ext = extname(name).toLowerCase();
-    router.page(`/assets/${name}`, serveStatic(join(assetsDir, name), MIME[ext] || 'application/octet-stream'));
+    const slotKey = slotByDefaultFile.get(name);
+    const defaultPath = join(assetsDir, name);
+    const defaultMime = MIME[extname(name).toLowerCase()] || 'application/octet-stream';
+    router.page(`/assets/${name}`, () => {
+      const custom = slotKey ? findCustomSpritePath(slotKey, root) : null;
+      const targetPath = custom ? custom.path : defaultPath;
+      const contentType = custom ? (MIME[custom.ext] || 'application/octet-stream') : defaultMime;
+      if (!existsSync(targetPath)) {
+        return new ResponseClass('Not found', { status: 404, contentType: 'text/plain; charset=utf-8' });
+      }
+      return new ResponseClass(readFileSync(targetPath), {
+        status: 200,
+        contentType,
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    });
   }
 
   // Lightweight change-detection check for conditional polling
@@ -291,6 +307,18 @@ export function registerSidecarRoutes(
   router.api('/api/nest/clear-pending', (data = {}) => {
     const sessionId = String(data.conversationId || '');
     const res = clearPendingNestEvents(root);
+    return { ...res, snapshot: getFullStateSnapshot({ root, sessionId }) };
+  }, 'POST');
+
+  router.api('/api/nest/sprite', (data = {}) => {
+    const sessionId = String(data.conversationId || '');
+    const res = saveCustomSprite(data.slot, data.dataUrl, root);
+    return { ...res, snapshot: getFullStateSnapshot({ root, sessionId }) };
+  }, 'POST');
+
+  router.api('/api/nest/sprite/reset', (data = {}) => {
+    const sessionId = String(data.conversationId || '');
+    const res = resetCustomSprite(data.slot || 'all', root);
     return { ...res, snapshot: getFullStateSnapshot({ root, sessionId }) };
   }, 'POST');
 

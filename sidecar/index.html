@@ -129,7 +129,7 @@
       <button type="button" role="tab" id="tabbtn-xingxi" class="tab-btn" data-tab="xingxi" aria-selected="false" tabindex="-1">星汐</button>
       <button type="button" role="tab" id="tabbtn-speakup" class="tab-btn" data-tab="speakup" aria-selected="false" tabindex="-1">搭話</button>
       <button type="button" role="tab" id="tabbtn-persona" class="tab-btn" data-tab="persona" aria-selected="false" tabindex="-1">人設</button>
-      <button type="button" role="tab" id="tabbtn-telegram" class="tab-btn" data-tab="telegram" aria-selected="false" tabindex="-1" title="Telegram 雙向橋接與傳檔">TG</button>
+      <button type="button" role="tab" id="tabbtn-telegram" class="tab-btn" data-tab="telegram" aria-selected="false" tabindex="-1" title="Telegram 雙向橋接與傳檔">通訊</button>
     </nav>
 
     <main class="panels-wrap">
@@ -547,6 +547,11 @@
                 <span id="xx-map-hits" class="meta-text tabular"></span>
               </div>
               <div class="btn-group-compact">
+                <select id="xx-layout-mode" class="layout-select" aria-label="星圖排列模式" title="切換星星空間排列方式">
+                  <option value="cluster">星團</option>
+                  <option value="random">隨機</option>
+                  <option value="ring">年輪</option>
+                </select>
                 <button id="xx-toggle-links" type="button" class="btn-mini active" aria-pressed="true">連線開</button>
                 <button id="xx-zoom-out" type="button" class="btn-mini" aria-label="縮小星圖">−</button>
                 <button id="xx-zoom-in" type="button" class="btn-mini" aria-label="放大星圖">+</button>
@@ -1118,6 +1123,17 @@
             <button id="btn-per-create" type="button" class="btn-primary">新增並套用到本專案</button>
           </div>
         </div>
+
+        <details class="drawer" id="drawer-nest-sprites">
+          <summary>自訂貓窩立繪</summary>
+          <div class="drawer-body">
+            <div id="per-sprites-grid" class="sprites-grid"></div>
+            <div class="action-row-between">
+              <span id="per-sprite-msg" class="muted-meta" role="status"></span>
+              <button id="btn-per-sprites-reset-all" type="button" class="btn-mini">全部恢復預設</button>
+            </div>
+          </div>
+        </details>
       </section>
 
       <!-- ==================== TAB 6: TELEGRAM ==================== -->
