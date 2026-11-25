@@ -1165,36 +1165,6 @@
     return rawTitle || cleanFirst;
   }
 
-  function wrapCanvasLines(ctx, text, maxW, maxLines = 3) {
-    const src = String(text || '').replace(/\s+/g, ' ').trim();
-    if (!src) return [];
-    const lines = [];
-    let cur = '';
-    for (const ch of src) {
-      const next = cur + ch;
-      if (ctx.measureText(next).width > maxW && cur) {
-        lines.push(cur);
-        cur = ch;
-        if (lines.length >= maxLines) break;
-      } else {
-        cur = next;
-      }
-    }
-    if (lines.length < maxLines && cur) {
-      lines.push(cur);
-    } else if (lines.length === maxLines) {
-      const usedLen = lines.reduce((acc, s) => acc + s.length, 0);
-      if (usedLen < src.length) {
-        let last = lines[maxLines - 1];
-        while (last.length > 1 && ctx.measureText(`${last}…`).width > maxW) {
-          last = last.slice(0, -1);
-        }
-        lines[maxLines - 1] = `${last}…`;
-      }
-    }
-    return lines;
-  }
-
   function renderSelectedStarDetail(star) {
     const detail = $('star-detail');
     if (!detail) return;
@@ -1609,7 +1579,7 @@
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
 
-    // 5. Crisp selection ring & label ONLY when selected (hover uses floating tooltip card)
+    // 5. Crisp selection ring ONLY when selected (full text is displayed in #star-detail below)
     if (state.selectedStarId) {
       const st = stars.find((x) => x.id === state.selectedStarId && x._proj);
       if (st) {
@@ -1627,43 +1597,6 @@
         ctx.beginPath();
         ctx.arc(sx, sy, selR + 3, 0, Math.PI * 2);
         ctx.stroke();
-        if (state.hoveredStarId !== st.id) {
-          ctx.font = '500 11.5px "Microsoft JhengHei UI", system-ui, sans-serif';
-          const caption = getFullStarHeadline(st);
-          const maxTextW = Math.min(220, Math.max(120, w - 32));
-          const lines = wrapCanvasLines(ctx, caption, maxTextW, 3);
-          if (lines.length) {
-            const lineH = 15.5;
-            const padX = 8;
-            const padY = 5;
-            let textW = 0;
-            for (const ln of lines) textW = Math.max(textW, ctx.measureText(ln).width);
-            const boxW = textW + padX * 2;
-            const boxH = lines.length * lineH + padY * 2;
-            // Prefer right of star; flip left if overflowing right edge, then clamp strictly inside viewport
-            let bx = sx + selR + 8;
-            if (bx + boxW > w - 8) bx = sx - selR - 8 - boxW;
-            bx = Math.max(8, Math.min(w - boxW - 8, bx));
-            let by = sy - boxH * 0.5;
-            if (by < 26) by = sy + selR + 8;
-            by = Math.max(26, Math.min(h - boxH - 30, by));
-
-            ctx.fillStyle = 'rgba(8, 12, 26, 0.86)';
-            ctx.strokeStyle = hexAlpha(st.hex, 0.48);
-            ctx.lineWidth = 0.85;
-            ctx.beginPath();
-            ctx.roundRect(bx, by, boxW, boxH, 7);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'top';
-            ctx.fillStyle = st.isCore ? 'rgba(255, 244, 214, 0.96)' : 'rgba(245, 247, 255, 0.96)';
-            for (let li = 0; li < lines.length; li++) {
-              ctx.fillText(lines[li], bx + padX, by + padY + li * lineH + 1);
-            }
-          }
-        }
         ctx.restore();
       }
     }
