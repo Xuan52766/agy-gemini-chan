@@ -19,13 +19,14 @@
     mapLayout: (() => {
       try {
         const saved = localStorage.getItem('gcat.mapLayout');
-        if (saved === 'cluster' || saved === 'random' || saved === 'ring') return saved;
+        if (saved === 'xingxi' || saved === 'cluster' || saved === 'random') return saved;
       } catch { /* ignore */ }
-      return 'cluster';
+      return 'xingxi';
     })(),
-    mapZoom: 1,
+    mapZoom: 0.72,
+    mapAutoZoom: true,
     mapRotY: 0.42,
-    mapRotX: -0.18,
+    mapRotX: -0.68,
     mapSearch: '',
     isDraggingMap: false,
     dragMoved: false,
@@ -495,110 +496,161 @@
   }
 
   // ---------- 3. Interactive Xingxi 3D Star Universe & Timeline (年輪) Renderer ----------
-  const STAR_PALETTE = [
-    [255, 140, 176], [255, 168, 142], [255, 196, 120], [255, 222, 128],
-    [244, 236, 142], [198, 238, 150], [150, 236, 178], [126, 232, 210],
-    [122, 222, 242], [134, 202, 255], [154, 180, 255], [178, 162, 255],
-    [204, 152, 255], [232, 148, 242], [250, 146, 214], [255, 156, 192],
-    [255, 182, 212], [186, 226, 255], [176, 244, 226], [255, 214, 168],
-    [218, 188, 255], [255, 168, 168], [168, 236, 255], [236, 214, 255],
+  // Faithfully ported from upstream Yuuyuko-uu/dsh-xingxi (volume-uniform r³ sphere, focal=2400, jewel pearl sprites)
+  const STAR_PALETTE_HEX = [
+    '#4f9eff', '#1d72d8', '#8ccaff',
+    '#26c7a4', '#087f78', '#80e4c9',
+    '#9d70ff', '#6847dc', '#c5a6ff',
+    '#ff8548', '#d94c32', '#ffc05b',
+    '#ef5b98', '#c93673', '#ff9cbe',
+    '#a9ce32', '#708d20', '#d8e87d',
   ];
-  const CHAPTER_RGB = [
-    null,
-    [255, 152, 188], [255, 204, 132], [132, 226, 212], [148, 196, 255],
-    [198, 168, 255], [255, 176, 148], [162, 232, 172], [242, 164, 228],
-  ];
-  const MONTH_RGB = [
-    [142, 202, 255], [176, 184, 255], [156, 234, 196], [194, 238, 156],
-    [242, 232, 142], [255, 210, 132], [255, 176, 142], [255, 152, 176],
-    [238, 158, 226], [202, 166, 255], [164, 186, 255], [142, 222, 242],
-  ];
+  const CHAPTER_HEX = {
+    1: '#74aaff', 2: '#54cbb9', 3: '#b28aff', 4: '#ff9777',
+    5: '#ef78a7', 6: '#e4ba62', 7: '#9acb62', 8: '#67bfdf',
+  };
+  const MONTH_HEX = {
+    1: '#58a6ff', 2: '#35d0a1', 3: '#b0d847', 4: '#ffc247',
+    5: '#ff7b4f', 6: '#f15d76', 7: '#dd66c7', 8: '#ab78ff',
+    9: '#686cf2', 10: '#45c6dc', 11: '#168f8a', 12: '#cc4365',
+  };
 
-  function makeStarSprite(rgb) {
-    const [r, g, b] = rgb;
-    const size = 64;
-    const half = size / 2;
+  function hexAlpha(hex, a) {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+    if (!m) return `rgba(200,220,255,${a})`;
+    const v = parseInt(m[1], 16);
+    return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${a})`;
+  }
+
+  function makePearlSprite(hex) {
     const c = document.createElement('canvas');
-    c.width = size;
-    c.height = size;
-    const gCtx = c.getContext('2d');
-    const mix = (a, d, k) => Math.round(a * (1 - k) + d * k);
-    const grad = gCtx.createRadialGradient(half, half, 0, half, half, half);
-    grad.addColorStop(0.0, 'rgba(255,255,255,1)');
-    grad.addColorStop(0.1, `rgba(${mix(255, r, 0.45)},${mix(255, g, 0.45)},${mix(255, b, 0.45)},0.96)`);
-    grad.addColorStop(0.24, `rgba(${r},${g},${b},0.55)`);
-    grad.addColorStop(0.52, `rgba(${r},${g},${b},0.16)`);
-    grad.addColorStop(1.0, `rgba(${r},${g},${b},0)`);
-    gCtx.fillStyle = grad;
-    gCtx.fillRect(0, 0, size, size);
+    c.width = 64;
+    c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, hexAlpha(hex, 1));
+    grad.addColorStop(0.055, hexAlpha(hex, 0.98));
+    grad.addColorStop(0.16, hexAlpha(hex, 0.78));
+    grad.addColorStop(0.38, hexAlpha(hex, 0.32));
+    grad.addColorStop(0.68, hexAlpha(hex, 0.085));
+    grad.addColorStop(1, hexAlpha(hex, 0));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    const core = g.createRadialGradient(32, 32, 0, 32, 32, 7);
+    core.addColorStop(0, 'rgba(255,255,255,0.84)');
+    core.addColorStop(0.28, 'rgba(255,255,255,0.34)');
+    core.addColorStop(1, 'rgba(255,255,255,0)');
+    g.globalCompositeOperation = 'screen';
+    g.fillStyle = core;
+    g.beginPath();
+    g.arc(32, 32, 7, 0, Math.PI * 2);
+    g.fill();
     return c;
   }
 
-  const paletteSprites = STAR_PALETTE.map(makeStarSprite);
-  const chapterSprites = CHAPTER_RGB.map((c) => (c ? makeStarSprite(c) : null));
-  const monthSprites = MONTH_RGB.map(makeStarSprite);
-  const coreSprite = makeStarSprite([255, 244, 214]);
+  const pearlPaletteSprites = STAR_PALETTE_HEX.map(makePearlSprite);
+  const pearlMonthSprites = Object.fromEntries(Object.entries(MONTH_HEX).map(([k, v]) => [k, makePearlSprite(v)]));
+  const pearlDefaultSprite = makePearlSprite('#eaf0ff');
+  const pearlCoreSprite = makePearlSprite('#ffe6a1');
+
+  function makeSeededRand(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
 
   function hashStr(str) {
     let h = 2166136261 >>> 0;
     const s = String(str || '');
     for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 16777619);
+      h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
     }
     return h >>> 0;
   }
 
   function randomSphereVec(seedStr) {
-    const h = hashStr(seedStr);
-    const u = ((h & 0xffff) / 0xffff) * 2 - 1;
-    const theta = (((h >>> 16) & 0xffff) / 0xffff) * Math.PI * 2;
-    const r = Math.sqrt(Math.max(0, 1 - u * u));
-    return [r * Math.cos(theta), u * 0.86, r * Math.sin(theta)];
+    const rand = makeSeededRand(hashStr(seedStr));
+    const y = rand() * 2 - 1;
+    const angle = rand() * Math.PI * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    return [r * Math.cos(angle), y, r * Math.sin(angle)];
   }
 
   const universeDust = (() => {
-    let seed = 20260417;
-    const rand = () => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 4294967296;
-    };
-    const tints = [
-      [220, 232, 255], [255, 228, 214], [210, 244, 255],
-      [238, 218, 255], [255, 244, 222], [198, 222, 255],
-    ];
+    const rand = makeSeededRand(911);
+    const tints = ['#b9d4ff', '#9de6e0', '#f1c4ff', '#ffe0aa'];
     const dust = [];
     for (let i = 0; i < 360; i++) {
-      const k = rand();
+      const bright = i < 12;
       dust.push({
         u: rand(),
         v: rand(),
-        r: k < 0.78 ? 0.45 + rand() * 0.65 : k < 0.96 ? 1.0 + rand() * 0.75 : 1.7 + rand() * 0.9,
-        alpha: 0.16 + rand() * 0.66,
-        freq: 0.35 + rand() * 1.4,
+        r: bright ? 0.7 + rand() * 0.9 : 0.3 + rand() * 0.65,
+        alpha: bright ? 0.11 + rand() * 0.13 : 0.008 + Math.pow(rand(), 2) * 0.07,
+        bright,
+        color: tints[Math.floor(rand() * tints.length)],
         phase: rand() * Math.PI * 2,
-        tint: tints[Math.floor(rand() * tints.length)],
-        parallax: 0.1 + rand() * 0.45,
       });
     }
     return dust;
   })();
 
   const nebulaBands = [
-    { u: 0.34, v: 0.42, rx: 0.44, ry: 0.2, rot: -0.32, c1: [86, 118, 214, 0.085], c2: [148, 98, 198, 0.038], phase: 0.4 },
-    { u: 0.68, v: 0.58, rx: 0.4, ry: 0.18, rot: 0.28, c1: [72, 156, 196, 0.068], c2: [188, 118, 168, 0.03], phase: 2.1 },
+    { u: 0.23, v: 0.28, radius: 0.5, color: '#415fae', strength: 0.055 },
+    { u: 0.78, v: 0.72, radius: 0.42, color: '#824b91', strength: 0.047 },
+    { u: 0.75, v: 0.23, radius: 0.32, color: '#277f83', strength: 0.04 },
+    { u: 0.42, v: 0.82, radius: 0.3, color: '#a55c46', strength: 0.026 },
   ];
 
+  function starPaletteIdx(s) {
+    return hashStr(String(s.id || s.title || '')) % STAR_PALETTE_HEX.length;
+  }
+
   function pickStarColorAndSprite(s) {
-    if (s.isCore) return { rgb: [255, 244, 214], sprite: coreSprite };
-    const idx = hashStr(`${s.id}|c`) % STAR_PALETTE.length;
-    if (s.kind === 'diary' && s.date) {
-      const m = Math.max(0, Math.min(11, (parseInt(s.date.slice(5, 7), 10) || 1) - 1));
-      if ((hashStr(s.id) & 3) === 0) return { rgb: MONTH_RGB[m], sprite: monthSprites[m] };
-    } else if (s.chapter && CHAPTER_RGB[s.chapter]) {
-      if ((hashStr(s.id) & 3) === 0) return { rgb: CHAPTER_RGB[s.chapter], sprite: chapterSprites[s.chapter] };
+    if (s.isCore) return { hex: '#ffe6a1', sprite: pearlCoreSprite };
+    if (s.kind === 'diary') {
+      const m = Number(String(s.date || '').slice(5, 7));
+      return {
+        hex: MONTH_HEX[m] || '#35c7ad',
+        sprite: pearlMonthSprites[m] || pearlDefaultSprite,
+      };
     }
-    return { rgb: STAR_PALETTE[idx], sprite: paletteSprites[idx] };
+    const idx = starPaletteIdx(s);
+    return {
+      hex: STAR_PALETTE_HEX[idx] || '#b9c6e8',
+      sprite: pearlPaletteSprites[idx] || pearlDefaultSprite,
+    };
+  }
+
+  function parseStarDateMs(s) {
+    const raw = String((s && (s.eventDate || (s.kind === 'diary' ? s.date : ''))) || '');
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (!m) return null;
+    const yr = Number(m[1]);
+    const mo = Number(m[2]);
+    const dy = Number(m[3]);
+    if (mo < 1 || mo > 12 || dy < 1 || dy > 31) return null;
+    const ms = Date.UTC(yr, mo - 1, dy);
+    const check = new Date(ms);
+    return (check.getUTCFullYear() === yr && check.getUTCMonth() === mo - 1 && check.getUTCDate() === dy) ? ms : null;
+  }
+
+  function cmpUndatedCard(a, b) {
+    const ca = Number(a.chapter) || 0;
+    const cb = Number(b.chapter) || 0;
+    if (ca > 0 && cb > 0 && ca !== cb) return ca - cb;
+    if (ca > 0 && !cb) return -1;
+    if (!ca && cb > 0) return 1;
+    if (ca > 0 && ca === cb) {
+      const od = (Number(a.order) || 0) - (Number(b.order) || 0);
+      if (od) return od;
+      return String(a.id).localeCompare(String(b.id));
+    }
+    return String(a.title || '').localeCompare(String(b.title || '')) || String(a.id).localeCompare(String(b.id));
   }
 
   function fmtDateTs(ts) {
@@ -616,11 +668,34 @@
     return [Math.cos(theta) * r, y, Math.sin(theta) * r];
   }
 
+  const STAR_FOCAL = 2400;
+
+  function computeAutoZoom(stars, w, h) {
+    if (!stars.length || !w || !h) return 0.72;
+    const cosY = Math.cos(state.mapRotY);
+    const sinY = Math.sin(state.mapRotY);
+    const cosX = Math.cos(state.mapRotX);
+    const sinX = Math.sin(state.mapRotX);
+    let edgeX = 1;
+    let edgeY = 1;
+    for (const s of stars) {
+      const x1 = s.x * cosY + s.z * sinY;
+      const z1 = -s.x * sinY + s.z * cosY;
+      const y2 = s.y * cosX - z1 * sinX;
+      const z2 = s.y * sinX + z1 * cosX;
+      const k = STAR_FOCAL / (STAR_FOCAL + z2);
+      edgeX = Math.max(edgeX, Math.abs(x1 * k));
+      edgeY = Math.max(edgeY, Math.abs(y2 * k));
+    }
+    // Upstream dsh-xingxi reference radius: keeps few stars gently proportioned without over-zooming
+    const refEdge = 340;
+    return Math.min((0.42 * w) / Math.max(edgeX, refEdge), (0.42 * h) / Math.max(edgeY, refEdge)) * 1.35;
+  }
+
   function rebuildUniverse3D(xingxi) {
     const rawStars = Array.isArray(xingxi?.stars) ? xingxi.stars : [];
     const rawLinks = Array.isArray(xingxi?.links) ? xingxi.links : [];
-    const R = 210;
-    const layout = state.mapLayout || 'cluster';
+    const layout = state.mapLayout || 'xingxi';
 
     const cloned = rawStars.map((s, idx) => ({
       ...s,
@@ -628,109 +703,159 @@
       isCore: false,
     }));
 
-    // Only real Chapter 1 ("我是誰") becomes the central core star; never hijack other chapters
-    const core = cloned.find((s) => Number(s.chapter) === 1) || null;
+    const core = cloned.find((s) =>
+      s.kind === 'card' && (String(s.title || '').trim() === '我是誰' || String(s.chapterName || '').trim() === '我是誰'),
+    ) || cloned.find((s) => s.kind === 'card' && Number(s.chapter) === 1) || null;
+
+    const firstByChapter = new Map();
+    for (const s of cloned) {
+      s.bodySize = (s.kind === 'diary' ? 7 : 8.5)
+        + Math.min(10, Math.log10(1 + String(s.text || '').length) * 4.4) * 0.76;
+      if (s.kind === 'card' && Number(s.chapter) > 0 && !firstByChapter.has(Number(s.chapter))) {
+        firstByChapter.set(Number(s.chapter), s);
+      }
+    }
     if (core) {
       core.isCore = true;
       core.x = 0;
       core.y = 0;
       core.z = 0;
+      core.bodySize = 40;
+    }
+    for (const [, chFirst] of firstByChapter) {
+      if (chFirst !== core) chFirst.bodySize = Math.max(chFirst.bodySize, 22);
     }
 
-    const nonCore = cloned.filter((s) => !s.isCore);
+    const dated = [];
+    const undated = [];
+    for (const s of cloned) {
+      if (s === core) continue;
+      const dms = parseStarDateMs(s);
+      if (dms !== null) dated.push({ s, dms });
+      else undated.push(s);
+    }
+
+    const innerCards = undated.filter((s) => s.kind === 'card').sort(cmpUndatedCard);
+    const innerOther = undated.filter((s) => s.kind !== 'card').sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    const innerList = [...innerCards, ...innerOther];
+
+    const n = cloned.length;
+    const innerMinR = 72;
+    const innerMaxR = innerList.length ? Math.min(300, 100 + Math.log2(innerList.length + 1) * 22) : 0;
+    const datedMinR = innerMaxR ? Math.max(105, innerMaxR * 0.72) : 72;
+    const datedMaxR = Math.max(datedMinR + 40, Math.min(460, 170 + Math.sqrt(n) * 7));
 
     if (layout === 'random') {
-      // Full 3D isotropic spherical random scatter
-      for (const s of nonCore) {
-        const h = hashStr(`${s.id}|rand`);
-        const u = ((h & 0xffff) / 0xffff) * 2 - 1;
-        const theta = (((h >>> 16) & 0xffff) / 0xffff) * Math.PI * 2;
+      const nonCore = cloned.filter((s) => s !== core);
+      const maxR = Math.max(220, datedMaxR);
+      nonCore.forEach((s) => {
+        const rand = makeSeededRand(hashStr(`${s.id}|rand`));
+        const u = rand() * 2 - 1;
+        const theta = rand() * Math.PI * 2;
         const sr = Math.sqrt(Math.max(0, 1 - u * u));
-        const h2 = hashStr(`${s.id}|randR`);
-        const dist = R * (0.28 + Math.cbrt((h2 % 1000) / 1000) * 0.78);
-        s.x = sr * Math.cos(theta) * dist;
-        s.y = u * dist;
-        s.z = sr * Math.sin(theta) * dist;
-      }
-    } else if (layout === 'ring') {
-      // Chronological growth rings (inner card stars + outer chronological diaries)
-      const outer = nonCore
-        .filter((s) => s.kind === 'diary' || s.eventDate)
-        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-      const outerLen = outer.length || 1;
-      const goldenStep = 2.399963229728653;
-      outer.forEach((s, i) => {
-        const rank = outerLen === 1 ? 0.5 : i / (outerLen - 1);
-        const h = hashStr(`${s.id}|dr`);
-        const theta = i * goldenStep + (((h & 0xff) / 255) - 0.5) * 0.2;
-        const elev = Math.sin(i * 0.9 + ((h >>> 8) & 0xff) * 0.03) * 0.55;
-        const dist = R * (0.60 + rank * 0.46);
-        const cosE = Math.cos(elev);
-        s.x = Math.cos(theta) * cosE * dist;
-        s.y = Math.sin(elev) * dist;
-        s.z = Math.sin(theta) * cosE * dist;
-        s.ringRank = rank;
+        const r = Math.cbrt(innerMinR ** 3 + (maxR ** 3 - innerMinR ** 3) * rand());
+        s.x = sr * Math.cos(theta) * r;
+        s.y = u * r;
+        s.z = sr * Math.sin(theta) * r;
       });
-      const inner = nonCore.filter((s) => s.kind === 'card' && !s.eventDate);
-      for (const s of inner) {
-        const [vx, vy, vz] = randomSphereVec(`${s.id}|c`);
-        const h = hashStr(`${s.id}|r`);
-        const dist = R * (0.22 + ((h % 1000) / 1000) * 0.34);
-        s.x = vx * dist;
-        s.y = vy * dist;
-        s.z = vz * dist;
-      }
-    } else {
-      // Default: 'cluster' — distinct 3D star clusters arranged across a full 3D Fibonacci sphere
+    } else if (layout === 'cluster') {
+      const nonCore = cloned.filter((s) => s !== core);
       const groups = new Map();
       for (const s of nonCore) {
-        const gKey = (s.kind === 'diary')
+        const gKey = s.kind === 'diary'
           ? `diary:${String(s.date || '').slice(0, 7) || 'all'}`
           : `ch:${Number(s.chapter) || 0}`;
         if (!groups.has(gKey)) groups.set(gKey, []);
         groups.get(gKey).push(s);
       }
-      const groupEntries = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-      const gTotal = Math.max(1, groupEntries.length);
-      groupEntries.forEach(([gKey, list], gIdx) => {
+      const entries = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      const gTotal = Math.max(1, entries.length);
+      entries.forEach(([gKey, list], gIdx) => {
         const [cx, cy, cz] = fibonacciSpherePoint(gIdx, gTotal);
-        const gh = hashStr(`grp|${gKey}`);
-        const isDiaryGrp = gKey.startsWith('diary:');
-        const anchorDist = R * (isDiaryGrp ? 0.78 : 0.56 + ((gh % 100) / 100) * 0.22);
-        const spread = R * (0.16 + Math.min(0.18, Math.sqrt(list.length) * 0.038));
-        list.sort((a, b) => (a.ts || 0) - (b.ts || 0) || (a.order || 0) - (b.order || 0));
+        const anchorDist = 140 + (hashStr(`grp|${gKey}`) % 70);
+        const spread = 56 + Math.min(54, Math.sqrt(list.length) * 14);
         list.forEach((s, idx) => {
           const [ox, oy, oz] = randomSphereVec(`${s.id}|cl|${idx}`);
-          const h = hashStr(`${s.id}|cld`);
-          const localR = spread * (0.28 + Math.cbrt((h % 1000) / 1000) * 0.72);
+          const rand = makeSeededRand(hashStr(`${s.id}|cld`));
+          const localR = spread * Math.cbrt(rand());
           s.x = cx * anchorDist + ox * localR;
           s.y = cy * anchorDist + oy * localR;
           s.z = cz * anchorDist + oz * localR;
         });
       });
+    } else {
+      // Upstream dsh-xingxi volume-uniform r³ spherical expansion with overlapping undated/dated shells
+      innerList.forEach((s, k) => {
+        const t = innerList.length <= 1 ? 0 : k / (innerList.length - 1);
+        const r = Math.cbrt(innerMinR ** 3 + (innerMaxR ** 3 - innerMinR ** 3) * t);
+        const [dx, dy, dz] = randomSphereVec(String(s.id || s.title || ''));
+        s.x = dx * r;
+        s.y = dy * r;
+        s.z = dz * r;
+      });
+      dated.sort((a, b) => a.dms - b.dms || String(a.s.id).localeCompare(String(b.s.id)));
+      dated.forEach(({ s }, k) => {
+        const t = dated.length <= 1 ? 0 : k / (dated.length - 1);
+        const r = Math.cbrt(datedMinR ** 3 + (datedMaxR ** 3 - datedMinR ** 3) * t);
+        const [dx, dy, dz] = randomSphereVec(String(s.id || s.title || ''));
+        s.x = dx * r;
+        s.y = dy * r;
+        s.z = dz * r;
+      });
     }
 
     for (const s of cloned) {
-      const { rgb, sprite } = pickStarColorAndSprite(s);
-      s.rgb = rgb;
+      const { hex, sprite } = pickStarColorAndSprite(s);
+      s.hex = hex;
       s.sprite = sprite;
-      s.baseSize = s.isCore
-        ? 4.6
-        : (s.kind === 'diary' ? 2.1 : 1.55) + (s.energy || 0.5) * (s.kind === 'diary' ? 2.1 : 1.65);
+      s.paletteIdx = starPaletteIdx(s);
     }
 
+    // Build spatial 2-nearest-neighbor same-chapter constellation lines (upstream dsh-xingxi rule) + shared bridges
     const byId = new Map(cloned.map((s) => [s.id, s]));
     const neighbors = new Map();
     const resolvedLinks = [];
-    for (const l of rawLinks) {
-      const a = byId.get(l.source);
-      const b = byId.get(l.target);
-      if (!a || !b) continue;
-      resolvedLinks.push({ ...l, a, b });
+    const seenEdge = new Set();
+    const pushLink = (a, b, kind, extra = {}) => {
+      if (!a || !b || a.id === b.id) return;
+      const key = a.id < b.id ? `${a.id}|${b.id}|${kind}` : `${b.id}|${a.id}|${kind}`;
+      if (seenEdge.has(key)) return;
+      seenEdge.add(key);
+      resolvedLinks.push({ a, b, kind, ...extra });
       if (!neighbors.has(a.id)) neighbors.set(a.id, new Set());
       if (!neighbors.has(b.id)) neighbors.set(b.id, new Set());
       neighbors.get(a.id).add(b.id);
       neighbors.get(b.id).add(a.id);
+    };
+
+    const byChapter = new Map();
+    for (const s of cloned) {
+      if (s.kind !== 'card' || !Number(s.chapter)) continue;
+      const ch = Number(s.chapter);
+      if (!byChapter.has(ch)) byChapter.set(ch, []);
+      byChapter.get(ch).push(s);
+    }
+    for (const [ch, list] of byChapter) {
+      for (const a of list) {
+        const dists = [];
+        for (const b of list) {
+          if (b === a) continue;
+          dists.push([Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z), b]);
+        }
+        dists.sort((u, v) => u[0] - v[0]);
+        for (let k = 0; k < Math.min(2, dists.length); k++) {
+          if (dists[k][0] > 210) continue;
+          pushLink(a, dists[k][1], 'chapter', { chapter: ch });
+        }
+      }
+    }
+
+    for (const l of rawLinks) {
+      if (l.kind === 'chapter') continue;
+      const a = byId.get(l.source);
+      const b = byId.get(l.target);
+      if (!a || !b) continue;
+      pushLink(a, b, l.kind, { label: l.label, weight: l.weight });
     }
 
     const tsList = [...new Set(cloned.map((s) => s.ts).filter((t) => t > 0))].sort((a, b) => a - b);
@@ -738,6 +863,7 @@
     state.starLinks3D = resolvedLinks;
     state.neighborsById = neighbors;
     state.tlTsList = tsList;
+    state.mapAutoZoom = true;
 
     const firstEl = $('xx-tl-first');
     const lastEl = $('xx-tl-last');
@@ -780,14 +906,15 @@
     const z1 = -x * sinY + z * cosY;
     const y2 = y * cosX - z1 * sinX;
     const z2 = y * sinX + z1 * cosX;
-    const focal = 680;
-    const dist = z2 + focal;
-    if (dist < 80) return null;
-    const k = (focal / dist) * state.mapZoom;
+    const dist = STAR_FOCAL + z2;
+    if (dist < 120) return null;
+    const depth = STAR_FOCAL / dist;
+    const k = depth * state.mapZoom;
     return {
       sx: w / 2 + x1 * k,
       sy: h / 2 + y2 * k,
       z: z2,
+      depth,
       k,
     };
   }
@@ -796,7 +923,7 @@
     const detail = $('star-detail');
     if (!detail) return;
     if (!star) {
-      detail.textContent = '點擊上方任一星點，即可高亮關聯星座並閱讀該章條目或當日日記正文。';
+      detail.textContent = '點選任一星點檢視關聯星座與全文。';
       return;
     }
     const bridgeLabels = [];
@@ -839,58 +966,85 @@
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = Math.max(300, Math.round(rect.width || 520));
-    const h = Math.max(220, Math.round(rect.height || 320));
+    const h = Math.max(220, Math.round(rect.height || 300));
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
+      if (state.mapAutoZoom && state.stars3D.length) {
+        state.mapZoom = computeAutoZoom(state.stars3D, w, h);
+      }
+    } else if (state.mapAutoZoom && state.stars3D.length) {
+      state.mapZoom = computeAutoZoom(state.stars3D, w, h);
+      state.mapAutoZoom = false;
     }
 
     const ctx = canvas.getContext('2d');
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // 1. Deep space gradient + breathing nebula + 360 parallax star-dust
-    const bgGrad = ctx.createRadialGradient(w * 0.5, h * 0.45, 10, w * 0.5, h * 0.5, Math.max(w, h) * 0.78);
-    bgGrad.addColorStop(0, '#0b132c');
-    bgGrad.addColorStop(0.55, '#050816');
-    bgGrad.addColorStop(1, '#02030a');
-    ctx.fillStyle = bgGrad;
+    // 1. Deep night sky + delicate diagonal Milky Way band + soft low-contrast nebulae + sparse dust
+    ctx.fillStyle = '#050814';
     ctx.fillRect(0, 0, w, h);
 
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(-0.34);
+    const mw = ctx.createLinearGradient(0, -h * 0.12, 0, h * 0.12);
+    mw.addColorStop(0, 'rgba(120,160,230,0)');
+    mw.addColorStop(0.28, 'rgba(132,166,226,0.018)');
+    mw.addColorStop(0.5, 'rgba(172,195,244,0.058)');
+    mw.addColorStop(0.72, 'rgba(132,166,226,0.018)');
+    mw.addColorStop(1, 'rgba(120,160,230,0)');
+    ctx.fillStyle = mw;
+    ctx.fillRect(-w, -h, w * 2, h * 2);
+    ctx.restore();
+
     const tSec = nowMs * 0.001;
-    const span = Math.max(w, h);
-    for (const nb of nebulaBands) {
-      const cx = (nb.u + Math.sin(tSec * 0.05 + nb.phase) * 0.02) * w;
-      const cy = (nb.v + Math.cos(tSec * 0.04 + nb.phase) * 0.02) * h;
-      const r = span * nb.rx;
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    for (let ci = 0; ci < nebulaBands.length; ci++) {
+      const nb = nebulaBands[ci];
+      const cx = (((nb.u + Math.sin(tSec * 0.035 + ci) * 0.018) % 1) + 1) % 1 * w;
+      const cy = (((nb.v + Math.cos(tSec * 0.03 + ci * 1.7) * 0.014) % 1) + 1) % 1 * h;
+      const r = nb.radius * Math.min(w, h);
       ctx.save();
       ctx.translate(cx, cy);
-      ctx.rotate(nb.rot);
-      ctx.scale(1, nb.ry / nb.rx);
+      ctx.rotate(-0.34 + ci * 0.08);
+      ctx.scale(1.65, 0.48);
       const ng = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-      const [r1, g1, b1, a1] = nb.c1;
-      const [r2, g2, b2, a2] = nb.c2;
-      ng.addColorStop(0, `rgba(${r1},${g1},${b1},${a1})`);
-      ng.addColorStop(0.5, `rgba(${r2},${g2},${b2},${a2})`);
-      ng.addColorStop(1, 'rgba(0,0,0,0)');
+      const breath = 0.97 + 0.03 * Math.sin(tSec * 0.12 + ci * 1.3);
+      ng.addColorStop(0, hexAlpha(nb.color, nb.strength * breath));
+      ng.addColorStop(0.55, hexAlpha(nb.color, nb.strength * 0.34));
+      ng.addColorStop(1, hexAlpha(nb.color, 0));
       ctx.fillStyle = ng;
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
+    ctx.restore();
 
-    for (const p of universeDust) {
-      const ox = ((p.u * w + state.mapRotY * 55 * p.parallax) % w + w) % w;
-      const oy = ((p.v * h + state.mapRotX * 38 * p.parallax) % h + h) % h;
-      const breath = 0.58 + 0.42 * Math.sin(tSec * p.freq + p.phase);
-      const a = p.alpha * breath;
-      const [r, g, b] = p.tint;
-      ctx.fillStyle = `rgba(${r},${g},${b},${a.toFixed(3)})`;
-      ctx.beginPath();
-      ctx.arc(ox, oy, p.r, 0, Math.PI * 2);
-      ctx.fill();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let k = 0; k < universeDust.length; k++) {
+      const d = universeDust[k];
+      const px = (((d.u + state.mapRotY * 0.015 + tSec * 0.0035) % 1) + 1) % 1;
+      const py = (((d.v + state.mapRotX * 0.02 + tSec * 0.0025 + 1) % 1) + 1) % 1;
+      const twinkle = d.bright
+        ? 0.72 + 0.28 * Math.sin(tSec * 0.42 + d.phase)
+        : 0.7 + 0.3 * Math.sin(tSec * (0.22 + (k % 9) * 0.025) + d.phase);
+      ctx.fillStyle = d.color;
+      ctx.globalAlpha = Math.min(d.bright ? 0.5 : 0.22, d.alpha * (0.58 + 0.6 * twinkle));
+      if (d.bright) {
+        ctx.beginPath();
+        ctx.arc(px * w, py * h, d.r * (0.7 + 0.35 * twinkle), 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        const sz = d.r * (0.8 + 0.25 * twinkle);
+        ctx.fillRect(px * w, py * h, sz, sz);
+      }
     }
+    ctx.restore();
 
     const stars = state.stars3D;
     if (!stars.length) {
@@ -904,7 +1058,7 @@
       return;
     }
 
-    // 2. Search filter & 3D projection
+    // 2. Search filter & 3D projection (telephoto focal=2400)
     const q = state.mapSearch.trim().toLowerCase();
     let hitsCount = 0;
     const projected = [];
@@ -927,67 +1081,36 @@
       ...s,
       x: pr.sx,
       y: pr.sy,
-      r: Math.max(4, s.baseSize * pr.k * 2.1),
+      r: Math.max(5, (s.bodySize || 12) * 0.45),
     }));
     $('xx-map-hits').textContent = q ? `${hitsCount} 顆` : '';
 
-    const drawMainStarBody = (sx, sy, k, isFocused) => {
-      const pulse = 0.96 + 0.05 * Math.sin(tSec * 1.4);
-      const baseR = Math.max(4.2, 6.8 * k * pulse * (isFocused ? 1.15 : 1));
+    // Ambient warm backdrop halo behind Core Star (upstream dsh-xingxi screen glow)
+    const coreStar = stars.find((s) => s.isCore && s._proj);
+    if (coreStar) {
+      const cp = coreStar._proj;
+      const pulse = 0.97 + 0.03 * Math.sin(tSec * 0.55);
+      const auraR = Math.max(82, 138 * state.mapZoom * pulse);
+      const aura = ctx.createRadialGradient(cp.sx, cp.sy, 0, cp.sx, cp.sy, auraR);
+      aura.addColorStop(0, 'rgba(255,238,199,0.24)');
+      aura.addColorStop(0.24, 'rgba(255,213,145,0.13)');
+      aura.addColorStop(0.58, 'rgba(176,151,255,0.04)');
+      aura.addColorStop(1, 'rgba(60,100,180,0)');
       ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      // Compact warm amber-gold & ivory corona
-      for (const [mult, col, al] of [
-        [3.1, '234,179,84', 0.08],
-        [1.9, '255,214,138', 0.18],
-        [1.25, '255,244,214', 0.42],
-      ]) {
-        const rad = baseR * mult;
-        const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad);
-        g.addColorStop(0, `rgba(255,252,240,${al * 1.35})`);
-        g.addColorStop(0.45, `rgba(${col},${al})`);
-        g.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(sx, sy, rad, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      // Subtle, fine 4-point primary & diagonal secondary starlight spikes
-      const drawSpike = (len, width, angle, alpha) => {
-        ctx.save();
-        ctx.translate(sx, sy);
-        ctx.rotate(angle);
-        const sg = ctx.createLinearGradient(-len, 0, len, 0);
-        sg.addColorStop(0, 'rgba(255,235,180,0)');
-        sg.addColorStop(0.44, `rgba(255,244,214,${alpha * 0.55})`);
-        sg.addColorStop(0.5, `rgba(255,255,255,${alpha})`);
-        sg.addColorStop(0.56, `rgba(255,244,214,${alpha * 0.55})`);
-        sg.addColorStop(1, 'rgba(255,235,180,0)');
-        ctx.fillStyle = sg;
-        ctx.beginPath();
-        ctx.ellipse(0, 0, len, width, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      };
-      drawSpike(baseR * 1.85, Math.max(0.6, baseR * 0.10), 0, 0.72);
-      drawSpike(baseR * 1.85, Math.max(0.6, baseR * 0.10), Math.PI / 2, 0.72);
-      drawSpike(baseR * 1.05, Math.max(0.45, baseR * 0.065), Math.PI / 4, 0.36);
-      drawSpike(baseR * 1.05, Math.max(0.45, baseR * 0.065), -Math.PI / 4, 0.36);
-      // Incandescent core nucleus
-      ctx.fillStyle = 'rgba(255,255,255,0.98)';
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = aura;
       ctx.beginPath();
-      ctx.arc(sx, sy, baseR * 0.46, 0, Math.PI * 2);
+      ctx.arc(cp.sx, cp.sy, auraR, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-    };
+    }
 
-    const focusId = state.hoveredStarId || state.selectedStarId;
-    const focusNeighbors = focusId ? state.neighborsById.get(focusId) : null;
+    const focusId = state.selectedStarId || state.hoveredStarId;
+    const focusNeighbors = (focusId && state.mapLinksOn) ? state.neighborsById.get(focusId) : null;
 
-    // 3. Constellation lines & Shared-word Bridges
+    // 3. Spatial same-chapter lines & Shared-word Bridges (upstream dsh-xingxi subtle styling)
     if (state.mapLinksOn) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
       const bridgeMidpoints = [];
       for (const l of state.starLinks3D) {
         const pa = l.a._proj;
@@ -995,48 +1118,56 @@
         if (!pa || !pb) continue;
         if (q && !l.a.matched && !l.b.matched) continue;
         const isFocusEdge = Boolean(focusId && (l.a.id === focusId || l.b.id === focusId));
-        if (focusId && !isFocusEdge) continue;
+
+        if (l.kind === 'chapter') {
+          const chHex = CHAPTER_HEX[l.chapter] || '#b5c4e8';
+          ctx.strokeStyle = hexAlpha(chHex, isFocusEdge ? 0.92 : focusId ? 0.07 : 0.22);
+          ctx.lineWidth = isFocusEdge ? 1.6 : 0.85;
+          ctx.beginPath();
+          ctx.moveTo(pa.sx, pa.sy);
+          ctx.lineTo(pb.sx, pb.sy);
+          ctx.stroke();
+          continue;
+        }
 
         if (l.kind === 'bridge') {
-          if (!isFocusEdge && (l.weight || 0) < 0.56) continue;
-          const alpha = isFocusEdge ? 0.62 : 0.13 * (l.weight || 0.5);
-          ctx.strokeStyle = `rgba(255, 214, 150, ${alpha})`;
-          ctx.lineWidth = isFocusEdge ? 1.35 : 0.75;
+          ctx.strokeStyle = isFocusEdge
+            ? 'rgba(255,198,130,0.78)'
+            : focusId ? 'rgba(255,190,120,0.025)' : 'rgba(255,190,120,0.09)';
+          ctx.lineWidth = isFocusEdge ? 1.35 : 0.6;
           ctx.beginPath();
           ctx.moveTo(pa.sx, pa.sy);
           ctx.lineTo(pb.sx, pb.sy);
           ctx.stroke();
           if (isFocusEdge && l.label) {
-            bridgeMidpoints.push({
-              x: (pa.sx + pb.sx) * 0.5,
-              y: (pa.sy + pb.sy) * 0.5,
-              text: l.label,
-            });
+            bridgeMidpoints.push({ x: (pa.sx + pb.sx) * 0.5, y: (pa.sy + pb.sy) * 0.5, text: l.label });
           }
           continue;
         }
 
-        const [r, g, b] = l.a.rgb || [180, 200, 255];
-        const alpha = isFocusEdge ? 0.55 : 0.14 * (l.weight || 0.5);
-        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
-        ctx.lineWidth = isFocusEdge ? 1.3 : 0.75;
-        ctx.beginPath();
-        ctx.moveTo(pa.sx, pa.sy);
-        ctx.lineTo(pb.sx, pb.sy);
-        ctx.stroke();
+        if (isFocusEdge && (l.kind === 'ref' || l.kind === 'similar')) {
+          ctx.save();
+          ctx.strokeStyle = l.kind === 'ref' ? 'rgba(255,200,130,0.45)' : 'rgba(255,255,255,0.3)';
+          ctx.lineWidth = 1.1;
+          ctx.setLineDash(l.kind === 'ref' ? [2, 4] : []);
+          ctx.beginPath();
+          ctx.moveTo(pa.sx, pa.sy);
+          ctx.lineTo(pb.sx, pb.sy);
+          ctx.stroke();
+          ctx.restore();
+        }
       }
-      ctx.restore();
 
       if (bridgeMidpoints.length) {
         ctx.save();
         ctx.font = '10.5px "Microsoft JhengHei UI", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        for (const m of bridgeMidpoints.slice(0, 10)) {
+        for (const m of bridgeMidpoints.slice(0, 8)) {
           const tw = ctx.measureText(m.text).width;
           const pw = tw + 10;
           const ph = 15;
-          ctx.fillStyle = 'rgba(10, 14, 28, 0.82)';
+          ctx.fillStyle = 'rgba(10, 14, 28, 0.85)';
           ctx.strokeStyle = 'rgba(255, 214, 150, 0.42)';
           ctx.lineWidth = 0.8;
           ctx.beginPath();
@@ -1050,63 +1181,96 @@
       }
     }
 
-    // 4. Render 3D Pearl Stars & Luminous Central Core Star
-    const hasCoreStar = stars.some((s) => s.isCore);
-    if (!hasCoreStar) {
-      const originProj = projectStar3D(0, 0, 0, w, h);
-      if (originProj) drawMainStarBody(originProj.sx, originProj.sy, originProj.k * 0.85, false);
-    }
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
+    // 4. Render unified circular pearl stars (upstream dsh-xingxi source-over + warm golden core halo)
+    const nowWall = Date.now();
     for (const { s, pr } of projected) {
-      if (q && !s.matched) continue;
-      if (s.isCore) {
-        drawMainStarBody(pr.sx, pr.sy, pr.k, s.id === focusId);
-        continue;
-      }
-
-      const isFocused = s.id === focusId;
+      const isSelected = state.selectedStarId === s.id;
+      const isHovered = state.hoveredStarId === s.id;
       const isNeighbor = Boolean(focusNeighbors && focusNeighbors.has(s.id));
-      const twinkle = 0.84 + 0.16 * Math.sin(tSec * 1.8 + (hashStr(s.id) % 100) * 0.06);
-      let alpha = Math.min(1, (0.38 + (s.energy || 0.5) * 0.62) * twinkle);
-      if (focusId && !isFocused && !isNeighbor) alpha *= 0.28;
-      if (isFocused || isNeighbor) alpha = 1;
+      const daysOld = s.ts ? Math.max(0, (nowWall - s.ts) / 86400000) : 120;
+      const energy = 0.42 + 0.58 * Math.exp(-daysOld / 110);
+      const phase = (s.paletteIdx || 0) * 2.399;
+      const breath = 0.965 + 0.035 * Math.sin(tSec * (0.42 + ((s.paletteIdx || 0) % 7) * 0.025) + phase);
 
-      const rad = Math.max(0.9, s.baseSize * pr.k * (isFocused ? 1.55 : isNeighbor ? 1.25 : 1));
-      const drawW = Math.max(6, rad * 6.4);
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(s.sprite, pr.sx - drawW / 2, pr.sy - drawW / 2, drawW, drawW);
-      if (rad > 1.5 || isFocused) {
-        ctx.globalAlpha = Math.min(1, alpha * 1.12);
-        ctx.fillStyle = '#ffffff';
+      let sz = Math.max(7, (s.bodySize || 12) * (0.8 + 0.5 * state.mapZoom) * pr.depth * breath);
+      if (q && !s.matched) sz *= 0.55;
+      if (s.kind !== 'card') sz *= 0.85;
+      if (isNeighbor && s.id !== focusId) sz *= 1.12;
+      if (s.isCore) sz *= 1.15;
+      if (isSelected) sz *= 1.6;
+      else if (isHovered) sz *= 1.28;
+
+      const alpha = Math.min(1, (0.84 + pr.depth * 0.22) * breath * energy)
+        * (q && !s.matched ? 0.22 : 1)
+        * (focusNeighbors ? ((isNeighbor || s.id === focusId) ? 1 : 0.32) : 1);
+
+      if (isSelected || isHovered) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = alpha * (isSelected ? 0.28 : 0.17);
+        const haloR = sz * (isSelected ? 1.85 : 1.45);
+        const halo = ctx.createRadialGradient(pr.sx, pr.sy, 0, pr.sx, pr.sy, haloR);
+        halo.addColorStop(0, hexAlpha(s.hex, 0.65));
+        halo.addColorStop(0.4, hexAlpha(s.hex, 0.2));
+        halo.addColorStop(1, hexAlpha(s.hex, 0));
+        ctx.fillStyle = halo;
         ctx.beginPath();
-        ctx.arc(pr.sx, pr.sy, Math.max(0.7, rad * 0.36), 0, Math.PI * 2);
+        ctx.arc(pr.sx, pr.sy, haloR, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
       }
-    }
-    ctx.restore();
 
-    // 5. Labels ONLY for hovered or selected star (never permanently stuck on screen)
-    ctx.save();
-    ctx.textBaseline = 'middle';
-    for (const targetId of new Set([state.selectedStarId, state.hoveredStarId].filter(Boolean))) {
-      const st = stars.find((x) => x.id === targetId);
-      if (!st || !st._proj) continue;
-      const { sx, sy } = st._proj;
-      ctx.strokeStyle = targetId === state.selectedStarId
-        ? 'rgba(255, 232, 178, 0.92)'
-        : 'rgba(255, 255, 255, 0.72)';
-      ctx.lineWidth = 1.25;
-      ctx.beginPath();
-      ctx.arc(sx, sy, st.isCore ? 14 : 10, 0, Math.PI * 2);
-      ctx.stroke();
-      if (targetId === state.selectedStarId && state.hoveredStarId !== targetId) {
-        ctx.font = '500 11.5px "Microsoft JhengHei UI", system-ui, sans-serif';
-        ctx.fillStyle = st.isCore ? 'rgba(255, 244, 214, 0.96)' : 'rgba(245, 247, 255, 0.95)';
-        ctx.fillText((st.title || '').slice(0, 18), sx + (st.isCore ? 17 : 13), sy);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(s.sprite, pr.sx - sz / 2, pr.sy - sz / 2, sz, sz);
+
+      if (s.isCore) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        const ringR = Math.max(15, sz * 1.95);
+        const p2 = 0.96 + 0.04 * Math.sin(tSec * 0.72);
+        ctx.globalAlpha = alpha * 0.32 * p2;
+        const ring = ctx.createRadialGradient(pr.sx, pr.sy, sz * 0.08, pr.sx, pr.sy, ringR);
+        ring.addColorStop(0, 'rgba(255,247,220,0.88)');
+        ring.addColorStop(0.18, 'rgba(255,226,164,0.44)');
+        ring.addColorStop(0.48, 'rgba(255,197,108,0.16)');
+        ring.addColorStop(1, 'rgba(255,190,110,0)');
+        ctx.fillStyle = ring;
+        ctx.beginPath();
+        ctx.arc(pr.sx, pr.sy, ringR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       }
     }
-    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 5. Crisp selection ring & label ONLY when selected (hover uses floating tooltip card)
+    if (state.selectedStarId) {
+      const st = stars.find((x) => x.id === state.selectedStarId && x._proj);
+      if (st) {
+        const { sx, sy, depth } = st._proj;
+        const selR = Math.max(10, (st.bodySize || 12) * (0.8 + 0.5 * state.mapZoom) * depth * 0.65);
+        ctx.save();
+        ctx.strokeStyle = hexAlpha(st.hex, 0.9);
+        ctx.lineWidth = 1.15;
+        ctx.beginPath();
+        ctx.arc(sx, sy, selR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(236,242,255,0.34)';
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        ctx.arc(sx, sy, selR + 3, 0, Math.PI * 2);
+        ctx.stroke();
+        if (state.hoveredStarId !== st.id) {
+          ctx.font = '500 11.5px "Microsoft JhengHei UI", system-ui, sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = st.isCore ? 'rgba(255, 244, 214, 0.96)' : 'rgba(245, 247, 255, 0.95)';
+          ctx.fillText((st.title || '').slice(0, 18), sx + selR + 6, sy);
+        }
+        ctx.restore();
+      }
+    }
     ctx.restore();
   }
 
@@ -1116,7 +1280,7 @@
     const xingxiPanel = $('tab-xingxi');
     if (xingxiPanel && !xingxiPanel.hidden && !document.hidden) {
       if (!prefersReducedMotion && !state.isDraggingMap && !state.hoveredStarId) {
-        state.mapRotY += dt * 0.018;
+        state.mapRotY += dt * 0.01;
       }
       if (state.tlPlaying) {
         state.tlPos += dt / 9.0;
@@ -1237,8 +1401,9 @@
 
   starmapCanvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    state.mapAutoZoom = false;
     const factor = Math.exp(-e.deltaY * 0.0012);
-    state.mapZoom = Math.min(3.4, Math.max(0.25, state.mapZoom * factor));
+    state.mapZoom = Math.min(3.4, Math.max(0.2, state.mapZoom * factor));
     drawStarMap(null);
   }, { passive: false });
 
@@ -1252,7 +1417,7 @@
     layoutSel.value = state.mapLayout;
     layoutSel.addEventListener('change', (e) => {
       const next = e.target.value;
-      if (next !== 'cluster' && next !== 'random' && next !== 'ring') return;
+      if (next !== 'xingxi' && next !== 'cluster' && next !== 'random') return;
       state.mapLayout = next;
       try { localStorage.setItem('gcat.mapLayout', next); } catch { /* ignore */ }
       state.starGraphSig = '';
@@ -1270,19 +1435,21 @@
   });
 
   $('xx-zoom-in').addEventListener('click', () => {
+    state.mapAutoZoom = false;
     state.mapZoom = Math.min(3.4, state.mapZoom * 1.22);
     drawStarMap(null);
   });
 
   $('xx-zoom-out').addEventListener('click', () => {
-    state.mapZoom = Math.max(0.25, state.mapZoom * 0.82);
+    state.mapAutoZoom = false;
+    state.mapZoom = Math.max(0.2, state.mapZoom * 0.82);
     drawStarMap(null);
   });
 
   $('xx-zoom-reset').addEventListener('click', () => {
-    state.mapZoom = 1;
+    state.mapAutoZoom = true;
     state.mapRotY = 0.42;
-    state.mapRotX = -0.18;
+    state.mapRotX = -0.68;
     state.mapSearch = '';
     state.selectedStarId = '';
     state.tlPlaying = false;
