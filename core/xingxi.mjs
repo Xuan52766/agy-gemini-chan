@@ -1504,7 +1504,7 @@ export async function executeXingxiPickup({
   return { action: 'dispatched', date: targetDateStr, catchUp: isCatchUp, mode: effectiveMode, material, prompt, cfg: freshCfg };
 }
 
-const DIARY_SPLIT_CHARS = '玄我他她的了是在有和跟與及或就都也還又被把將給對向往從到去來說想問聽看寫讀吃喝玩睡買等著過完好沒不很太真只才卻但而這那其個種些裡中內外上下前後早午晚一兩二三四五六七八九十百半多幾每再已正先並更於為以所當隻條封場杯碗件份句篇段本能會要得讓令使';
+const DIARY_SPLIT_CHARS = '我他她的了是在有和跟與及或就都也還又被把將給對向往從到去來說想問聽看寫讀吃喝玩睡買等著過完好沒不很太真只才卻但而這那其個種些裡中內外上下前後早午晚一兩二三四五六七八九十百半多幾每再已正先並更於為以所當隻條封場杯碗件份句篇段本能會要得讓令使';
 const DIARY_SPLIT_RE = new RegExp(`[${DIARY_SPLIT_CHARS}]+`, 'g');
 const DIARY_STOP_WORDS = new Set([
   '今天', '明天', '昨天', '昨晚', '凌晨', '早上', '上午', '中午', '下午', '傍晚', '晚上', '半夜',

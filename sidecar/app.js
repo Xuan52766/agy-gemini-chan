@@ -2608,7 +2608,7 @@
         ? `目前天氣定位：${fbCfg.weatherResolvedLabel}`
         : (fbCfg.weatherCity
             ? `城市「${fbCfg.weatherCity}」尚未定位（按「儲存搭話設定」或「立即逛一逛」驗證）`
-            : '未設定城市（勾選「異常天氣」時可填高雄、台北、Taipei 等）');
+            : '未設定城市（勾選「異常天氣」時可填台北、Taipei 等）');
     }
     if ($('sp-fresh-feeds-count')) {
       $('sp-fresh-feeds-count').textContent = `${fbCustomFeeds.length} 個`;

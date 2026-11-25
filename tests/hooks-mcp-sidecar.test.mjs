@@ -116,7 +116,7 @@ test('hooks stay silent outside gemini_cat, inject Xingxi+Nest inside, and skip 
     // Multi-root workspace where another project is primary and gemini_cat is mounted secondary: MUST stay silent!
     const secondaryMounted = runHook('hooks/pre-invocation.mjs', {
       conversationId: 'other-multi-conv',
-      workspacePaths: ['C:\\workspaces\\dsh_plugin', REPO_ROOT],
+      workspacePaths: ['C:\\workspaces\\another_project', REPO_ROOT],
       cwd: REPO_ROOT,
       lastUserInput: '把這個副資料夾當作參考程式',
     }, env);

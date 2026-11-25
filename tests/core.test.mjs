@@ -116,8 +116,8 @@ test('storage workspace scope strictly enforces project boundary', () => {
   const proj = 'C:\\workspaces\\gemini_cat';
   assert.equal(isProjectWorkspaceActive(['file:///C%3A/workspaces/gemini_cat'], '', proj), true);
   assert.equal(isProjectWorkspaceActive([join(proj, 'core')], '', proj), true);
-  assert.equal(isProjectWorkspaceActive([proj, 'C:\\workspaces\\dsh_plugin'], '', proj), true);
-  assert.equal(isProjectWorkspaceActive(['C:\\workspaces\\dsh_plugin', proj], proj, proj), false);
+  assert.equal(isProjectWorkspaceActive([proj, 'C:\\workspaces\\another_project'], '', proj), true);
+  assert.equal(isProjectWorkspaceActive(['C:\\workspaces\\another_project', proj], proj, proj), false);
   assert.equal(isProjectWorkspaceActive([], proj, proj), true);
   assert.equal(isProjectWorkspaceActive(['C:\\workspaces\\gemini_cat_other'], '', proj), false);
   assert.equal(isProjectWorkspaceActive(['C:\\workspaces\\other_project'], '', proj), false);
@@ -1739,21 +1739,21 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
     assert.doesNotMatch(parsedXml.items[0].title, /\[SPEAK_UP_INTERNAL\]|<speak-up>|<b>/);
     assert.match(parsedXml.items[0].summary, /&/);
 
-    // Weather swing & Taiwan Chinese city resolution check (`高雄` must beat low-pop homonyms and map to Kaohsiung TW)
-    const khLookup = await resolveWeatherCity('高雄', {
+    // Weather swing & Taiwan Chinese city resolution check (`台中` must beat low-pop homonyms and map to Taichung TW)
+    const tcLookup = await resolveWeatherCity('台中', {
       fetchFn: async (u) => {
-        assert.match(u, /Kaohsiung/);
+        assert.match(u, /Taichung/);
         return new Response(JSON.stringify({
           results: [
-            { name: 'Kaohsiung Farm', country: 'Other', country_code: 'CN', population: 500, latitude: 31.3, longitude: 105.3 },
-            { name: '高雄市', country: '台湾', country_code: 'TW', population: 2770000, latitude: 22.616, longitude: 120.313 },
+            { name: 'Taichung Farm', country: 'Other', country_code: 'CN', population: 500, latitude: 31.3, longitude: 105.3 },
+            { name: '台中市', country: '台湾', country_code: 'TW', population: 2800000, latitude: 24.147, longitude: 120.673 },
           ],
         }), { status: 200 });
       },
     });
-    assert.equal(khLookup.ok, true);
-    assert.equal(khLookup.displayName, '高雄市');
-    assert.equal(khLookup.resolvedLabel, '高雄市（台灣）');
+    assert.equal(tcLookup.ok, true);
+    assert.equal(tcLookup.displayName, '台中市');
+    assert.equal(tcLookup.resolvedLabel, '台中市（台灣）');
 
     const wNotice = await fetchWeatherNotice({ city: 'Taipei', fetchFn: mockFetch, nowMs });
     assert.equal(wNotice.ok, true);
