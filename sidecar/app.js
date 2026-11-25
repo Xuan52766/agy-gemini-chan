@@ -268,8 +268,8 @@
     for (const s of bgStars) {
       const alpha = isDark ? 0.28 : 0.14;
       bgCtx.fillStyle = isDark
-        ? `rgba(186, 230, 253, ${alpha})`
-        : `rgba(14, 116, 144, ${alpha})`;
+        ? `rgba(165, 180, 252, ${alpha})`
+        : `rgba(79, 70, 184, ${alpha})`;
       bgCtx.beginPath();
       bgCtx.arc(s.x * w, s.y * h, s.r * dpr, 0, Math.PI * 2);
       bgCtx.fill();
@@ -322,8 +322,8 @@
         const wave = 0.5 + 0.5 * Math.sin(tSec * (s.speed * 45) + s.phase);
         const alpha = isDark ? (0.14 + 0.34 * wave) : (0.08 + 0.16 * wave);
         bgCtx.fillStyle = isDark
-          ? `rgba(186, 230, 253, ${alpha.toFixed(2)})`
-          : `rgba(14, 116, 144, ${alpha.toFixed(2)})`;
+          ? `rgba(165, 180, 252, ${alpha.toFixed(2)})`
+          : `rgba(79, 70, 184, ${alpha.toFixed(2)})`;
         bgCtx.beginPath();
         bgCtx.arc(s.x * w, s.y * h, s.r * dpr, 0, Math.PI * 2);
         bgCtx.fill();
@@ -1241,21 +1241,22 @@
     if (appEl) appEl.classList.toggle('is-standby', isStandby);
 
     if (isOffline) {
-      scopePill.textContent = '連線中斷（重試中）';
-      scopePill.className = 'scope-pill offline';
+      if (scopePill) {
+        scopePill.textContent = '連線中斷';
+        scopePill.className = 'scope-pill offline';
+      }
       banner.classList.toggle('hidden', !isStandby);
     } else if (isStandby) {
-      scopePill.textContent = '休眠待機（外部工作區）';
-      scopePill.className = 'scope-pill standby';
+      if (scopePill) {
+        scopePill.textContent = '外部工作區待機';
+        scopePill.className = 'scope-pill standby';
+      }
       banner.classList.remove('hidden');
-    } else if (state.workspaceUris.length === 0) {
-      scopePill.textContent = '本地預覽模式';
-      scopePill.className = 'scope-pill active';
-      banner.classList.add('hidden');
     } else {
-      const cid = state.snap?.activeConversationId;
-      scopePill.textContent = cid ? `gemini_cat 連線中 (${cid.slice(-6)})` : 'gemini_cat 就緒';
-      scopePill.className = 'scope-pill active';
+      if (scopePill) {
+        scopePill.textContent = '';
+        scopePill.className = 'scope-pill hidden';
+      }
       banner.classList.add('hidden');
     }
 
@@ -1490,13 +1491,13 @@
       }
     }
 
-    // Header & Stage Hero
-    $('hdr-persona-pill').textContent = persona.resolvedName || '人設待選';
-    $('hdr-emoji').textContent = mood.emoji;
-    $('hdr-mood-text').textContent = `${mood.moodLabel} ${mood.mood}`;
-    $('val-mood').textContent = mood.mood;
+    // Stage Hero (Single deduplicated mood readout)
+    if ($('hdr-persona-pill')) $('hdr-persona-pill').textContent = persona.resolvedName || '人設待選';
+    if ($('hdr-emoji')) $('hdr-emoji').textContent = mood.emoji;
+    if ($('hdr-mood-text')) $('hdr-mood-text').textContent = mood.moodLabel || '';
+    if ($('val-mood')) $('val-mood').textContent = mood.mood;
     if ($('val-mood-mirror')) $('val-mood-mirror').textContent = mood.mood;
-    $('activity-text').textContent = nest.activity?.label || '在貓窩裡等你回來～';
+    $('activity-text').textContent = nest.activity?.label || '在貓窩裡等你回來…';
 
     const dot = $('activity-badge');
     dot.className = 'activity-dot' + (
@@ -1507,7 +1508,7 @@
 
     renderSprite(nest.sprite);
 
-    $('bar-mood').style.width = `${mood.mood}%`;
+    if ($('bar-mood')) $('bar-mood').style.width = `${mood.mood}%`;
     const bondInLevel = nest.bondInLevel ?? ((nest.bond || 0) % 50);
     const bondProgress = nest.bondProgress ?? Math.round(bondInLevel * 2);
     const todayCareCount = nest.todayCareCount ?? 0;
@@ -1551,25 +1552,25 @@
       $('nest-sync-chat').checked = Boolean(nest.syncChatOnCare);
     }
     const pendingCount = Number(nest.pendingCount || 0);
-    $('nest-pending-text').textContent = `待帶入下一輪：${pendingCount} 則`;
+    $('nest-pending-text').textContent = `待帶入：${pendingCount} 則`;
     $('btn-nest-clear').classList.toggle('hidden', pendingCount <= 0);
 
     // Tab 1: Mood
-    $('mood-engine-badge').textContent = mood.judgeLabel || '對話內 AI ＋ 本地兜底';
+    if ($('mood-engine-badge')) $('mood-engine-badge').textContent = mood.judgeLabel || '對話內 AI ＋ 本地兜底';
     const thoughtCard = $('mood-inner-thought-card');
     if (thoughtCard) {
       const thoughtEnabled = mood.config.innerThoughtEnabled !== false;
       const thoughtText = String(mood.lastInnerThought || '').trim();
       if (!thoughtEnabled) {
         $('mood-thought-meta').textContent = '已關閉';
-        $('mood-inner-thought').textContent = '目前已關閉「第一人稱內心獨白」記錄開關（可於下方設定抽屜開啟）。';
+        $('mood-inner-thought').textContent = '已關閉內心獨白記錄。';
       } else if (thoughtText) {
         const tsStr = mood.lastInnerThoughtAt ? new Date(mood.lastInnerThoughtAt).toLocaleTimeString() : '剛才';
-        $('mood-thought-meta').textContent = `${tsStr} · 真實心聲`;
+        $('mood-thought-meta').textContent = `${tsStr}`;
         $('mood-inner-thought').textContent = thoughtText;
       } else {
         $('mood-thought-meta').textContent = '等待寫下';
-        $('mood-inner-thought').textContent = '這輪還沒寫下第一人稱內心獨白；當她有真實情緒觸動或感觸時，會把心裡沒說出口的話記在這裡。';
+        $('mood-inner-thought').textContent = '本輪尚無內心獨白。';
       }
     }
 
@@ -1580,12 +1581,25 @@
       </div>
     `).join(''));
 
-    $('mood-inject-state').textContent = `${mood.injectPreview.state}`;
+    const injectStateLabels = {
+      pending: '待注入',
+      ready: '就緒',
+      idle: '待命',
+      none: '待命',
+      off: '不注入',
+      disabled: '已停用',
+      exhausted: '已達上限',
+      capped: '已達上限',
+      cooldown: '冷卻中',
+    };
+    const rawInjState = String(mood.injectPreview.state || '').trim();
+    const injStateLabel = injectStateLabels[rawInjState.toLowerCase()] || rawInjState || '待命';
+    $('mood-inject-state').textContent = injStateLabel;
     const injLimitText = mood.injectQuota.unlimited ? '不限' : String(mood.injectQuota.cap);
     const chQuota = mood.changeQuota || { count: 0, cap: 0, unlimited: true };
     const chLimitText = chQuota.unlimited || chQuota.cap === 0 ? '不限' : String(chQuota.cap);
     $('mood-quota-text').textContent = `提醒 ${mood.injectQuota.said}/${injLimitText} · 變化 ${chQuota.count}/${chLimitText}`;
-    $('mood-inject-preview').textContent = mood.injectPreview.text || `（狀態：${mood.injectPreview.state}，暫無待注入句子）`;
+    $('mood-inject-preview').textContent = mood.injectPreview.text || `（${injStateLabel}，暫無待注入內容）`;
 
     setIfClean($('cfg-mood-enabled'), mood.config.enabled !== false, 'mood');
     setIfClean($('cfg-mood-autoJudge'), mood.config.autoJudge !== false, 'mood');
@@ -1751,7 +1765,7 @@
       if (spPrev.isSilenced && spPrev.silentUntil > 0) {
         silenceBar.classList.remove('hidden');
         const untilStr = new Date(spPrev.silentUntil).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        $('sp-silence-text').textContent = `自主勿擾中至 ${untilStr}${spPrev.silentReason ? `（${spPrev.silentReason}）` : ''} — 明確提醒仍會準點通知`;
+        $('sp-silence-text').textContent = `自主勿擾至 ${untilStr}${spPrev.silentReason ? `（${spPrev.silentReason}）` : ''}，明確提醒仍會準點通知`;
       } else {
         silenceBar.classList.add('hidden');
       }
@@ -1992,7 +2006,7 @@
         if (tgCfg.pairCode && tgCfg.pairCodeExpiresAt > Date.now()) {
           const minsLeft = Math.max(1, Math.ceil((tgCfg.pairCodeExpiresAt - Date.now()) / 60_000));
           pairBox.classList.remove('hidden');
-          pairBox.textContent = `臨時配對碼：${tgCfg.pairCode}（剩 ${minsLeft} 分鐘）— 請直接在 Telegram 私訊你的 Bot 傳送：/bind ${tgCfg.pairCode}`;
+          pairBox.textContent = `臨時配對碼：${tgCfg.pairCode}（剩 ${minsLeft} 分鐘），請在 Telegram 私訊 Bot 傳送：/bind ${tgCfg.pairCode}`;
         } else {
           pairBox.classList.add('hidden');
         }
@@ -2949,7 +2963,8 @@
     });
     if (res?.snapshot) renderSnapshot(res.snapshot);
     if (res && res.ok === false && res.error) {
-      $('per-scope-notice').textContent = res.error;
+      if ($('per-scope-notice')) $('per-scope-notice').textContent = res.error;
+      showToast(res.error, 'error');
     }
     return res;
   }
@@ -3195,8 +3210,169 @@
     flashMsg('tg-save-msg', '已儲存 Telegram 設定 ✓');
   }));
 
+  // ---------- 11c. Accessible Title Hints (interestfor + popover="hint" + offline fallback) ----------
+  function initTitleHints() {
+    const triggers = [...document.querySelectorAll('[interestfor]')];
+    if (!triggers.length) return;
+
+    const ownedExpanded = new WeakSet();
+    const supportsPopover = Object.hasOwn(HTMLElement.prototype, 'popover');
+    const supportsInterest = 'interestForElement' in HTMLButtonElement.prototype;
+    const supportsAnchorArea = typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+      && CSS.supports('position-area', 'block-end');
+
+    let supportsHintPopover = false;
+    if (supportsPopover) {
+      const probe = document.createElement('div');
+      probe.setAttribute('popover', 'hint');
+      supportsHintPopover = probe.popover === 'hint';
+    }
+
+    const isPopoverOpen = (el) => {
+      if (!el) return false;
+      try {
+        if (el.matches(':popover-open')) return true;
+      } catch { /* fallback below */ }
+      return el.classList.contains(':popover-open');
+    };
+
+    const placeHintFallback = (trigger, tip) => {
+      if (supportsAnchorArea || !trigger || !tip) return;
+      tip.classList.add('js-placed');
+      const rect = trigger.getBoundingClientRect();
+      const pad = 10;
+      const vw = window.innerWidth || 360;
+      const vh = window.innerHeight || 640;
+      const tipW = Math.min(300, vw - pad * 2);
+      const tipH = tip.offsetHeight || 68;
+      let left = rect.left;
+      if (left + tipW > vw - pad) left = vw - pad - tipW;
+      if (left < pad) left = pad;
+      let top = rect.bottom + 6;
+      if (top + tipH > vh - pad && rect.top - tipH - 6 > pad) {
+        top = rect.top - tipH - 6;
+      }
+      tip.style.left = `${Math.round(left)}px`;
+      tip.style.top = `${Math.round(top)}px`;
+    };
+
+    // Upfront ARIA wiring for browse-mode screen readers
+    for (const trig of triggers) {
+      const targetId = trig.getAttribute('interestfor');
+      const tip = targetId ? document.getElementById(targetId) : null;
+      if (!tip || tip.getAttribute('popover') !== 'hint') continue;
+      if (!tip.hasAttribute('role')) tip.setAttribute('role', 'tooltip');
+      const opensOnActivate = trig.getAttribute('popovertarget') === targetId
+        || trig.getAttribute('commandfor') === targetId;
+      if (opensOnActivate) {
+        if (!trig.hasAttribute('aria-expanded')) {
+          trig.setAttribute('aria-expanded', String(isPopoverOpen(tip)));
+          ownedExpanded.add(trig);
+        }
+      } else if (!trig.hasAttribute('aria-describedby')) {
+        trig.setAttribute('aria-describedby', targetId);
+      }
+    }
+
+    // Sync aria-expanded from popover toggle events (capturing because toggle does not bubble)
+    document.addEventListener('toggle', (e) => {
+      const tip = e.target;
+      if (!tip || !tip.id) return;
+      const open = e.newState === 'open';
+      document.querySelectorAll(`[interestfor="${CSS.escape(tip.id)}"]`).forEach((trig) => {
+        if (ownedExpanded.has(trig)) {
+          trig.setAttribute('aria-expanded', String(open));
+        }
+        trig.classList.toggle('interest-source', open);
+        if (open) placeHintFallback(trig, tip);
+      });
+      tip.classList.toggle('interest-target', open);
+    }, true);
+
+    // Switch toggletips from unsupported popover="hint" to popover="auto" before opening
+    if (supportsPopover && !supportsHintPopover) {
+      document.addEventListener('beforetoggle', (e) => {
+        const target = e.target;
+        if (!target || !target.id) return;
+        const isToggletip = target.getAttribute('popover') === 'hint'
+          && document.querySelector(`[popovertarget="${CSS.escape(target.id)}"]`);
+        if (e.newState === 'open' && isToggletip) {
+          target.setAttribute('popover', 'auto');
+        }
+      }, true);
+    }
+
+    // Native hover/focus fallback when browser lacks interestfor (WCAG 1.4.13 compliant)
+    if (!supportsInterest) {
+      let activeTip = null;
+      let activeTrigger = null;
+      let closeTimer = null;
+
+      const openTip = (trig, tip) => {
+        clearTimeout(closeTimer);
+        if (activeTip && activeTip !== tip) closeTip(activeTip, activeTrigger);
+        activeTip = tip;
+        activeTrigger = trig;
+        if (supportsPopover) {
+          if (!isPopoverOpen(tip)) {
+            try { tip.showPopover(); } catch { /* ignore */ }
+          }
+          placeHintFallback(trig, tip);
+        } else {
+          tip.classList.add(':popover-open');
+          placeHintFallback(trig, tip);
+          if (ownedExpanded.has(trig)) trig.setAttribute('aria-expanded', 'true');
+          trig.classList.add('interest-source');
+        }
+      };
+
+      const closeTip = (tip, trig) => {
+        clearTimeout(closeTimer);
+        if (!tip) return;
+        if (supportsPopover) {
+          if (isPopoverOpen(tip)) {
+            try { tip.hidePopover(); } catch { /* ignore */ }
+          }
+        } else {
+          tip.classList.remove(':popover-open');
+          if (trig && ownedExpanded.has(trig)) trig.setAttribute('aria-expanded', 'false');
+          trig?.classList.remove('interest-source');
+        }
+        if (activeTip === tip) {
+          activeTip = null;
+          activeTrigger = null;
+        }
+      };
+
+      const scheduleClose = (tip, trig) => {
+        clearTimeout(closeTimer);
+        closeTimer = setTimeout(() => closeTip(tip, trig), 130);
+      };
+
+      for (const trig of triggers) {
+        const targetId = trig.getAttribute('interestfor');
+        const tip = targetId ? document.getElementById(targetId) : null;
+        if (!tip) continue;
+
+        trig.addEventListener('pointerenter', () => openTip(trig, tip));
+        trig.addEventListener('pointerleave', () => scheduleClose(tip, trig));
+        trig.addEventListener('focus', () => openTip(trig, tip));
+        trig.addEventListener('blur', () => scheduleClose(tip, trig));
+        tip.addEventListener('pointerenter', () => clearTimeout(closeTimer));
+        tip.addEventListener('pointerleave', () => scheduleClose(tip, trig));
+      }
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && activeTip) {
+          closeTip(activeTip, activeTrigger);
+        }
+      });
+    }
+  }
+
   // ---------- 12. Initialize Workspace Watcher + Poll Loop ----------
   async function init() {
+    initTitleHints();
     resizeBgCanvas();
     window.addEventListener('resize', resizeBgCanvas);
     requestAnimationFrame(animateStage);
