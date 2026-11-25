@@ -274,8 +274,10 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
     assert.match(readMemoryCard(root).text, /第一句話/);
 
     // Canonical chapter insertion order + shared bridge + monthly diary parsing
-    appendToChapter(3, '- 主人喜歡觀測星座與貓尾草\n- 一起在星空屋簷下寫出 Gemini-chan 貓窩', root);
-    appendToChapter(6, '- 難忘那夜於星空屋簷並肩除錯的溫暖感覺', root);
+    appendToChapter(3, '- 主人喜歡觀測星座與貓尾草\n- 一起在星空屋簷下寫出 Gemini-chan 貓窩與 Telegram 通知', root);
+    appendToChapter(6, '- 難忘那夜在星空屋簷並肩除錯，後來還接通了 Telegram 通知', root);
+    appendToChapter(7, '- 因為的時候會覺得平常我直接叫他休息', root);
+    appendToChapter(8, '- 因為的時候會覺得平常我直接叫他喝水', root);
 
     // Diary + search (including monthly format + raw dialogue search) + star graph bridges
     const d1 = appendDiary({ date: '2026-11-14', entry: '今天建好了 Gemini-chan 貓窩！參考 11-14 紀錄。' }, root);
@@ -298,6 +300,10 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
     assert.ok(graph.stars.length >= 4);
     assert.ok(graph.links.some((l) => l.kind === 'day'));
     assert.ok(graph.links.some((l) => l.kind === 'bridge'));
+    // Shared bridge must pick complete meaningful terms (not cross-boundary stopword fragments)
+    const bridgeLabels = graph.bridges.map((b) => b.label);
+    assert.ok(bridgeLabels.some((lbl) => lbl === '星空屋簷' || lbl === 'Telegram'), `unexpected bridge labels: ${bridgeLabels.join(',')}`);
+    assert.ok(!bridgeLabels.some((lbl) => /^(在|會|的|或|因為)|的時候|平常我|直接叫/.test(lbl)), `noisy bridge label leaked: ${bridgeLabels.join(',')}`);
 
     // Material slice strips Antigravity XML tags + day-scoped watermark doesn't block earlier date
     const paths = getDataPaths(root);

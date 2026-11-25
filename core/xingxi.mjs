@@ -23,7 +23,7 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from './storage.mjs';
-import { tokenize } from './tokenizer.mjs';
+import { loadChineseDict, loadCommonWords, tokenize } from './tokenizer.mjs';
 
 export const XINGXI_PICKUP_MARKER = '[XINGXI_AUTO_PICKUP]';
 
@@ -540,53 +540,191 @@ function charBigrams(text) {
   return set;
 }
 
-function buildSharedBridges(stars, limit = 100) {
-  const termIndex = new Map();
-  const extractTerms = (text) => {
-    const out = new Set();
-    const runs = String(text || '').replace(/[^\u4e00-\u9fa5]/g, ' ').split(/\s+/);
-    for (const seg of runs) {
-      if (seg.length < 3) continue;
-      for (let len = 3; len <= 4; len++) {
-        for (let i = 0; i + len <= seg.length; i++) out.add(seg.slice(i, i + len));
+const BRIDGE_SEGMENTER = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+  ? new Intl.Segmenter('zh-Hant', { granularity: 'word' })
+  : null;
+
+// Common Traditional -> Simplified character mapping so Traditional cards match Simplified `dict.txt` / `freq.txt`
+const T2S_PAIRS =
+  '萬万與与專专業业東东兩两嚴严臨临為为麗丽舉举義义樂乐習习書书亂乱爭争於于亞亚產产親亲億亿僅仅從从價价優优傳传傷伤備备兒儿內内關关興兴養养寫写軍军農农準准幾几擊击別别刪删劃划創创劇剧劑剂務务勝胜勞劳勢势區区協协單单衛卫卻却歷历壓压厭厌參参雙双變变號号聽听啟启嗎吗員员響响團团園园國国圖图圓圆場场報报塊块壞坏聲声處处複复夠够夢梦獎奖婦妇媽妈學学寧宁實实審审寬宽寶宝將将對对導导層层屬属歲岁島岛師师帳帐帶带幫帮廣广廳厅張张強强歸归錄录徹彻徵征憶忆應应懷怀態态總总慣惯愛爱憲宪戲戏戰战戶户擴扩掃扫揚扬換换損损據据擬拟擾扰攝摄擺摆攜携敗败敘叙數数斷断無无舊旧時时會会術术機机殺杀雜杂權权條条來来構构標标樣样檢检檔档歡欢氣气決决沒没測测溫温滅灭滿满漢汉漸渐燈灯燒烧營营熱热獨独獻献現现環环畫画異异當当發发監监盤盘盡尽確确碼码禮礼離离種种稱称積积穩稳窮穷競竞筆笔簡简簽签約约紅红級级紀纪紙纸紛纷納纳純纯組组終终結结給给統统絲丝經经綜综綠绿維维網网緊紧緒绪線线練练編编緩缓縮缩績绩續续纖纤聯联職职肅肃臉脸腳脚腦脑節节範范藥药蘇苏蘋苹虛虚補补裝装製制見见規规視视覺觉覽览觀观觸触計计訂订訊讯討讨訓训託托記记設设許许訴诉診诊註注証证評评詞词詢询試试詩诗話话該该詳详語语誤误說说誰谁課课調调談谈請请論论諸诸諾诺謀谋謂谓講讲謝谢證证識识警警譯译議议護护讀读讓让讚赞負负財财貢贡貧贫貨货販贩貪贪貫贯責责貴贵買买貸贷費费貼贴貿贸賀贺資资賣卖質质賞赏賢贤賬账賴赖賺赚賽赛贈赠贊赞贏赢趕赶趙赵趨趋躍跃車车軌轨軒轩軟软較较載载輔辅輕轻輝辉輩辈輪轮輯辑輸输轉转辭辞辦办這这連连進进過过達达違违遠远適适選选遺遗還还邁迈邏逻鄉乡郵邮鄭郑鄰邻醫医釋释針针釣钓鈴铃銀银銅铜銘铭銷销鋁铝鋒锋鋪铺鋼钢錢钱錯错鍋锅鍵键鍾钟鎮镇鏡镜鐘钟鐵铁鑑鉴長长門门閉闭開开閒闲間间悶闷閘闸鬧闹聞闻閣阁閱阅闊阔防防陣阵陰阴陳陈陸陆陽阳階阶際际隨随險险隱隐隻只雞鸡難难雲云電电霧雾靈灵靜静頁页頂顶項项順顺須须預预頑顽頓顿領领頭头頻频顆颗題题額额顏颜願愿類类顧顾顯显風风飄飘飛飞飯饭飲饮飾饰飽饱餐餐餘余館馆馬马駐驻駕驾駛驶驗验驚惊體体髮发魚鱼鮮鲜鳥鸟鳴鸣鳳凤鴨鸭鴻鸿鵝鹅點点黨党齊齐齒齿齡龄龍龙龜龟貓猫';
+const T2S_MAP = new Map();
+for (let i = 0; i + 1 < T2S_PAIRS.length; i += 2) {
+  T2S_MAP.set(T2S_PAIRS[i], T2S_PAIRS[i + 1]);
+}
+
+function toSimplifiedApprox(text) {
+  let out = '';
+  for (const ch of String(text || '')) out += T2S_MAP.get(ch) || ch;
+  return out;
+}
+
+// Leading / trailing function characters that must never cap a bridge phrase
+const BRIDGE_EDGE_STOP_CHARS = new Set([
+  ...'的了地得著着過过在是有為为被把給给讓让將将從从到向往對对跟和與与及或也都很太最更就才會会要能可想敢應应須须該该不沒没無无非別别勿我你他她它咱這这那其此某各每誰谁哪啥怎麼么嗎吗呢吧啊喔哦呀啦嘛咧之於于以而但卻却若如雖虽因所又再已曾剛刚正先還还只僅仅並并既仍',
+]);
+
+// Conversational fillers, pronouns, time adverbs, and meta-words excluded as bridge labels
+const BRIDGE_STOP_WORDS = new Set([
+  '我們', '你們', '他們', '她們', '自己', '大家', '對方', '主人', '別人', '人家',
+  '這個', '那個', '這些', '那些', '這裡', '那裡', '這樣', '那樣', '什麼', '怎麼', '為什麼', '哪裡', '哪個',
+  '可以', '可能', '能夠', '應該', '必須', '需要', '想要', '希望', '願意', '打算', '準備', '開始', '繼續', '完成', '進行', '使用', '透過', '通過',
+  '覺得', '感覺', '認為', '以為', '知道', '了解', '瞭解', '發現', '看到', '聽到', '想到', '記得', '忘記', '喜歡', '討厭', '害怕', '擔心',
+  '因為', '所以', '但是', '可是', '不過', '然而', '雖然', '儘管', '如果', '要是', '假如', '只要', '只有', '除非', '無論', '不管', '而且', '並且', '以及', '或者', '還是', '同時', '另外', '此外', '其實', '原來', '本來', '原本', '結果', '最後', '終於', '總之', '反正', '甚至',
+  '一直', '總是', '經常', '常常', '偶爾', '有時', '有時候', '每天', '每次', '平時', '平常', '通常', '一般', '大概', '也許', '確實', '真的', '非常', '特別', '比較', '稍微', '有點', '一點', '一些', '很多', '不少', '全部', '所有', '完全', '幾乎', '差不多', '直接', '馬上', '立刻', '趕快', '慢慢', '輕輕', '悄悄', '偷偷', '一起', '互相', '彼此', '單獨', '突然', '一半',
+  '時候', '時間', '今天', '昨天', '明天', '隔天', '現在', '目前', '以前', '以後', '之前', '之後', '最近', '剛剛', '剛才', '後來', '當時', '當天', '那天', '這天', '早上', '上午', '中午', '下午', '晚上', '一次', '第一', '第一次', '第二次', '一下', '一會', '一個', '一種', '一件', '一條', '一句', '一段',
+  '東西', '事情', '問題', '情況', '方式', '方法', '地方', '方面', '內容', '部分', '原因', '目的', '意思', '關係', '狀態', '模式', '規則', '習慣', '細節', '紀錄', '記錄', '對話', '聊天', '文字', '訊息', '回覆', '回應', '說話', '講話', '名字', '工具', '方案', '操作', '計算', '收尾', '共用', '主動', '回來', '回去', '出來', '進去', '起來', '下來', '放下', '啟用', '電子', '自稱',
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out', 'has', 'his', 'how', 'new', 'now', 'old', 'see', 'two', 'way', 'who', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use', 'that', 'with', 'have', 'this', 'will', 'your', 'from', 'they', 'know', 'want', 'been', 'good', 'much', 'some', 'time', 'very', 'when', 'come', 'here', 'just', 'like', 'long', 'make', 'many', 'over', 'such', 'take', 'than', 'them', 'well', 'were', 'what', 'into', 'only', 'then', 'also', 'more', 'about', 'after', 'before', 'other', 'which', 'their', 'there', 'would', 'could', 'should', 'using', 'used', 'file', 'files', 'code', 'data', 'true', 'false', 'null', 'none', 'http', 'https', 'www', 'com', 'org', 'net', 'md', 'js', 'mjs', 'ts', 'json', 'html', 'css', 'txt', 'png', 'jpg', 'svg',
+]);
+
+function isCommonBridgeFiller(word, simp, freqMap) {
+  if (BRIDGE_STOP_WORDS.has(word) || BRIDGE_STOP_WORDS.has(simp)) return true;
+  if (!freqMap || !freqMap.size) return false;
+  const rank = freqMap.get(word) ?? freqMap.get(simp);
+  if (rank === undefined) return false;
+  // `freq.txt` stores Zipf-like rank buckets (0 = most common, 62 = rarest in top-20k).
+  // Filter everyday common 2-char words (<= 46) and ultra-common 3+ char words (<= 38).
+  return word.length <= 2 ? rank <= 46 : rank <= 38;
+}
+
+function extractBridgeTerms(text, dict, freqMap) {
+  const out = new Map(); // normalized key -> { display, isDict, isEn, isCompound }
+  const clean = String(text || '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/`([^`]+)`/g, ' $1 ')
+    .replace(/[*_~>#\[\]()「」『』【】《》]/g, ' ');
+
+  // 1. English / alphanumeric proper terms (preserve display casing, dedupe case-insensitively)
+  for (const m of clean.matchAll(/\b[A-Za-z][A-Za-z0-9_-]{2,24}\b/g)) {
+    const raw = m[0].replace(/^[-_]+|[-_]+$/g, '');
+    if (raw.length < 3) continue;
+    const lo = raw.toLowerCase();
+    if (BRIDGE_STOP_WORDS.has(lo) || /^[0-9_-]+$/.test(lo)) continue;
+    if (!out.has(lo)) {
+      out.set(lo, { display: raw, isDict: true, isEn: true, isCompound: false });
+    }
+  }
+
+  // 2. Chinese word segmentation (Intl.Segmenter + dict/freq filter + bounded proper-noun gluing)
+  for (const run of clean.match(/[\u4e00-\u9fa5]+/g) || []) {
+    const toks = BRIDGE_SEGMENTER
+      ? [...BRIDGE_SEGMENTER.segment(run)].filter((x) => x.isWordLike).map((x) => x.segment)
+      : [...run];
+
+    for (const t of toks) {
+      if (t.length < 2 || t.length > 6) continue;
+      if (BRIDGE_EDGE_STOP_CHARS.has(t[0]) || BRIDGE_EDGE_STOP_CHARS.has(t[t.length - 1])) continue;
+      const simp = toSimplifiedApprox(t);
+      if (isCommonBridgeFiller(t, simp, freqMap)) continue;
+      out.set(t, { display: t, isDict: true, isEn: false, isCompound: false });
+    }
+
+    // Recover 2..4 char OOV proper nouns & compound concepts across adjacent content tokens
+    // (e.g., 「貓」+「窩」->「貓窩」, 「小魚」+「乾」->「小魚乾」, 「星空」+「屋簷」->「星空屋簷」)
+    for (let i = 0; i < toks.length; i++) {
+      const first = toks[i];
+      if (BRIDGE_STOP_WORDS.has(first) || BRIDGE_EDGE_STOP_CHARS.has(first[0])) continue;
+      let buf = first;
+      for (let j = i + 1; j < toks.length && j < i + 4; j++) {
+        const next = toks[j];
+        buf += next;
+        if (buf.length > 5) break;
+        if (buf.length < 2) continue;
+        // Disallow 5-char mashups unless the full 5-char phrase is in the dictionary
+        const simp = toSimplifiedApprox(buf);
+        const inDict = Boolean(dict && (dict.has(buf) || dict.has(simp)));
+        if (buf.length > 4 && !inDict) break;
+        if (BRIDGE_STOP_WORDS.has(next) || BRIDGE_EDGE_STOP_CHARS.has(buf[buf.length - 1])) continue;
+        let badInner = false;
+        for (let k = i + 1; k < j; k++) {
+          const mid = toks[k];
+          if (mid.length >= 2 && (BRIDGE_STOP_WORDS.has(mid) || BRIDGE_STOP_WORDS.has(toSimplifiedApprox(mid)))) {
+            badInner = true;
+            break;
+          }
+        }
+        if (badInner) break;
+        if (isCommonBridgeFiller(buf, simp, freqMap)) continue;
+        if (!out.has(buf)) {
+          out.set(buf, { display: buf, isDict: inDict, isEn: false, isCompound: true });
+        }
       }
     }
-    return out;
-  };
+  }
+  return out;
+}
+
+function buildSharedBridges(stars, limit = 100, root = undefined) {
+  const dict = loadChineseDict(root);
+  const freqMap = loadCommonWords(root);
+  const termIndex = new Map(); // key -> { display, idxs, isDict, isEn, isCompound }
+  let cardCount = 0;
 
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
     if (s.kind !== 'card') continue;
-    for (const w of extractTerms(`${s.title || ''} ${s.text || ''}`)) {
-      if (!termIndex.has(w)) termIndex.set(w, []);
-      termIndex.get(w).push(i);
+    cardCount++;
+    const terms = extractBridgeTerms(`${s.title || ''} ${s.text || ''}`, dict, freqMap);
+    for (const [key, meta] of terms) {
+      if (!termIndex.has(key)) {
+        termIndex.set(key, { ...meta, key, idxs: [] });
+      }
+      termIndex.get(key).idxs.push(i);
     }
   }
 
-  const bridges = [];
-  const linked = new Set();
-  const candidates = [...termIndex.entries()]
-    .filter(([w, idxs]) => idxs.length >= 2 && idxs.length <= 5 && w.length >= 3)
-    .sort((a, b) => a[1].length - b[1].length);
+  const totalCards = Math.max(2, cardCount);
+  const maxDf = Math.max(5, Math.min(8, Math.ceil(cardCount * 0.16)));
+  const candidates = [...termIndex.values()].filter((t) => t.idxs.length >= 2 && t.idxs.length <= maxDf);
 
-  for (const [word, idxs] of candidates) {
-    for (let a = 0; a < idxs.length; a++) {
-      for (let b = a + 1; b < idxs.length; b++) {
-        const pairKey = `${idxs[a]}-${idxs[b]}`;
-        if (linked.has(pairKey)) continue;
-        linked.add(pairKey);
-        bridges.push({
-          source: stars[idxs[a]].id,
-          target: stars[idxs[b]].id,
-          kind: 'bridge',
-          label: word,
-          weight: 0.55,
-        });
-        if (bridges.length >= limit) return bridges;
+  const scoreTerm = (t) => {
+    const idf = Math.log((totalCards + 1) / (t.idxs.length + 0.5));
+    const len = t.display.length;
+    const lenBonus = t.isEn
+      ? Math.min(1.65, 1.0 + len * 0.055)
+      : len === 4 ? 1.55 : len === 3 ? 1.38 : len === 5 ? 1.45 : 1.0;
+    const dictBonus = t.isDict ? 1.18 : 1.0;
+    let innerPenalty = 1.0;
+    if (!t.isEn && t.isCompound) {
+      for (let c = 1; c < len - 1; c++) {
+        if (BRIDGE_EDGE_STOP_CHARS.has(t.display[c])) innerPenalty *= len >= 4 ? 0.92 : 0.65;
+      }
+    }
+    return idf * lenBonus * dictBonus * innerPenalty;
+  };
+
+  // Pick the single highest-value (and longest complete) shared term per star pair
+  const pairBest = new Map();
+  for (const t of candidates) {
+    const sc = scoreTerm(t);
+    for (let a = 0; a < t.idxs.length; a++) {
+      for (let b = a + 1; b < t.idxs.length; b++) {
+        const idxA = t.idxs[a];
+        const idxB = t.idxs[b];
+        const pairKey = `${idxA}-${idxB}`;
+        const cur = pairBest.get(pairKey);
+        if (!cur) {
+          pairBest.set(pairKey, { idxA, idxB, label: t.display, score: sc });
+        } else if (t.display.includes(cur.label) && t.display.length > cur.label.length && sc >= cur.score * 0.75) {
+          pairBest.set(pairKey, { idxA, idxB, label: t.display, score: sc });
+        } else if (cur.label.includes(t.display) && cur.label.length > t.display.length) {
+          // Keep the longer complete phrase
+        } else if (sc > cur.score) {
+          pairBest.set(pairKey, { idxA, idxB, label: t.display, score: sc });
+        }
       }
     }
   }
-  return bridges;
+
+  return [...pairBest.values()]
+    .sort((x, y) => y.score - x.score || x.idxA - y.idxA || x.idxB - y.idxB)
+    .slice(0, limit)
+    .map((p) => ({
+      source: stars[p.idxA].id,
+      target: stars[p.idxB].id,
+      kind: 'bridge',
+      label: p.label,
+      weight: 0.55,
+    }));
 }
 
 /**
@@ -650,7 +788,7 @@ export function buildStarGraph(root) {
   }
 
   // 4. Shared rare term bridges (`造共享橋`)
-  const bridges = buildSharedBridges(stars, 240);
+  const bridges = buildSharedBridges(stars, 240, root);
   for (const br of bridges) {
     pushEdge(br.source, br.target, 'bridge', br.weight, { label: br.label });
   }
