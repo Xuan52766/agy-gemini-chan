@@ -4,7 +4,7 @@
   <p><strong>Antigravity 2.0 專案限定 AI 伴侶與互動貓窩系統</strong></p>
 
   <p>
-    <a href="https://github.com/Xuan52766/agy-gemini-chan/releases"><img src="https://img.shields.io/badge/version-v1.4.5-blue" alt="Version v1.4.5" /></a>
+    <a href="https://github.com/Xuan52766/agy-gemini-chan/releases"><img src="https://img.shields.io/badge/version-v1.5.0-blue" alt="Version v1.5.0" /></a>
     <img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen" alt="Node >= 20.0.0" />
     <img src="https://img.shields.io/badge/dependencies-0-success" alt="Zero Dependencies" />
     <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Yuuyuko--uu%201.2-informational" alt="License Yuuyuko-uu 1.2" /></a>
@@ -33,11 +33,11 @@
 
 | 模組 | 職責說明 | 核心實作 |
 | :--- | :--- | :--- |
-| **Cat Nest Sidecar** | 6 款情緒與睡眠立繪連動、照護互動、羈絆等級 `Lv.X` 與陪伴暖度 | [`core/nest.mjs`](core/nest.mjs), [`sidecar/`](sidecar/) |
-| **Fish Memory** | 本地分詞與專名滑動窗、IDF 證據評分、半衰期 $H = 30(1 + 2I)$、`factKey` 收斂 | [`core/memory.mjs`](core/memory.mjs), [`core/tokenizer.mjs`](core/tokenizer.mjs) |
-| **Mood Engine** | 對話內呼叫 `mood_update`（支援 `innerThought`）並於 `Stop` Hook 提供本地語意兜底 | [`core/mood.mjs`](core/mood.mjs) |
-| **Xingxi Archive** | 八章 `記憶卡.md`、每日日記、清潔對話切片、共詞橋與 3D 記憶星圖 | [`core/xingxi.mjs`](core/xingxi.mjs) |
-| **Speak-Up Scheduler** | `speak_up_plan` 預約排程／固定節律／自主勿擾（`silence`）與峰谷擲骰 | [`core/speak-up.mjs`](core/speak-up.mjs) |
+| **Cat Nest Sidecar** | 8 維情緒與睡眠立繪連動、支援自訂立繪上傳、懸停說明面板、羈絆等級 `Lv.X` 與陪伴暖度 | [`core/nest.mjs`](core/nest.mjs), [`sidecar/`](sidecar/) |
+| **Fish Memory** | 本地分詞與專名滑動窗、Zipf 詞頻泛詞過濾、IDF 證據評分、半衰期 $H = 30(1 + 2I)$、`factKey` 收斂 | [`core/memory.mjs`](core/memory.mjs), [`core/tokenizer.mjs`](core/tokenizer.mjs) |
+| **Mood Engine** | 對話內呼叫 `mood_update`（支援 `innerThought`）並於 `Stop` Hook 提供可選本地語意兜底 | [`core/mood.mjs`](core/mood.mjs) |
+| **Xingxi Archive** | 八章 `記憶卡.md`、每日日記與增量拾星、智慧斷詞共詞橋與 3D 記憶星圖（原版／星團／隨機、章節聚光燈、年輪逐日誕生） | [`core/xingxi.mjs`](core/xingxi.mjs) |
+| **Speak-Up & Fresh Browse** | `speak_up_plan` 預約排程／固定節律／自主勿擾、峰谷擲骰與選用每日新鮮事話題種子（RSS / YouTube / 台灣天氣） | [`core/speak-up.mjs`](core/speak-up.mjs), [`core/fresh-browse.mjs`](core/fresh-browse.mjs) |
 | **Persona Store** | 雙層作用域（`session > project`）與 `.md` / `.txt` 匯入匯出（預設為空） | [`core/persona.mjs`](core/persona.mjs) |
 | **Telegram Bridge** | 純 HTTPS Long Polling 雙向收發、`/bind` 配對鎖定與檔案外傳白名單 | [`core/telegram.mjs`](core/telegram.mjs) |
 
@@ -134,7 +134,7 @@ flowchart LR
   Host <-->|"withFileLockSync / 原子寫入 (data/*)"| Sidecar
 ```
 
-- **單次基底與差量注入**：人設全文、`記憶卡.md`（上限 4,200 字）、近 3 日日記（上限 2,400 字）與規則指引僅於新對話第 1 輪或設定變更時由 `PreInvocation` 注入；其餘輪次無新召回記憶或狀態變動時回傳 `{}`（0 Token）。
+- **單次基底與差量注入**：人設全文、`記憶卡.md`（上限 20,000 字，超長時附 `xingxi` 全文提示）、近 7 日日記（上限 10,000 字）＋ 更早 23 日關鍵詞索引（上限 800 字）與規則指引僅於新對話第 1 輪或設定變更時由 `PreInvocation` 注入；其餘輪次無新召回記憶或狀態變動時回傳 `{}`（0 Token）。
 - **工具續行過濾**：`inspectTranscriptTail` 與 `unwrapSidecarSystemEnvelope` 自動識別回合中 MCP 工具續行及 Antigravity `<SYSTEM_MESSAGE>` 外殼，避免重複注入系統提示。
 - **跨行程獨佔檔案鎖**：Hooks、Sidecar Web UI 與 60 秒背景排程透過 `withFileLockSync` / `updateJsonLocked` 與 Windows atomic rename 重試保護併發狀態寫入（[`core/storage.mjs`](core/storage.mjs)）。
 
@@ -183,7 +183,7 @@ flowchart LR
 agy-gemini-chan/
 ├── .agents/plugins/gemini-cat/   # Antigravity Plugin 清單、Hooks、MCP、Skills 與 Sidecar 設定
 ├── assets/geminichan/            # Q 版情緒與睡眠立繪資源
-├── core/                         # 領域模組（記憶、心情、星汐、搭話、人設、貓窩、Telegram、跨模組橋接）
+├── core/                         # 領域模組（記憶、心情、星汐、搭話、新鮮事、人設、貓窩、Telegram、跨模組橋接）
 ├── hooks/                        # SessionStart / PreInvocation / PostToolUse / Stop 實作
 ├── mcp/                          # Stdio JSON-RPC 2.0 MCP Server（13 tools）
 ├── scripts/                      # setup-sidecar.mjs / update.mjs 與 Windows .cmd 啟動檔
@@ -211,7 +211,7 @@ npm test
 - **升級後需要比對或還原升級前的資料？**
   前往 `~/.gemini/config/backups/agy-gemini-chan/upgrade-<timestamp>/` 即可取得升級前建立的完整 `data/` 與 `AGENTS.md` 快照。
 - **長期累積的日記與對話紀錄會不斷拉高 Token 消耗嗎？**
-  不會。歷史日記、原始切片與備份僅保存於本機硬碟，平時不進入上下文；僅首輪啟動會載入受長度上限約束的記憶卡（4,200 字）與近 3 日日記（2,400 字）。
+  不會。歷史日記、原始切片與備份僅保存於本機硬碟，平時不進入上下文；僅首輪啟動會載入受長度上限約束的記憶卡（20,000 字）、近 7 日日記（10,000 字）與 23 日精簡關鍵詞索引（800 字）。
 
 ---
 
