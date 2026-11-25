@@ -2330,8 +2330,6 @@
     setIfClean($('cfg-mood-ownerName'), mood.config.ownerName, 'mood');
     setIfClean($('cfg-mood-selfName'), mood.config.selfName, 'mood');
     setIfClean($('cfg-mood-selfPronoun'), mood.config.selfPronoun || '我', 'mood');
-    setIfClean($('cfg-mood-selfAliases'), mood.config.selfAliases || '', 'mood');
-    setIfClean($('cfg-mood-ownerAliases'), mood.config.ownerAliases || '', 'mood');
     setIfClean($('cfg-mood-base'), mood.config.moodBase, 'mood');
     setIfClean($('cfg-mood-floor'), mood.config.moodFloor, 'mood');
     setIfClean($('cfg-mood-halfHours'), mood.config.decayHalfHours, 'mood');
@@ -2989,8 +2987,6 @@
       selfName: $('cfg-mood-selfName').value,
       ownerName: $('cfg-mood-ownerName').value,
       selfPronoun: $('cfg-mood-selfPronoun').value,
-      selfAliases: $('cfg-mood-selfAliases').value,
-      ownerAliases: $('cfg-mood-ownerAliases').value,
       moodBase: Number($('cfg-mood-base').value),
       moodFloor: Number($('cfg-mood-floor').value),
       decayHalfHours: Number($('cfg-mood-halfHours').value),

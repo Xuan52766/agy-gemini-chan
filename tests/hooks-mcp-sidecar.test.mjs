@@ -655,7 +655,8 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.doesNotMatch(html.body, /輕點一下摸摸頭/);
     assert.match(html.body, /role="tablist"/);
     assert.match(html.body, /cfg-mood-halfHours/);
-    assert.match(html.body, /cfg-mood-selfAliases/);
+    assert.doesNotMatch(html.body, /cfg-mood-selfAliases/);
+    assert.doesNotMatch(html.body, /cfg-mood-ownerAliases/);
     assert.match(html.body, /pol-halfLife/);
     assert.match(html.body, /pol-w-baseline/);
     assert.match(html.body, /sp-nearMin/);
