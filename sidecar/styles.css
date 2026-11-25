@@ -1416,6 +1416,69 @@ button:disabled {
   color: rgba(241, 245, 249, 0.85);
 }
 
+.starmap-chapter-bar {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 16px);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(6, 10, 22, 0.72);
+  border: 1px solid rgba(180, 198, 255, 0.16);
+  backdrop-filter: blur(6px);
+}
+
+.starmap-chapter-bar:empty {
+  display: none;
+}
+
+.ch-dot-btn {
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 1.5px solid transparent;
+  border-radius: 999px;
+  background: var(--dot-color, #94a3b8);
+  opacity: 0.72;
+  cursor: pointer;
+  transition: transform 140ms var(--ease-out), opacity 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
+}
+
+.ch-dot-btn:hover,
+.ch-dot-btn:focus-visible {
+  opacity: 1;
+  transform: scale(1.25);
+  box-shadow: 0 0 8px var(--dot-color, #94a3b8);
+  outline: none;
+}
+
+.ch-dot-btn.active {
+  opacity: 1;
+  transform: scale(1.25);
+  border-color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 10px var(--dot-color, #94a3b8);
+}
+
+.ch-bar-label {
+  margin-left: 3px;
+  font-size: 11px;
+  line-height: 1;
+  color: rgba(236, 242, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 145px;
+  cursor: pointer;
+}
+
+.ch-bar-label:hover {
+  color: #ffffff;
+}
+
 .starmap-tip {
   position: absolute;
   pointer-events: none;

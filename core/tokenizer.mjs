@@ -56,17 +56,36 @@ export function loadChineseDict(root) {
 
 let cachedCommonFreq = null;
 let commonCutoff = 0;
+let commonFreqIsRankBucket = true;
+
+// Common Traditional -> Simplified mapping so Traditional queries match Simplified `dict.txt` / `freq.txt`
+const T2S_PAIRS =
+  '萬万與与專专業业東东兩两嚴严臨临為为麗丽舉举義义樂乐習习書书亂乱爭争於于亞亚產产親亲億亿僅仅從从價价優优傳传傷伤備备兒儿內内關关興兴養养寫写軍军農农準准幾几擊击別别刪删劃划創创劇剧劑剂務务勝胜勞劳勢势區区協协單单衛卫卻却歷历壓压厭厌參参雙双變变號号聽听啟启嗎吗員员響响團团園园國国圖图圓圆場场報报塊块壞坏聲声處处複复夠够夢梦獎奖婦妇媽妈學学寧宁實实審审寬宽寶宝將将對对導导層层屬属歲岁島岛師师帳帐帶带幫帮廣广廳厅張张強强歸归錄录徹彻徵征憶忆應应懷怀態态總总慣惯愛爱憲宪戲戏戰战戶户擴扩掃扫揚扬換换損损據据擬拟擾扰攝摄擺摆攜携敗败敘叙數数斷断無无舊旧時时會会術术機机殺杀雜杂權权條条來来構构標标樣样檢检檔档歡欢氣气決决沒没測测溫温滅灭滿满漢汉漸渐燈灯燒烧營营熱热獨独獻献現现環环畫画異异當当發发監监盤盘盡尽確确碼码禮礼離离種种稱称積积穩稳窮穷競竞筆笔簡简簽签約约紅红級级紀纪紙纸紛纷納纳純纯組组終终結结給给統统絲丝經经綜综綠绿維维網网緊紧緒绪線线練练編编緩缓縮缩績绩續续纖纤聯联職职肅肃臉脸腳脚腦脑節节範范藥药蘇苏蘋苹虛虚補补裝装製制見见規规視视覺觉覽览觀观觸触計计訂订訊讯討讨訓训託托記记設设許许訴诉診诊註注証证評评詞词詢询試试詩诗話话該该詳详語语誤误說说誰谁課课調调談谈請请論论諸诸諾诺謀谋謂谓講讲謝谢證证識识警警譯译議议護护讀读讓让讚赞負负財财貢贡貧贫貨货販贩貪贪貫贯責责貴贵買买貸贷費费貼贴貿贸賀贺資资賣卖質质賞赏賢贤賬账賴赖賺赚賽赛贈赠贊赞贏赢趕赶趙赵趨趋躍跃車车軌轨軒轩軟软較较載载輔辅輕轻輝辉輩辈輪轮輯辑輸输轉转辭辞辦办這这連连進进過过達达違违遠远適适選选遺遗還还邁迈邏逻鄉乡郵邮鄭郑鄰邻醫医釋释針针釣钓鈴铃銀银銅铜銘铭銷销鋁铝鋒锋鋪铺鋼钢錢钱錯错鍋锅鍵键鍾钟鎮镇鏡镜鐘钟鐵铁鑑鉴長长門门閉闭開开閒闲間间悶闷閘闸鬧闹聞闻閣阁閱阅闊阔防防陣阵陰阴陳陈陸陆陽阳階阶際际隨随險险隱隐隻只雞鸡難难雲云電电霧雾靈灵靜静頁页頂顶項项順顺須须預预頑顽頓顿領领頭头頻频顆颗題题額额顏颜願愿類类顧顾顯显風风飄飘飛飞飯饭飲饮飾饰飽饱餐餐餘余館馆馬马駐驻駕驾駛驶驗验驚惊體体髮发魚鱼鮮鲜鳥鸟鳴鸣鳳凤鴨鸭鴻鸿鵝鹅點点黨党齊齐齒齿齡龄龍龙龜龟貓猫';
+const T2S_MAP = new Map();
+for (let i = 0; i + 1 < T2S_PAIRS.length; i += 2) {
+  T2S_MAP.set(T2S_PAIRS[i], T2S_PAIRS[i + 1]);
+}
+
+/**
+ * Lightweight Traditional -> Simplified character fold for matching Simplified `dict.txt` / `freq.txt`.
+ */
+export function toSimplifiedApprox(text) {
+  let out = '';
+  for (const ch of String(text || '')) out += T2S_MAP.get(ch) || ch;
+  return out;
+}
 
 /**
  * Loads common-word frequency table (`freq.txt`) to distinguish general filler words
- * from substantive rare clues during safety-net fallback.
+ * from substantive rare clues during memory recall and Xingxi bridge extraction.
+ * Note: bundled `freq.txt` stores Zipf-like rank buckets (`0` = most common .. `62` = rarest in top-20k).
  */
 export function loadCommonWords(root) {
   if (cachedCommonFreq) return cachedCommonFreq;
   const { dictDir } = getDataPaths(root);
   const freqPath = join(dictDir, 'freq.txt');
   const map = new Map();
-  let totalDocs = 0;
+  let maxVal = 0;
   if (existsSync(freqPath)) {
     const raw = readFileSync(freqPath, { encoding: 'utf-8' });
     for (const line of raw.split(/\r?\n/)) {
@@ -76,12 +95,20 @@ export function loadCommonWords(root) {
       const f = Number(parts[1]);
       if (w && Number.isFinite(f)) {
         map.set(w, f);
-        if (f > totalDocs) totalDocs = f;
+        if (f > maxVal) maxVal = f;
       }
     }
   }
   cachedCommonFreq = map;
-  commonCutoff = Math.max(500, totalDocs * 0.005);
+  if (maxVal > 0 && maxVal <= 100) {
+    // Rank-bucket format (0..62, smaller = more common): <=46 covers everyday fillers
+    commonFreqIsRankBucket = true;
+    commonCutoff = 46;
+  } else {
+    // Raw document-count format (larger = more common)
+    commonFreqIsRankBucket = false;
+    commonCutoff = Math.max(500, maxVal * 0.005);
+  }
   return cachedCommonFreq;
 }
 
@@ -193,12 +220,15 @@ export function wordRarity(df, word) {
 
 /**
  * Returns true if `word` is NOT an ultra-common corpus filler word.
+ * Supports both Simplified and Traditional Chinese via `toSimplifiedApprox`.
  */
 export function isSubstantiveClue(word, root) {
   const freq = loadCommonWords(root);
-  const f = freq.get(word);
+  const w = String(word || '').trim();
+  if (!w) return false;
+  const f = freq.get(w) ?? freq.get(toSimplifiedApprox(w));
   if (f === undefined) return true;
-  return f < commonCutoff;
+  return commonFreqIsRankBucket ? f > commonCutoff : f < commonCutoff;
 }
 
 /**

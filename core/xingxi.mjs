@@ -23,7 +23,7 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from './storage.mjs';
-import { loadChineseDict, loadCommonWords, tokenize } from './tokenizer.mjs';
+import { loadChineseDict, loadCommonWords, tokenize, toSimplifiedApprox } from './tokenizer.mjs';
 
 export const XINGXI_PICKUP_MARKER = '[XINGXI_AUTO_PICKUP]';
 
@@ -544,20 +544,6 @@ const BRIDGE_SEGMENTER = typeof Intl !== 'undefined' && typeof Intl.Segmenter ==
   ? new Intl.Segmenter('zh-Hant', { granularity: 'word' })
   : null;
 
-// Common Traditional -> Simplified character mapping so Traditional cards match Simplified `dict.txt` / `freq.txt`
-const T2S_PAIRS =
-  '萬万與与專专業业東东兩两嚴严臨临為为麗丽舉举義义樂乐習习書书亂乱爭争於于亞亚產产親亲億亿僅仅從从價价優优傳传傷伤備备兒儿內内關关興兴養养寫写軍军農农準准幾几擊击別别刪删劃划創创劇剧劑剂務务勝胜勞劳勢势區区協协單单衛卫卻却歷历壓压厭厌參参雙双變变號号聽听啟启嗎吗員员響响團团園园國国圖图圓圆場场報报塊块壞坏聲声處处複复夠够夢梦獎奖婦妇媽妈學学寧宁實实審审寬宽寶宝將将對对導导層层屬属歲岁島岛師师帳帐帶带幫帮廣广廳厅張张強强歸归錄录徹彻徵征憶忆應应懷怀態态總总慣惯愛爱憲宪戲戏戰战戶户擴扩掃扫揚扬換换損损據据擬拟擾扰攝摄擺摆攜携敗败敘叙數数斷断無无舊旧時时會会術术機机殺杀雜杂權权條条來来構构標标樣样檢检檔档歡欢氣气決决沒没測测溫温滅灭滿满漢汉漸渐燈灯燒烧營营熱热獨独獻献現现環环畫画異异當当發发監监盤盘盡尽確确碼码禮礼離离種种稱称積积穩稳窮穷競竞筆笔簡简簽签約约紅红級级紀纪紙纸紛纷納纳純纯組组終终結结給给統统絲丝經经綜综綠绿維维網网緊紧緒绪線线練练編编緩缓縮缩績绩續续纖纤聯联職职肅肃臉脸腳脚腦脑節节範范藥药蘇苏蘋苹虛虚補补裝装製制見见規规視视覺觉覽览觀观觸触計计訂订訊讯討讨訓训託托記记設设許许訴诉診诊註注証证評评詞词詢询試试詩诗話话該该詳详語语誤误說说誰谁課课調调談谈請请論论諸诸諾诺謀谋謂谓講讲謝谢證证識识警警譯译議议護护讀读讓让讚赞負负財财貢贡貧贫貨货販贩貪贪貫贯責责貴贵買买貸贷費费貼贴貿贸賀贺資资賣卖質质賞赏賢贤賬账賴赖賺赚賽赛贈赠贊赞贏赢趕赶趙赵趨趋躍跃車车軌轨軒轩軟软較较載载輔辅輕轻輝辉輩辈輪轮輯辑輸输轉转辭辞辦办這这連连進进過过達达違违遠远適适選选遺遗還还邁迈邏逻鄉乡郵邮鄭郑鄰邻醫医釋释針针釣钓鈴铃銀银銅铜銘铭銷销鋁铝鋒锋鋪铺鋼钢錢钱錯错鍋锅鍵键鍾钟鎮镇鏡镜鐘钟鐵铁鑑鉴長长門门閉闭開开閒闲間间悶闷閘闸鬧闹聞闻閣阁閱阅闊阔防防陣阵陰阴陳陈陸陆陽阳階阶際际隨随險险隱隐隻只雞鸡難难雲云電电霧雾靈灵靜静頁页頂顶項项順顺須须預预頑顽頓顿領领頭头頻频顆颗題题額额顏颜願愿類类顧顾顯显風风飄飘飛飞飯饭飲饮飾饰飽饱餐餐餘余館馆馬马駐驻駕驾駛驶驗验驚惊體体髮发魚鱼鮮鲜鳥鸟鳴鸣鳳凤鴨鸭鴻鸿鵝鹅點点黨党齊齐齒齿齡龄龍龙龜龟貓猫';
-const T2S_MAP = new Map();
-for (let i = 0; i + 1 < T2S_PAIRS.length; i += 2) {
-  T2S_MAP.set(T2S_PAIRS[i], T2S_PAIRS[i + 1]);
-}
-
-function toSimplifiedApprox(text) {
-  let out = '';
-  for (const ch of String(text || '')) out += T2S_MAP.get(ch) || ch;
-  return out;
-}
-
 // Leading / trailing function characters that must never cap a bridge phrase
 const BRIDGE_EDGE_STOP_CHARS = new Set([
   ...'的了地得著着過过在是有為为被把給给讓让將将從从到向往對对跟和與与及或也都很太最更就才會会要能可想敢應应須须該该不沒没無无非別别勿我你他她它咱這这那其此某各每誰谁哪啥怎麼么嗎吗呢吧啊喔哦呀啦嘛咧之於于以而但卻却若如雖虽因所又再已曾剛刚正先還还只僅仅並并既仍',
@@ -787,8 +773,8 @@ export function buildStarGraph(root) {
     }
   }
 
-  // 4. Shared rare term bridges (`造共享橋`)
-  const bridges = buildSharedBridges(stars, 240, root);
+  // 4. Shared rare term bridges (`造共享橋`, upstream cap = 400)
+  const bridges = buildSharedBridges(stars, 400, root);
   for (const br of bridges) {
     pushEdge(br.source, br.target, 'bridge', br.weight, { label: br.label });
   }
@@ -831,7 +817,7 @@ export function buildStarGraph(root) {
     ledger,
     fileCount: files.length,
     stars,
-    links: links.slice(0, 320),
+    links: links.slice(0, 900),
     bridges,
     stats: {
       stars: stars.length,

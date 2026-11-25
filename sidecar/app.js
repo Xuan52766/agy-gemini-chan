@@ -27,6 +27,10 @@
     mapAutoZoom: true,
     mapRotY: 0.42,
     mapRotX: -0.68,
+    camTargetRotY: null,
+    camTargetRotX: null,
+    camAnimating: false,
+    spotlightChapter: '',
     mapSearch: '',
     isDraggingMap: false,
     dragMoved: false,
@@ -38,11 +42,14 @@
     tlPlaying: false,
     tlCutTs: Infinity,
     tlTsList: [],
+    prevVisibleIds: new Set(),
+    starNovaMap: new Map(),
     starGraphSig: '',
     stars3D: [],
     starLinks3D: [],
     neighborsById: new Map(),
     lastStarFrameMs: 0,
+    lastStarDrawMs: 0,
     // Interactive UI states preserved across 1.5s polls
     expandedDiaries: new Set(),
     expandedPersonas: new Set(),
@@ -509,6 +516,16 @@
     1: '#74aaff', 2: '#54cbb9', 3: '#b28aff', 4: '#ff9777',
     5: '#ef78a7', 6: '#e4ba62', 7: '#9acb62', 8: '#67bfdf',
   };
+  const CHAPTER_NAMES = {
+    1: '一｜我是誰',
+    2: '二｜怎麼說話',
+    3: '三｜對方是誰',
+    4: '四｜走到今天',
+    5: '五｜我們的約定',
+    6: '六｜難忘時刻',
+    7: '七｜相處方式',
+    8: '八｜一起做的事',
+  };
   const MONTH_HEX = {
     1: '#58a6ff', 2: '#35d0a1', 3: '#b0d847', 4: '#ffc247',
     5: '#ff7b4f', 6: '#f15d76', 7: '#dd66c7', 8: '#ab78ff',
@@ -605,6 +622,162 @@
     { u: 0.75, v: 0.23, radius: 0.32, color: '#277f83', strength: 0.04 },
     { u: 0.42, v: 0.82, radius: 0.3, color: '#a55c46', strength: 0.026 },
   ];
+
+  // Offscreen cached deep-space backdrop (Milky Way + nebulae + telescope vignette)
+  const backdropCache = { w: 0, h: 0, dpr: 0, canvas: null };
+  function ensureBackdropCanvas(w, h, dpr) {
+    if (backdropCache.canvas && backdropCache.w === w && backdropCache.h === h && backdropCache.dpr === dpr) {
+      return backdropCache.canvas;
+    }
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Base deep sky gradient
+    const sky = g.createRadialGradient(w * 0.5, h * 0.44, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.78);
+    sky.addColorStop(0, '#0a1228');
+    sky.addColorStop(0.55, '#050814');
+    sky.addColorStop(1, '#02040b');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, w, h);
+
+    // Delicate diagonal Milky Way band
+    g.save();
+    g.translate(w / 2, h / 2);
+    g.rotate(-0.34);
+    const mw = g.createLinearGradient(0, -h * 0.14, 0, h * 0.14);
+    mw.addColorStop(0, 'rgba(120,160,230,0)');
+    mw.addColorStop(0.28, 'rgba(132,166,226,0.02)');
+    mw.addColorStop(0.5, 'rgba(176,200,248,0.062)');
+    mw.addColorStop(0.72, 'rgba(132,166,226,0.02)');
+    mw.addColorStop(1, 'rgba(120,160,230,0)');
+    g.fillStyle = mw;
+    g.fillRect(-w, -h, w * 2, h * 2);
+    g.restore();
+
+    // Soft low-contrast nebulae (pre-rendered once per resize)
+    g.save();
+    g.globalCompositeOperation = 'screen';
+    for (let ci = 0; ci < nebulaBands.length; ci++) {
+      const nb = nebulaBands[ci];
+      const cx = nb.u * w;
+      const cy = nb.v * h;
+      const r = nb.radius * Math.min(w, h);
+      g.save();
+      g.translate(cx, cy);
+      g.rotate(-0.34 + ci * 0.08);
+      g.scale(1.65, 0.48);
+      const ng = g.createRadialGradient(0, 0, 0, 0, 0, r);
+      ng.addColorStop(0, hexAlpha(nb.color, nb.strength * 1.12));
+      ng.addColorStop(0.45, hexAlpha(nb.color, nb.strength * 0.45));
+      ng.addColorStop(1, hexAlpha(nb.color, 0));
+      g.fillStyle = ng;
+      g.beginPath();
+      g.arc(0, 0, r, 0, Math.PI * 2);
+      g.fill();
+      g.restore();
+    }
+    g.restore();
+
+    // Subtle telescope edge vignette
+    const vig = g.createRadialGradient(w * 0.5, h * 0.5, Math.min(w, h) * 0.28, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
+    vig.addColorStop(0, 'rgba(2, 4, 12, 0)');
+    vig.addColorStop(0.72, 'rgba(2, 4, 12, 0.18)');
+    vig.addColorStop(1, 'rgba(1, 2, 8, 0.58)');
+    g.fillStyle = vig;
+    g.fillRect(0, 0, w, h);
+
+    backdropCache.w = w;
+    backdropCache.h = h;
+    backdropCache.dpr = dpr;
+    backdropCache.canvas = c;
+    return c;
+  }
+
+  function starMatchesSpotlight(s) {
+    const sp = state.spotlightChapter;
+    if (!sp) return true;
+    if (sp === 'diary') return s.kind === 'diary';
+    return s.kind === 'card' && Number(s.chapter) === Number(sp);
+  }
+
+  function renderChapterSpotlightBar() {
+    const bar = $('xx-chapter-bar');
+    if (!bar) return;
+    const presentChapters = new Set();
+    let hasDiary = false;
+    for (const s of state.stars3D) {
+      if (s.kind === 'diary') hasDiary = true;
+      else if (Number(s.chapter) >= 1 && Number(s.chapter) <= 8) presentChapters.add(Number(s.chapter));
+    }
+    if (!presentChapters.size && !hasDiary) {
+      bar.innerHTML = '';
+      return;
+    }
+    const items = [];
+    for (let ch = 1; ch <= 8; ch++) {
+      if (!presentChapters.has(ch)) continue;
+      const key = String(ch);
+      const active = state.spotlightChapter === key;
+      items.push(
+        `<button type="button" class="ch-dot-btn${active ? ' active' : ''}" data-spot="${key}" style="--dot-color:${CHAPTER_HEX[ch]}" title="${CHAPTER_NAMES[ch]}" aria-label="篩選${CHAPTER_NAMES[ch]}" aria-pressed="${active}"></button>`,
+      );
+    }
+    if (hasDiary) {
+      const active = state.spotlightChapter === 'diary';
+      items.push(
+        `<button type="button" class="ch-dot-btn${active ? ' active' : ''}" data-spot="diary" style="--dot-color:#eab354" title="星曆日記" aria-label="篩選星曆日記" aria-pressed="${active}"></button>`,
+      );
+    }
+    if (state.spotlightChapter) {
+      const lbl = state.spotlightChapter === 'diary'
+        ? '星曆日記 ×'
+        : `${CHAPTER_NAMES[Number(state.spotlightChapter)] || ''} ×`;
+      items.push(`<span class="ch-bar-label" data-spot-clear="1" title="點擊清除章節篩選">${esc(lbl)}</span>`);
+    }
+    bar.innerHTML = items.join('');
+  }
+
+  function focusCameraOnStar(star) {
+    if (!star || prefersReducedMotion) return;
+    const x = Number(star.x) || 0;
+    const y = Number(star.y) || 0;
+    const z = Number(star.z) || 0;
+    const rXZ = Math.hypot(x, z);
+    if (rXZ < 1 && Math.abs(y) < 1) return;
+    const rawTargetY = Math.atan2(x, -z);
+    // Unwrap to shortest angular path from current rotation
+    const twoPi = Math.PI * 2;
+    let deltaY = (rawTargetY - state.mapRotY) % twoPi;
+    if (deltaY > Math.PI) deltaY -= twoPi;
+    if (deltaY < -Math.PI) deltaY += twoPi;
+    state.camTargetRotY = state.mapRotY + deltaY;
+    state.camTargetRotX = Math.max(-1.15, Math.min(1.15, Math.atan2(-y, Math.max(1, rXZ))));
+    state.camAnimating = true;
+  }
+
+  function computeBridgeArcControl(pa, pb, w, h) {
+    const mx = (pa.sx + pb.sx) * 0.5;
+    const my = (pa.sy + pb.sy) * 0.5;
+    const segLen = Math.hypot(pb.sx - pa.sx, pb.sy - pa.sy);
+    const bend = Math.min(42, Math.max(10, segLen * 0.16));
+    let ox = mx - w * 0.5;
+    let oy = my - h * 0.5;
+    const olen = Math.hypot(ox, oy);
+    if (olen > 6) {
+      ox /= olen;
+      oy /= olen;
+    } else if (segLen > 1) {
+      ox = -(pb.sy - pa.sy) / segLen;
+      oy = (pb.sx - pa.sx) / segLen;
+    } else {
+      ox = 0;
+      oy = -1;
+    }
+    return { cx: mx + ox * bend, cy: my + oy * bend };
+  }
 
   function starPaletteIdx(s) {
     return hashStr(String(s.id || s.title || '')) % STAR_PALETTE_HEX.length;
@@ -869,10 +1042,13 @@
     const lastEl = $('xx-tl-last');
     if (firstEl) firstEl.textContent = tsList.length ? fmtDateTs(tsList[0]).slice(5) : '--';
     if (lastEl) lastEl.textContent = tsList.length ? fmtDateTs(tsList[tsList.length - 1]).slice(5) : '--';
-    syncTimelineCut();
+    state.prevVisibleIds = new Set(cloned.map((s) => s.id));
+    state.starNovaMap.clear();
+    renderChapterSpotlightBar();
+    syncTimelineCut(false);
   }
 
-  function syncTimelineCut() {
+  function syncTimelineCut(emitNova = true) {
     const tsList = state.tlTsList;
     const curEl = $('xx-tl-cur');
     const rangeEl = $('xx-tl-range');
@@ -882,13 +1058,24 @@
     if (!tsList.length || (state.tlPos >= 0.999 && !state.tlPlaying)) {
       state.tlCutTs = Infinity;
       if (curEl) curEl.textContent = '全部記憶';
-      return;
+    } else {
+      const idx = Math.min(tsList.length - 1, Math.max(0, Math.floor(state.tlPos * tsList.length)));
+      state.tlCutTs = tsList[idx];
+      if (curEl) {
+        curEl.textContent = `${fmtDateTs(state.tlCutTs)} · ${Math.round(state.tlPos * 100)}%`;
+      }
     }
-    const idx = Math.min(tsList.length - 1, Math.max(0, Math.floor(state.tlPos * tsList.length)));
-    state.tlCutTs = tsList[idx];
-    if (curEl) {
-      curEl.textContent = `${fmtDateTs(state.tlCutTs)} · ${Math.round(state.tlPos * 100)}%`;
+    const nextVisible = new Set();
+    const nowMs = performance.now();
+    for (const s of state.stars3D) {
+      if (isStarInTimeline(s)) {
+        nextVisible.add(s.id);
+        if (emitNova && !prefersReducedMotion && !state.prevVisibleIds.has(s.id) && !s.isCore) {
+          state.starNovaMap.set(s.id, nowMs);
+        }
+      }
     }
+    state.prevVisibleIds = nextVisible;
   }
 
   function isStarInTimeline(s) {
@@ -978,63 +1165,28 @@
       state.mapAutoZoom = false;
     }
 
+    state.lastStarDrawMs = nowMs;
     const ctx = canvas.getContext('2d');
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // 1. Deep night sky + delicate diagonal Milky Way band + soft low-contrast nebulae + sparse dust
-    ctx.fillStyle = '#050814';
-    ctx.fillRect(0, 0, w, h);
-
-    ctx.save();
-    ctx.translate(w / 2, h / 2);
-    ctx.rotate(-0.34);
-    const mw = ctx.createLinearGradient(0, -h * 0.12, 0, h * 0.12);
-    mw.addColorStop(0, 'rgba(120,160,230,0)');
-    mw.addColorStop(0.28, 'rgba(132,166,226,0.018)');
-    mw.addColorStop(0.5, 'rgba(172,195,244,0.058)');
-    mw.addColorStop(0.72, 'rgba(132,166,226,0.018)');
-    mw.addColorStop(1, 'rgba(120,160,230,0)');
-    ctx.fillStyle = mw;
-    ctx.fillRect(-w, -h, w * 2, h * 2);
-    ctx.restore();
+    // 1. Offscreen cached deep night sky (Milky Way + nebulae + telescope vignette) + parallax dust
+    const backdrop = ensureBackdropCanvas(w, h, dpr);
+    ctx.drawImage(backdrop, 0, 0, w, h);
 
     const tSec = nowMs * 0.001;
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    for (let ci = 0; ci < nebulaBands.length; ci++) {
-      const nb = nebulaBands[ci];
-      const cx = (((nb.u + Math.sin(tSec * 0.035 + ci) * 0.018) % 1) + 1) % 1 * w;
-      const cy = (((nb.v + Math.cos(tSec * 0.03 + ci * 1.7) * 0.014) % 1) + 1) % 1 * h;
-      const r = nb.radius * Math.min(w, h);
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(-0.34 + ci * 0.08);
-      ctx.scale(1.65, 0.48);
-      const ng = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
-      const breath = 0.97 + 0.03 * Math.sin(tSec * 0.12 + ci * 1.3);
-      ng.addColorStop(0, hexAlpha(nb.color, nb.strength * breath));
-      ng.addColorStop(0.55, hexAlpha(nb.color, nb.strength * 0.34));
-      ng.addColorStop(1, hexAlpha(nb.color, 0));
-      ctx.fillStyle = ng;
-      ctx.beginPath();
-      ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-    ctx.restore();
-
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (let k = 0; k < universeDust.length; k++) {
       const d = universeDust[k];
-      const px = (((d.u + state.mapRotY * 0.015 + tSec * 0.0035) % 1) + 1) % 1;
-      const py = (((d.v + state.mapRotX * 0.02 + tSec * 0.0025 + 1) % 1) + 1) % 1;
+      const parallax = d.bright ? 0.042 : 0.022;
+      const px = (((d.u + state.mapRotY * parallax + tSec * 0.0022) % 1) + 1) % 1;
+      const py = (((d.v + state.mapRotX * parallax * 0.8 + tSec * 0.0016 + 1) % 1) + 1) % 1;
       const twinkle = d.bright
         ? 0.72 + 0.28 * Math.sin(tSec * 0.42 + d.phase)
         : 0.7 + 0.3 * Math.sin(tSec * (0.22 + (k % 9) * 0.025) + d.phase);
       ctx.fillStyle = d.color;
-      ctx.globalAlpha = Math.min(d.bright ? 0.5 : 0.22, d.alpha * (0.58 + 0.6 * twinkle));
+      ctx.globalAlpha = Math.min(d.bright ? 0.52 : 0.22, d.alpha * (0.58 + 0.6 * twinkle));
       if (d.bright) {
         ctx.beginPath();
         ctx.arc(px * w, py * h, d.r * (0.7 + 0.35 * twinkle), 0, Math.PI * 2);
@@ -1058,8 +1210,9 @@
       return;
     }
 
-    // 2. Search filter & 3D projection (telephoto focal=2400)
+    // 2. Search + Chapter spotlight filter & 3D projection (telephoto focal=2400)
     const q = state.mapSearch.trim().toLowerCase();
+    const hasSpotlight = Boolean(state.spotlightChapter);
     let hitsCount = 0;
     const projected = [];
     for (const s of stars) {
@@ -1067,11 +1220,13 @@
         s._proj = null;
         continue;
       }
-      const matched = q
+      const searchMatch = q
         ? [s.title, s.text, s.chapterName, s.date, s.eventDate].some((v) => String(v || '').toLowerCase().includes(q))
         : true;
-      s.matched = matched;
-      if (q && matched) hitsCount++;
+      const spotMatch = starMatchesSpotlight(s);
+      s.matched = searchMatch;
+      s.spotMatched = spotMatch;
+      if (q && searchMatch) hitsCount++;
       const pr = projectStar3D(s.x, s.y, s.z, w, h);
       s._proj = pr;
       if (pr) projected.push({ s, pr });
@@ -1098,7 +1253,7 @@
       aura.addColorStop(1, 'rgba(60,100,180,0)');
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = 0.9;
+      ctx.globalAlpha = hasSpotlight && !coreStar.spotMatched ? 0.35 : 0.9;
       ctx.fillStyle = aura;
       ctx.beginPath();
       ctx.arc(cp.sx, cp.sy, auraR, 0, Math.PI * 2);
@@ -1109,20 +1264,41 @@
     const focusId = state.selectedStarId || state.hoveredStarId;
     const focusNeighbors = (focusId && state.mapLinksOn) ? state.neighborsById.get(focusId) : null;
 
-    // 3. Spatial same-chapter lines & Shared-word Bridges (upstream dsh-xingxi subtle styling)
+    // 3. Constellation straight lines + curved shared-bridge arcs + dual-color focus gradients & shimmer
     if (state.mapLinksOn) {
       const bridgeMidpoints = [];
-      for (const l of state.starLinks3D) {
+      const focusShimmers = [];
+      for (let li = 0; li < state.starLinks3D.length; li++) {
+        const l = state.starLinks3D[li];
         const pa = l.a._proj;
         const pb = l.b._proj;
         if (!pa || !pb) continue;
         if (q && !l.a.matched && !l.b.matched) continue;
         const isFocusEdge = Boolean(focusId && (l.a.id === focusId || l.b.id === focusId));
+        const isSpotEdge = hasSpotlight && (l.a.spotMatched || l.b.spotMatched);
+        const spotBoth = hasSpotlight && l.a.spotMatched && l.b.spotMatched;
+        const avgZ = (pa.z + pb.z) * 0.5;
+        const edgeDepth = Math.max(0.45, Math.min(1.08, 1.0 - (avgZ / 560) * 0.38));
 
         if (l.kind === 'chapter') {
-          const chHex = CHAPTER_HEX[l.chapter] || '#b5c4e8';
-          ctx.strokeStyle = hexAlpha(chHex, isFocusEdge ? 0.92 : focusId ? 0.07 : 0.22);
-          ctx.lineWidth = isFocusEdge ? 1.6 : 0.85;
+          if (isFocusEdge) {
+            const grad = ctx.createLinearGradient(pa.sx, pa.sy, pb.sx, pb.sy);
+            grad.addColorStop(0, hexAlpha(l.a.hex, 0.22));
+            grad.addColorStop(0.16, hexAlpha(l.a.hex, 0.92));
+            grad.addColorStop(0.84, hexAlpha(l.b.hex, 0.92));
+            grad.addColorStop(1, hexAlpha(l.b.hex, 0.22));
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 1.65;
+          } else {
+            const chHex = CHAPTER_HEX[l.chapter] || '#b5c4e8';
+            const baseA = focusId
+              ? 0.06
+              : hasSpotlight
+                ? (spotBoth ? 0.52 : 0.04)
+                : 0.22;
+            ctx.strokeStyle = hexAlpha(chHex, baseA * edgeDepth);
+            ctx.lineWidth = spotBoth && !focusId ? 1.2 : 0.85;
+          }
           ctx.beginPath();
           ctx.moveTo(pa.sx, pa.sy);
           ctx.lineTo(pb.sx, pb.sy);
@@ -1131,24 +1307,57 @@
         }
 
         if (l.kind === 'bridge') {
-          ctx.strokeStyle = isFocusEdge
-            ? 'rgba(255,198,130,0.78)'
-            : focusId ? 'rgba(255,190,120,0.025)' : 'rgba(255,190,120,0.09)';
-          ctx.lineWidth = isFocusEdge ? 1.35 : 0.6;
+          const { cx, cy } = computeBridgeArcControl(pa, pb, w, h);
+          if (isFocusEdge) {
+            const grad = ctx.createLinearGradient(pa.sx, pa.sy, pb.sx, pb.sy);
+            grad.addColorStop(0, hexAlpha(l.a.hex, 0.25));
+            grad.addColorStop(0.18, 'rgba(255,208,138,0.85)');
+            grad.addColorStop(0.82, 'rgba(255,208,138,0.85)');
+            grad.addColorStop(1, hexAlpha(l.b.hex, 0.25));
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 1.45;
+          } else {
+            const baseA = focusId
+              ? 0.022
+              : hasSpotlight
+                ? (isSpotEdge ? 0.28 : 0.018)
+                : 0.1;
+            ctx.strokeStyle = `rgba(255,196,128,${(baseA * edgeDepth).toFixed(3)})`;
+            ctx.lineWidth = isSpotEdge && !focusId ? 0.95 : 0.65;
+          }
           ctx.beginPath();
           ctx.moveTo(pa.sx, pa.sy);
-          ctx.lineTo(pb.sx, pb.sy);
+          ctx.quadraticCurveTo(cx, cy, pb.sx, pb.sy);
           ctx.stroke();
-          if (isFocusEdge && l.label) {
-            bridgeMidpoints.push({ x: (pa.sx + pb.sx) * 0.5, y: (pa.sy + pb.sy) * 0.5, text: l.label });
+
+          if (isFocusEdge) {
+            // True midpoint on quadratic Bézier curve B(0.5); skip canvas pill when edge is too short to avoid covering star cores
+            const bx = 0.25 * pa.sx + 0.5 * cx + 0.25 * pb.sx;
+            const by = 0.25 * pa.sy + 0.5 * cy + 0.25 * pb.sy;
+            const edgeSpan = Math.hypot(pb.sx - pa.sx, pb.sy - pa.sy);
+            if (l.label && edgeSpan >= 44) bridgeMidpoints.push({ x: bx, y: by, text: l.label });
+            if (!prefersReducedMotion && focusShimmers.length < 10) {
+              const u = (tSec * 0.26 + li * 0.19) % 1;
+              const inv = 1 - u;
+              focusShimmers.push({
+                x: inv * inv * pa.sx + 2 * inv * u * cx + u * u * pb.sx,
+                y: inv * inv * pa.sy + 2 * inv * u * cy + u * u * pb.sy,
+              });
+            }
           }
           continue;
         }
 
         if (isFocusEdge && (l.kind === 'ref' || l.kind === 'similar')) {
           ctx.save();
-          ctx.strokeStyle = l.kind === 'ref' ? 'rgba(255,200,130,0.45)' : 'rgba(255,255,255,0.3)';
-          ctx.lineWidth = 1.1;
+          const grad = ctx.createLinearGradient(pa.sx, pa.sy, pb.sx, pb.sy);
+          const midCol = l.kind === 'ref' ? 'rgba(255,206,138,0.58)' : 'rgba(220,234,255,0.38)';
+          grad.addColorStop(0, hexAlpha(l.a.hex, 0.16));
+          grad.addColorStop(0.2, midCol);
+          grad.addColorStop(0.8, midCol);
+          grad.addColorStop(1, hexAlpha(l.b.hex, 0.16));
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = 1.15;
           ctx.setLineDash(l.kind === 'ref' ? [2, 4] : []);
           ctx.beginPath();
           ctx.moveTo(pa.sx, pa.sy);
@@ -1156,6 +1365,22 @@
           ctx.stroke();
           ctx.restore();
         }
+      }
+
+      if (focusShimmers.length) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        for (const pt of focusShimmers) {
+          const sg = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, 6);
+          sg.addColorStop(0, 'rgba(255,248,224,0.95)');
+          sg.addColorStop(0.45, 'rgba(255,212,138,0.48)');
+          sg.addColorStop(1, 'rgba(255,198,120,0)');
+          ctx.fillStyle = sg;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
       }
 
       if (bridgeMidpoints.length) {
@@ -1167,21 +1392,21 @@
           const tw = ctx.measureText(m.text).width;
           const pw = tw + 10;
           const ph = 15;
-          ctx.fillStyle = 'rgba(10, 14, 28, 0.85)';
-          ctx.strokeStyle = 'rgba(255, 214, 150, 0.42)';
+          ctx.fillStyle = 'rgba(10, 14, 28, 0.88)';
+          ctx.strokeStyle = 'rgba(255, 214, 150, 0.45)';
           ctx.lineWidth = 0.8;
           ctx.beginPath();
           ctx.roundRect(m.x - pw / 2, m.y - ph / 2, pw, ph, 7);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = 'rgba(255, 228, 176, 0.96)';
+          ctx.fillStyle = 'rgba(255, 232, 184, 0.96)';
           ctx.fillText(m.text, m.x, m.y + 0.5);
         }
         ctx.restore();
       }
     }
 
-    // 4. Render unified circular pearl stars (upstream dsh-xingxi source-over + warm golden core halo)
+    // 4. Render circular pearl stars with 3D deep-space depth cueing + timeline nova pulse
     const nowWall = Date.now();
     for (const { s, pr } of projected) {
       const isSelected = state.selectedStarId === s.id;
@@ -1191,27 +1416,35 @@
       const energy = 0.42 + 0.58 * Math.exp(-daysOld / 110);
       const phase = (s.paletteIdx || 0) * 2.399;
       const breath = 0.965 + 0.035 * Math.sin(tSec * (0.42 + ((s.paletteIdx || 0) % 7) * 0.025) + phase);
+      // Front stars crisp & bright, back-hemisphere stars softer for genuine 3D sphere depth
+      const depthCue = Math.max(0.5, Math.min(1.12, 1.0 - (pr.z / 520) * 0.4));
 
       let sz = Math.max(7, (s.bodySize || 12) * (0.8 + 0.5 * state.mapZoom) * pr.depth * breath);
       if (q && !s.matched) sz *= 0.55;
+      if (hasSpotlight && !s.spotMatched && !isSelected && !isHovered) sz *= 0.78;
       if (s.kind !== 'card') sz *= 0.85;
       if (isNeighbor && s.id !== focusId) sz *= 1.12;
       if (s.isCore) sz *= 1.15;
       if (isSelected) sz *= 1.6;
       else if (isHovered) sz *= 1.28;
 
-      const alpha = Math.min(1, (0.84 + pr.depth * 0.22) * breath * energy)
-        * (q && !s.matched ? 0.22 : 1)
-        * (focusNeighbors ? ((isNeighbor || s.id === focusId) ? 1 : 0.32) : 1);
+      const focusDim = focusNeighbors ? ((isNeighbor || s.id === focusId) ? 1 : 0.3) : 1;
+      const spotDim = hasSpotlight
+        ? (s.spotMatched || isSelected || isHovered ? 1 : 0.2)
+        : 1;
+      const alpha = Math.min(1, (0.82 + pr.depth * 0.2) * breath * energy * depthCue)
+        * (q && !s.matched ? 0.2 : 1)
+        * focusDim
+        * spotDim;
 
       if (isSelected || isHovered) {
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
-        ctx.globalAlpha = alpha * (isSelected ? 0.28 : 0.17);
-        const haloR = sz * (isSelected ? 1.85 : 1.45);
+        ctx.globalAlpha = alpha * (isSelected ? 0.3 : 0.18);
+        const haloR = sz * (isSelected ? 1.9 : 1.5);
         const halo = ctx.createRadialGradient(pr.sx, pr.sy, 0, pr.sx, pr.sy, haloR);
-        halo.addColorStop(0, hexAlpha(s.hex, 0.65));
-        halo.addColorStop(0.4, hexAlpha(s.hex, 0.2));
+        halo.addColorStop(0, hexAlpha(s.hex, 0.68));
+        halo.addColorStop(0.4, hexAlpha(s.hex, 0.22));
         halo.addColorStop(1, hexAlpha(s.hex, 0));
         ctx.fillStyle = halo;
         ctx.beginPath();
@@ -1223,6 +1456,27 @@
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = alpha;
       ctx.drawImage(s.sprite, pr.sx - sz / 2, pr.sy - sz / 2, sz, sz);
+
+      // Timeline nova birth ripple (expires cleanly after 850ms)
+      const bornAt = state.starNovaMap.get(s.id);
+      if (bornAt !== undefined) {
+        const age = nowMs - bornAt;
+        if (age >= 850) {
+          state.starNovaMap.delete(s.id);
+        } else if (age >= 0) {
+          const prog = age / 850;
+          const ease = 1 - Math.pow(1 - prog, 3);
+          const nr = sz * (0.45 + ease * 1.95);
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.strokeStyle = hexAlpha(s.hex, (1 - prog) * (1 - prog) * 0.72);
+          ctx.lineWidth = 1.4 * (1 - prog * 0.5);
+          ctx.beginPath();
+          ctx.arc(pr.sx, pr.sy, nr, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
 
       if (s.isCore) {
         ctx.save();
@@ -1250,7 +1504,8 @@
       const st = stars.find((x) => x.id === state.selectedStarId && x._proj);
       if (st) {
         const { sx, sy, depth } = st._proj;
-        const selR = Math.max(10, (st.bodySize || 12) * (0.8 + 0.5 * state.mapZoom) * depth * 0.65);
+        const rawSelR = (st.bodySize || 12) * (0.8 + 0.5 * state.mapZoom) * depth * (st.isCore ? 0.38 : 0.62);
+        const selR = Math.min(20, Math.max(9, rawSelR));
         ctx.save();
         ctx.strokeStyle = hexAlpha(st.hex, 0.9);
         ctx.lineWidth = 1.15;
@@ -1279,9 +1534,22 @@
     state.lastStarFrameMs = nowMs;
     const xingxiPanel = $('tab-xingxi');
     if (xingxiPanel && !xingxiPanel.hidden && !document.hidden) {
-      if (!prefersReducedMotion && !state.isDraggingMap && !state.hoveredStarId) {
+      // Smooth ease-in-out camera focus animation
+      if (state.camAnimating && state.camTargetRotY !== null && state.camTargetRotX !== null) {
+        const dy = state.camTargetRotY - state.mapRotY;
+        const dx = state.camTargetRotX - state.mapRotX;
+        const step = Math.min(1, dt * 7.5);
+        state.mapRotY += dy * step;
+        state.mapRotX += dx * step;
+        if (Math.abs(dy) < 0.002 && Math.abs(dx) < 0.002) {
+          state.mapRotY = state.camTargetRotY;
+          state.mapRotX = state.camTargetRotX;
+          state.camAnimating = false;
+        }
+      } else if (!prefersReducedMotion && !state.isDraggingMap && !state.hoveredStarId && !state.selectedStarId) {
         state.mapRotY += dt * 0.01;
       }
+
       if (state.tlPlaying) {
         state.tlPos += dt / 9.0;
         if (state.tlPos >= 1) {
@@ -1290,9 +1558,17 @@
           const playBtn = $('xx-tl-play');
           if (playBtn) playBtn.textContent = '▶';
         }
-        syncTimelineCut();
+        syncTimelineCut(true);
       }
-      if (!prefersReducedMotion || state.isDraggingMap || state.tlPlaying) {
+
+      const isActive = state.isDraggingMap
+        || Boolean(state.hoveredStarId)
+        || Boolean(state.selectedStarId)
+        || state.tlPlaying
+        || state.camAnimating
+        || state.starNovaMap.size > 0;
+      const minInterval = isActive ? 0 : 33; // 60fps interactive, 30fps passive idle spin
+      if ((!prefersReducedMotion || isActive) && (nowMs - state.lastStarDrawMs >= minInterval)) {
         drawStarMap(null, nowMs);
       }
     }
@@ -1346,6 +1622,7 @@
   }
 
   starmapCanvas.addEventListener('pointerdown', (e) => {
+    state.camAnimating = false;
     state.isDraggingMap = true;
     state.dragMoved = false;
     state.dragStartX = e.clientX;
@@ -1391,6 +1668,7 @@
       return;
     }
     state.selectedStarId = hit.id;
+    focusCameraOnStar(hit);
     renderSelectedStarDetail(hit);
     drawStarMap(null);
   });
@@ -1409,6 +1687,29 @@
 
   $('xx-map-search').addEventListener('input', (e) => {
     state.mapSearch = e.target.value;
+    drawStarMap(null);
+    const q = state.mapSearch.trim();
+    if (q) {
+      const hits = state.stars3D.filter((s) => s._proj && s.matched);
+      if (hits.length >= 1 && hits.length <= 3) {
+        focusCameraOnStar(hits[0]);
+      }
+    }
+  });
+
+  $('xx-chapter-bar')?.addEventListener('click', (e) => {
+    const clearEl = e.target.closest?.('[data-spot-clear]');
+    if (clearEl) {
+      state.spotlightChapter = '';
+      renderChapterSpotlightBar();
+      drawStarMap(null);
+      return;
+    }
+    const btn = e.target.closest?.('.ch-dot-btn');
+    if (!btn) return;
+    const sp = btn.dataset.spot || '';
+    state.spotlightChapter = state.spotlightChapter === sp ? '' : sp;
+    renderChapterSpotlightBar();
     drawStarMap(null);
   });
 
@@ -1448,15 +1749,18 @@
 
   $('xx-zoom-reset').addEventListener('click', () => {
     state.mapAutoZoom = true;
+    state.camAnimating = false;
     state.mapRotY = 0.42;
     state.mapRotX = -0.68;
     state.mapSearch = '';
+    state.spotlightChapter = '';
     state.selectedStarId = '';
     state.tlPlaying = false;
     state.tlPos = 1;
     if ($('xx-tl-play')) $('xx-tl-play').textContent = '▶';
     $('xx-map-search').value = '';
-    syncTimelineCut();
+    renderChapterSpotlightBar();
+    syncTimelineCut(false);
     renderSelectedStarDetail(null);
     drawStarMap(null);
   });

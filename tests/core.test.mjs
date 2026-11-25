@@ -85,7 +85,7 @@ import {
   updateJsonLocked,
   withFileLockSync,
 } from '../core/storage.mjs';
-import { tokenize } from '../core/tokenizer.mjs';
+import { isSubstantiveClue, tokenize } from '../core/tokenizer.mjs';
 import {
   appendDiary,
   appendToChapter,
@@ -164,6 +164,13 @@ test('tokenizer + fish-memory remember, recall, factKey convergence, and univers
     const t1 = tokenize('她的胃不好要喝熱水', root);
     const t2 = tokenize('她的胃最近怎樣', root);
     assert.equal(t1.has('胃') && t2.has('胃'), true);
+
+    // Substantive clue filter handles bundled freq.txt Zipf rank buckets + Traditional Chinese
+    assert.equal(isSubstantiveClue('突然', process.cwd()), false);
+    assert.equal(isSubstantiveClue('說話', process.cwd()), false);
+    assert.equal(isSubstantiveClue('晚上', process.cwd()), false);
+    assert.equal(isSubstantiveClue('草莓大福', process.cwd()), true);
+    assert.equal(isSubstantiveClue('約定', process.cwd()), true);
 
     assert.equal(isUniversalKey('對話.內容'), true);
     assert.equal(isUniversalKey('本子.記錄規則'), false);
