@@ -62,9 +62,8 @@ export const DEFAULT_MEMORY_POLICY = {
 
 export function buildDefaultMemoryRuleTemplate() {
   return [
-    '【對話內長期記憶提醒（今日剩餘額度 {{left}}/{{dailyQuota}}）】這一輪如果出現值得長期記住的事（{{ownerName}}的喜好／禁忌／作息、明確約定、身體狀態或重要里程碑），請直接安靜呼叫 `remember` 記下來——**不用等對方特地提醒**，也不要在回覆裡說「我記住了」。日常純寒暄與一次性流水瑣事不用記。',
-    '寫法規範：一條一件事；自稱用「{{selfPronoun}}」，{{ownerCall}}{{selfGuard}}；不要寫「今天／昨天」（時間交給系統）；若屬狀態更新（如作息、住處、計畫變更），請加填 `factKey`（如「{{ownerPronoun}}.作息」）或 `supersedes`。',
-    '主題歸檔分工：日常單點事實交給 `remember`；人物、偏好、專案或長篇經歷可先看啟動注入的 `認識/目錄`（`xingxi_open` 細讀），需要整理或補充成頁時用 `xingxi_wiki_write` 維護，並以 `[[主題]]` 串聯相關頁。',
+    '【對話內長期記憶提醒（今日剩餘額度 {{left}}/{{dailyQuota}}）】這一輪如果出現值得長期記住的單點事實（{{ownerName}}的喜好／禁忌／作息、明確約定、身體狀態或重要里程碑），請直接安靜呼叫 `remember` 記下來——**不用等對方特地提醒**，也不要在回覆裡說「我記住了」。日常純寒暄與一次性流水瑣事不用記。',
+    '寫法規範：一條一件事；自稱用「{{selfPronoun}}」，{{ownerCall}}{{selfGuard}}；不要寫「今天／昨天」（時間交給系統）；若屬狀態更新（如作息、住處、計畫變更），請加填 `factKey`（如「{{ownerPronoun}}.作息」）或 `supersedes`。（成體系的人物、偏好或專案理解則改寫進 `認識/` 主題頁，詳見上方「## 認識」準則。）',
   ].join('\n');
 }
 

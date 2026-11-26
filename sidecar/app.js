@@ -3541,6 +3541,23 @@
     if (state.snap) renderSnapshot(state.snap);
   });
 
+  $('btn-xx-wiki-bootstrap')?.addEventListener('click', () => withBusy($('btn-xx-wiki-bootstrap'), async () => {
+    const res = await apiFetch('/api/xingxi/wiki/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify({
+        conversationId: state.convId,
+        workspaceUris: state.workspaceUris,
+      }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    if (res?.sent) {
+      flashMsg('xx-wiki-save-msg', '已派發給貓貓整理主題認識頁 ✓');
+      showToast('已派發給貓貓從既有記憶整理主題認識頁', 'ok', 2600);
+    } else if (res?.error) {
+      showToast(res.error, 'error', 3400);
+    }
+  }));
+
   $('btn-xx-wiki-catalog')?.addEventListener('click', () => {
     if ($('xx-wiki-title')) $('xx-wiki-title').value = '目錄';
     if ($('xx-wiki-mode')) $('xx-wiki-mode').value = 'replace';

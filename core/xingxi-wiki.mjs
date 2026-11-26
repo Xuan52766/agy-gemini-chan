@@ -13,6 +13,7 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  unlinkSync,
 } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import {
@@ -297,15 +298,64 @@ export function openWikiPage(root, rawTitle, { offset = 0, limit = DEFAULT_OPEN_
 }
 
 /**
- * Creates or updates a topic Wiki page (`data/xingxi/認識/<title>.md`) atomically,
- * preserving one initial `.history/<title>-<YYYY-MM-DD>.md` snapshot per day on overwrite.
+ * Creates, updates, or deletes a topic Wiki page (`data/xingxi/認識/<title>.md`) atomically,
+ * preserving one initial `.history/<title>-<YYYY-MM-DD>.md` snapshot per day on overwrite or delete.
  */
-export function writeWikiPage(root, { title, content, mode = 'replace', now = Date.now() } = {}) {
+export function writeWikiPage(root, { title, content = '', mode = 'replace', now = Date.now() } = {}) {
   const rawSafe = sanitizeWikiTitle(title);
   if (!rawSafe) {
     return { ok: false, error: '主題標題不合法（不可為空、含 .. 或路徑非法字元）' };
   }
   const canonicalTitle = isCatalogTitle(rawSafe) ? WIKI_CATALOG_TITLE : rawSafe;
+  const wikiDir = getWikiDir(root);
+  const targetPath = resolveSafeWikiFilePath(wikiDir, canonicalTitle);
+  if (!targetPath) {
+    return { ok: false, error: '目標路徑超出認識頁安全範圍' };
+  }
+
+  const backupExisting = () => {
+    const historyDir = join(wikiDir, WIKI_HISTORY_DIR_NAME);
+    mkdirSync(historyDir, { recursive: true });
+    const day = localDayKey(now);
+    const histPath = resolve(historyDir, `${canonicalTitle}-${day}.md`);
+    if (isInsideDir(histPath, historyDir) && !existsSync(histPath)) {
+      try {
+        copyFileSync(targetPath, histPath);
+        return { backupCreated: true, backupPath: histPath };
+      } catch { /* ignore backup error */ }
+    }
+    return { backupCreated: false, backupPath: '' };
+  };
+
+  if (mode === 'delete') {
+    if (canonicalTitle === WIKI_CATALOG_TITLE) {
+      return { ok: false, error: '總目錄「目錄」不可刪除，請改用 replace 更新內容' };
+    }
+    if (!existsSync(targetPath)) {
+      return { ok: false, error: `找不到主題認識頁「${canonicalTitle}」` };
+    }
+    const beforePages = listWikiPages(root);
+    const targetPage = beforePages.find((p) => p.key === normalizeTitleKey(canonicalTitle));
+    const prevRelations = targetPage ? computePageRelations(targetPage, beforePages) : { linkedFrom: [] };
+    const { backupCreated, backupPath } = backupExisting();
+    try {
+      unlinkSync(targetPath);
+    } catch (err) {
+      return { ok: false, error: `刪除失敗：${err?.message || String(err)}` };
+    }
+    return {
+      ok: true,
+      deleted: true,
+      title: canonicalTitle,
+      path: targetPath,
+      relPath: `${WIKI_DIR_NAME}/${canonicalTitle}.md`,
+      mode: 'delete',
+      backupCreated,
+      backupPath,
+      linkedFrom: prevRelations.linkedFrom || [],
+    };
+  }
+
   const body = String(content || '').trim();
   if (!body) {
     return { ok: false, error: '內容不可為空' };
@@ -314,12 +364,7 @@ export function writeWikiPage(root, { title, content, mode = 'replace', now = Da
     return { ok: false, error: `單頁內容超過上限（最多 ${MAX_WIKI_PAGE_CHARS} 字）` };
   }
 
-  const wikiDir = getWikiDir(root);
   mkdirSync(wikiDir, { recursive: true });
-  const targetPath = resolveSafeWikiFilePath(wikiDir, canonicalTitle);
-  if (!targetPath) {
-    return { ok: false, error: '目標路徑超出認識頁安全範圍' };
-  }
 
   const existed = existsSync(targetPath);
   const prevText = existed ? readTextSafe(targetPath, '') : '';
@@ -347,26 +392,29 @@ export function writeWikiPage(root, { title, content, mode = 'replace', now = Da
   let backupPath = '';
   if (!skipped) {
     if (existed && prevText.trim()) {
-      const historyDir = join(wikiDir, WIKI_HISTORY_DIR_NAME);
-      mkdirSync(historyDir, { recursive: true });
-      const day = localDayKey(now);
-      const histPath = resolve(historyDir, `${canonicalTitle}-${day}.md`);
-      if (isInsideDir(histPath, historyDir) && !existsSync(histPath)) {
-        try {
-          copyFileSync(targetPath, histPath);
-          backupCreated = true;
-          backupPath = histPath;
-        } catch { /* ignore backup error */ }
-      }
+      const b = backupExisting();
+      backupCreated = b.backupCreated;
+      backupPath = b.backupPath;
     }
     writeTextAtomic(targetPath, finalText.endsWith('\n') ? finalText : `${finalText}\n`);
   }
 
   const allPages = listWikiPages(root);
-  const savedPage = allPages.find((p) => p.key === normalizeTitleKey(canonicalTitle));
+  const savedKey = normalizeTitleKey(canonicalTitle);
+  const savedPage = allPages.find((p) => p.key === savedKey);
   const relations = savedPage
     ? computePageRelations(savedPage, allPages)
     : { links: extractWikiLinks(finalText, canonicalTitle), linkedFrom: [], missing: [] };
+
+  let inCatalog = true;
+  if (canonicalTitle !== WIKI_CATALOG_TITLE) {
+    const catalog = allPages.find((p) => p.isCatalog);
+    const catalogLinks = new Set((catalog?.links || []).map((l) => normalizeTitleKey(l)));
+    const catalogRawLo = String(catalog?.content || '').toLowerCase();
+    inCatalog = Boolean(
+      catalog && (catalogLinks.has(savedKey) || catalogRawLo.includes(canonicalTitle.toLowerCase())),
+    );
+  }
 
   return {
     ok: true,
@@ -378,6 +426,7 @@ export function writeWikiPage(root, { title, content, mode = 'replace', now = Da
     skipped,
     backupCreated,
     backupPath,
+    inCatalog,
     links: relations.links,
     missing: relations.missing,
   };
@@ -387,11 +436,14 @@ export function writeWikiPage(root, { title, content, mode = 'replace', now = Da
  * Renders the compact startup Wiki catalog block (`<= maxChars`).
  * Returns `''` when no Wiki pages exist yet (0 Token overhead for legacy users).
  */
-export function renderWikiCatalogBlock(root, { maxChars = DEFAULT_CATALOG_CAP } = {}) {
+export function renderWikiCatalogBlock(root, { maxChars = DEFAULT_CATALOG_CAP, header = '' } = {}) {
   const allPages = listWikiPages(root);
   const catalog = allPages.find((p) => p.isCatalog);
   const topicPages = allPages.filter((p) => !p.isCatalog);
   if (!catalog && !topicPages.length) return '';
+
+  const head = String(header || '').trim() ||
+    `【我寫過的認識】頁面在 ${getWikiDir(root)}，一個主題一個檔案，頁和頁用 [[標題]] 互相連結。想看哪一頁，用 \`xingxi_open\` 寫頁名打開；想查哪一頁提到過某件事，用 \`xingxi_read\`（填 \`keyword\`，可設 \`kind: "wiki"\`）。`;
 
   const cap = Math.max(200, Number(maxChars) || DEFAULT_CATALOG_CAP);
   if (catalog && catalog.content.trim()) {
@@ -400,7 +452,7 @@ export function renderWikiCatalogBlock(root, { maxChars = DEFAULT_CATALOG_CAP } 
     const body = truncated
       ? `${raw.slice(0, cap)}\n…（目錄尚餘 ${raw.length - cap} 字，可用 \`xingxi_open({ title: "目錄", offset: ${cap} })\` 翻閱）`
       : raw;
-    return `【星汐主題認識目錄（按需呼叫 \`xingxi_open\` 翻閱）】\n${body}`;
+    return `${head}\n${body}`;
   }
 
   // Fallback when topic pages exist but `目錄.md` hasn't been written yet
@@ -413,8 +465,10 @@ export function renderWikiCatalogBlock(root, { maxChars = DEFAULT_CATALOG_CAP } 
     used += line.length + 1;
   }
   const hiddenCount = topicPages.length - lines.length;
-  const tail = hiddenCount > 0 ? `\n…（尚有 ${hiddenCount} 頁未列，建議整理時建立 \`目錄.md\`）` : '\n（尚未撰寫 `目錄.md`，可於拾星時用 `xingxi_wiki_write({ title: "目錄", ... })` 補上一行式索引）';
-  return `【星汐主題認識目錄（按需呼叫 \`xingxi_open\` 翻閱）】\n${lines.join('\n')}${tail}`;
+  const tail = hiddenCount > 0
+    ? `\n…（尚有 ${hiddenCount} 頁未列，建議整理時建立 \`目錄.md\`）`
+    : '\n（尚未撰寫 `目錄.md`，請用 `xingxi_wiki_write({ title: "目錄", ... })` 補上一行式索引，每頁只寫簡介、不寫結論）';
+  return `${head}\n${lines.join('\n')}${tail}`;
 }
 
 /**
@@ -472,9 +526,9 @@ export function buildWikiGapReport(root) {
 }
 
 /**
- * Searches all Wiki pages by title and content, returning bounded excerpts.
+ * Searches all Wiki pages by title and content, returning bounded excerpts + live relations.
  */
-export function searchWikiPages(root, keyword, { limit = 8, excerptChars = 200 } = {}) {
+export function searchWikiPages(root, keyword, { limit = 8, excerptChars = 200, includeRelations = false } = {}) {
   const q = String(keyword || '').trim().toLowerCase();
   if (!q) return [];
   const allPages = listWikiPages(root);
@@ -494,12 +548,16 @@ export function searchWikiPages(root, keyword, { limit = 8, excerptChars = 200 }
       excerpt = p.content.slice(0, excerptChars).replace(/\s+/g, ' ').trim();
       if (p.content.length > excerptChars) excerpt = `${excerpt}…`;
     }
-    hits.push({
+    const row = {
       title: p.title,
       relPath: p.relPath,
       chars: p.chars,
       excerpt,
-    });
+    };
+    if (includeRelations) {
+      row.relations = computePageRelations(p, allPages);
+    }
+    hits.push(row);
     if (hits.length >= limit) break;
   }
   return hits;

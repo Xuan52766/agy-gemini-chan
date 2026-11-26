@@ -32,6 +32,7 @@ import {
   stripAntigravityWrappers,
 } from '../core/storage.mjs';
 import { buildSessionStartupContext, ensureXingxiArchive } from '../core/xingxi.mjs';
+import { getWikiDir } from '../core/xingxi-wiki.mjs';
 import {
   ensureInProjectScope,
   injectSystemContext,
@@ -53,7 +54,7 @@ function computePersonaHash(persona) {
 function computeRulesHash(moodCfg, memPolicy, spCfg, promptOverrides = {}) {
   return createHash('sha1')
     .update(JSON.stringify([
-      'rules-v5',
+      'rules-v6',
       Boolean(moodCfg?.enabled),
       moodCfg?.judgeMode || 'hybrid',
       Boolean(moodCfg?.innerThoughtEnabled),
@@ -261,6 +262,8 @@ function main() {
       selfName: moodSnap.config?.selfName,
     });
     if (memRule) sections.push(memRule);
+    const wikiRule = resolvePrompt('xingxi.wikiRule', { wikiDir: getWikiDir(ROOT) }, ROOT);
+    if (wikiRule) sections.push(wikiRule);
     const spRule = buildInChatSpeakUpRule(ROOT);
     if (spRule) sections.push(spRule);
     const nest = getNestSnapshot(ROOT, moodSnap.mood, Date.now(), moodSnap.dims);
@@ -286,6 +289,8 @@ function main() {
       selfName: moodCfg.selfName,
     });
     if (memRule) sections.push(memRule);
+    const wikiRule = resolvePrompt('xingxi.wikiRule', { wikiDir: getWikiDir(ROOT) }, ROOT);
+    if (wikiRule) sections.push(wikiRule);
     const spRule = buildInChatSpeakUpRule(ROOT);
     if (spRule) sections.push(spRule);
   }

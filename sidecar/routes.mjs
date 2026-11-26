@@ -76,6 +76,7 @@ import {
 import {
   appendDiary,
   appendToChapter,
+  executeWikiBootstrap,
   executeXingxiPickup,
   readXingxiArchiveFile,
   replaceChapterTwo,
@@ -421,6 +422,25 @@ export function registerSidecarRoutes(
       mode: data.mode || 'replace',
     });
     return { ...res, snapshot: getFullStateSnapshot({ root }) };
+  }, 'POST');
+
+  router.api('/api/xingxi/wiki/bootstrap', async (data = {}) => {
+    const sessionId = String(data.conversationId || '');
+    const snapBefore = getFullStateSnapshot({ root, sessionId });
+    const candidateId = String(
+      sessionId
+      || snapBefore.activeConversationId
+      || snapBefore.verifiedConversations[0]?.conversationId
+      || '',
+    );
+    const verified = Boolean(candidateId) && (
+      isVerifiedProjectConversation(candidateId, root)
+      || isProjectWorkspaceActive(data.workspaceUris || [], '', root)
+    );
+    const targetConvId = verified ? candidateId : '';
+    const sender = verified && typeof sendMessageFn === 'function' ? sendMessageFn : null;
+    const res = await executeWikiBootstrap({ root, targetConvId, sender });
+    return { ...res, snapshot: getFullStateSnapshot({ root, sessionId }) };
   }, 'POST');
 
   router.api('/api/xingxi/restore', (data = {}) => {

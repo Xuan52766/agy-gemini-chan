@@ -622,7 +622,7 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
     });
     assert.match(ch2Reject.result.content[0].text, /安全攔截/);
 
-    // Test xingxi_wiki_write -> xingxi_open (with links & pagination) -> xingxi_read offset
+    // Test xingxi_wiki_write -> catalog reminder -> xingxi_open -> xingxi_read(kind=wiki) -> delete
     const wikiWrite1 = await rpc(20, 'tools/call', {
       name: 'xingxi_wiki_write',
       arguments: {
@@ -633,6 +633,7 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
     });
     assert.match(wikiWrite1.result.content[0].text, /已寫入主題頁「貓窩專案」/);
     assert.match(wikiWrite1.result.content[0].text, /\[\[星圖設計\]\]/);
+    assert.match(wikiWrite1.result.content[0].text, /尚未收錄於《目錄》/);
 
     const wikiOpen1 = await rpc(21, 'tools/call', {
       name: 'xingxi_open',
@@ -646,6 +647,18 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
       arguments: { title: '貓窩專案', offset: 200, limit: 2000 },
     });
     assert.match(wikiOpen2.result.content[0].text, /詳細紀錄文字/);
+
+    const wikiKindSearch = await rpc(24, 'tools/call', {
+      name: 'xingxi_read',
+      arguments: { keyword: '詳細紀錄文字', kind: 'wiki' },
+    });
+    assert.match(wikiKindSearch.result.content[0].text, /主題認識頁命中/);
+
+    const wikiDelete = await rpc(25, 'tools/call', {
+      name: 'xingxi_wiki_write',
+      arguments: { title: '貓窩專案', mode: 'delete' },
+    });
+    assert.match(wikiDelete.result.content[0].text, /已刪除主題頁「貓窩專案」/);
 
     // MCP xingxi_diary blocks overwriting an existing historical diary (>1 day old)
     mkdirSync(join(dataDir, 'xingxi', '日記'), { recursive: true });
@@ -1590,7 +1603,7 @@ test('Sidecar fresh-browse routes, HTML/JS UI controls, and XSS/URL safety work 
     assert.equal(clrRes.ok, true);
     assert.equal(clrRes.snapshot.speakUp.freshBrowse.items.length, 0);
 
-    // Verify served HTML & JS contain Fresh Browse controls and compile cleanly
+    // Verify served HTML & JS contain Fresh Browse + Wiki bootstrap controls and compile cleanly
     const html = readFileSync(join(REPO_ROOT, 'sidecar', 'index.html'), 'utf-8');
     const appJs = readFileSync(join(REPO_ROOT, 'sidecar', 'app.js'), 'utf-8');
     assert.match(html, /id="sp-freshEnabled"/);
@@ -1599,8 +1612,58 @@ test('Sidecar fresh-browse routes, HTML/JS UI controls, and XSS/URL safety work 
     assert.match(html, /id="sp-freshTime2"/);
     assert.match(html, /id="sp-freshWeatherResolved"/);
     assert.match(html, /id="btn-sp-fresh-refresh"/);
+    assert.match(html, /id="btn-xx-wiki-bootstrap"/);
     assert.match(appJs, /\/api\/speak-up\/fresh\/test-feed/);
+    assert.match(appJs, /\/api\/xingxi\/wiki\/bootstrap/);
     new vm.Script(appJs, { filename: 'sidecar/app.js' });
+
+    // Verify PreInvocation injects standalone xingxi.wikiRule on Turn 1 even when memory is disabled & wiki is empty
+    const hookEnv = { ...process.env, GEMINI_CAT_DATA_DIR: join(root, 'hook-wiki-data') };
+    mkdirSync(join(root, 'hook-wiki-data', 'fish-memory'), { recursive: true });
+    writeFileSync(
+      join(root, 'hook-wiki-data', 'fish-memory', 'store.json'),
+      JSON.stringify({ version: 1, policy: { enabled: false }, memories: [], ruler: { n: 0, df: {} }, turnSeq: 0, recentInjected: {}, traces: [] }),
+      'utf-8',
+    );
+    const hookOut = runHook(
+      'hooks/pre-invocation.mjs',
+      {
+        conversationId: 'conv-wiki-rule-test',
+        workspacePaths: [REPO_ROOT],
+        cwd: REPO_ROOT,
+        lastUserInput: '早安呀',
+        invocationNum: 1,
+      },
+      hookEnv,
+    );
+    const hookText = JSON.stringify(hookOut);
+    assert.match(hookText, /## 認識/);
+    assert.match(hookText, /## 找回過去/);
+    assert.match(hookText, /xingxi_wiki_write/);
+
+    // Verify POST /api/xingxi/wiki/bootstrap dispatches the historical distillation prompt
+    const bootDispatched = [];
+    const bootRoutes = {};
+    registerSidecarRoutes(
+      {
+        page() {},
+        api(path, fn, method = 'POST') { bootRoutes[`${method.toUpperCase()} ${path}`] = fn; },
+      },
+      FakeResponse,
+      {
+        root,
+        sendMessageFn: async (convId, text) => { bootDispatched.push({ convId, text }); },
+      },
+    );
+    const bootRes = await bootRoutes['POST /api/xingxi/wiki/bootstrap']({
+      conversationId: 'conv-boot-1',
+      workspaceUris: [`file:///${root.replace(/\\/g, '/')}`],
+    });
+    assert.equal(bootRes.ok, true);
+    assert.equal(bootRes.sent, true);
+    assert.equal(bootDispatched.length, 1);
+    assert.match(bootDispatched[0].text, /\[XINGXI_AUTO_PICKUP\]/);
+    assert.match(bootDispatched[0].text, /整理主題認識頁/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

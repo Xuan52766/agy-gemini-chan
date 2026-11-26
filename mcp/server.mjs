@@ -95,12 +95,18 @@ const TOOLS = [
   },
   {
     name: 'xingxi_read',
-    description: '檢索星汐長期檔案（記憶卡、認識/ 主題頁與按日分檔的日記）。不帶參數回傳總覽索引；帶 keyword 全文搜尋；帶 date（如 2026-11-14）查當日日記；支援 offset/maxChars 分頁。',
+    description:
+      '在我自己的長期檔案裡按線索查找：記憶卡（card）、主題認識頁（wiki）、按日日記（diary）與原始對話（raw）。不帶參數回傳總覽索引（若設 kind: "wiki" 列出全部認識頁）；帶 keyword 照字面搜尋（找不到不等於沒發生過，可換詞或改用 date 翻日記）；帶 date（YYYY-MM-DD）查當日日記；支援 offset / maxChars 分頁。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        keyword: { type: 'string', description: '搜尋關鍵詞' },
+        keyword: { type: 'string', description: '搜尋關鍵詞（照字面比對；找不到可換同義詞再搜）' },
+        kind: {
+          type: 'string',
+          enum: ['all', 'wiki', 'diary', 'card', 'raw'],
+          description: '限定搜尋種類：all=全部（預設）、wiki=僅主題認識頁、diary=僅日記、card=僅記憶卡、raw=僅原始對話',
+        },
         date: { type: 'string', description: '日期 YYYY-MM-DD 或 MM-DD' },
         file: { type: 'string', description: '指定檔名或片段' },
         maxChars: { type: 'number', description: '最大回傳字數（預設 2000）' },
@@ -110,7 +116,8 @@ const TOOLS = [
   },
   {
     name: 'xingxi_open',
-    description: '打開「認識/<主題>.md」主題頁（或傳入 "目錄" 檢視所有主題索引），回傳正文、[[雙向連結]]、被引用頁（linkedFrom）、缺頁清單與分頁資訊。',
+    description:
+      '打開我寫過的一頁主題認識（認識/<title>.md，或傳入 "目錄" 看總覽）。title 寫頁名（目錄裡 [[ ]] 中間的字），回傳正文與現場算出的關係（對外連結 links、被引用頁 linkedFrom、尚未建頁 missing）。名字對不上時會列出相近頁名；想查哪一頁提到過某件事，用 xingxi_read（填 keyword，kind 設 "wiki"）。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -124,18 +131,19 @@ const TOOLS = [
   },
   {
     name: 'xingxi_wiki_write',
-    description: '建立或更新「認識/<主題>.md」主題頁（或「目錄」），適合整理人物、偏好、專案、長期經歷並以 [[主題]] 雙向連結；覆寫既有頁時會自動留存 .history/ 當日初版快照。',
+    description:
+      '建立、更新或刪除「認識/<title>.md」主題頁（傳 title: "目錄" 可維護總覽目錄，每頁一行「- [[標題]]：這一頁講什麼」，不寫結論）。適合沉澱對人物、專案、偏好與長期主題的理解並以 [[主題]] 雙向連結；覆寫或刪除前自動備份當日初版快照至 .history/。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['title', 'content'],
+      required: ['title'],
       properties: {
         title: { type: 'string', description: '主題頁標題（或「目錄」，不可含路徑斜線或特殊符號）' },
-        content: { type: 'string', description: 'Markdown 內容，可用 [[其他主題]] 建立雙向連結' },
+        content: { type: 'string', description: 'Markdown 內容，可用 [[其他主題]] 建立雙向連結（mode="delete" 時可省略）' },
         mode: {
           type: 'string',
-          enum: ['replace', 'append'],
-          description: 'replace=整頁更新（預設，自動備份當日初版快照）；append=接續追加並自動去重',
+          enum: ['replace', 'append', 'delete'],
+          description: 'replace=整頁更新（預設）；append=接續追加並自動去重；delete=備份後刪除過時／已合併頁（不可刪除「目錄」）',
         },
       },
     },
@@ -372,11 +380,25 @@ async function callTool(name, args = {}) {
       if (!res.ok) {
         return { content: [{ type: 'text', text: `✗ ${res.error}` }] };
       }
+      if (res.deleted) {
+        const parts = [
+          `已刪除主題頁「${res.title}」（${res.relPath}）${res.backupCreated ? '，已留存當日快照至 .history/' : ''}。`,
+        ];
+        if (res.linkedFrom?.length) {
+          parts.push(`提醒：以下主題頁仍連向已刪除的 [[${res.title}]]，請順手更新或清理：${res.linkedFrom.map((t) => `[[${t}]]`).join('、')}，並同步更新《目錄》。`);
+        } else {
+          parts.push('提醒：若《目錄》中仍列有此頁，請順手呼叫 `xingxi_wiki_write({ title: "目錄", content: ... })` 移除。');
+        }
+        return { content: [{ type: 'text', text: parts.join('\n') }] };
+      }
       const parts = [
         res.skipped
           ? `主題頁「${res.title}」已包含相同片段，略過重複寫入（${res.relPath}）。`
           : `已${res.mode === 'append' ? '追加' : '寫入'}主題頁「${res.title}」（${res.relPath}，共 ${res.chars} 字）${res.backupCreated ? '，已留存當日初版快照' : ''}。`,
       ];
+      if (res.inCatalog === false) {
+        parts.push(`提醒：「${res.title}」尚未收錄於《目錄》，請記得呼叫 \`xingxi_wiki_write({ title: "目錄", content: ... })\` 補上一行「- [[${res.title}]]：這一頁講什麼」（只寫簡介、不寫結論）。`);
+      }
       if (res.missing?.length) {
         parts.push(`提示：文中提到尚未建頁的連結 ${res.missing.map((t) => `[[${t}]]`).join('、')}。`);
       }

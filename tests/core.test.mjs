@@ -2141,10 +2141,38 @@ test('Phase A & B & D core: xingxi-wiki CRUD, .history snapshot, paging, gap rep
     assert.ok(snap.wikiCatalogText.includes('手沖咖啡'));
     assert.ok(snap.wikiGaps.outsideCatalog.includes('草莓大福'));
 
-    // Startup context injects wiki catalog block right alongside card & diaries
+    // Startup context injects wiki catalog block right alongside card & diaries (with dsh-world first-person header)
     const startup = buildSessionStartupContext(root);
-    assert.match(startup, /星汐主題認識目錄/);
+    assert.match(startup, /我寫過的認識/);
     assert.match(startup, /\[\[手沖咖啡\]\]/);
+
+    // searchXingxiArchive kind='wiki' filters strictly to wiki pages + includes live relations & zero-hit fallback hint
+    const wikiOnlyHit = searchXingxiArchive({ keyword: '衣索比亞', kind: 'wiki' }, root);
+    assert.equal(wikiOnlyHit.ok, true);
+    assert.match(wikiOnlyHit.text, /手沖咖啡/);
+    assert.match(wikiOnlyHit.text, /連出：\[\[草莓大福\]\]/);
+    assert.doesNotMatch(wikiOnlyHit.text, /日記/);
+
+    const zeroHit = searchXingxiArchive({ keyword: '不存在的神秘詞彙XYZ', kind: 'wiki' }, root);
+    assert.equal(zeroHit.ok, false);
+    assert.match(zeroHit.text, /原文可能用了別的說法/);
+
+    // writeWikiPage mode='delete' refuses deleting 目錄, backs up & deletes obsolete topic page with linkedFrom report
+    const delCat = writeWikiPage(root, { title: '目錄', mode: 'delete', now: todayMs });
+    assert.equal(delCat.ok, false);
+    const delPage = writeWikiPage(root, { title: '草莓大福', mode: 'delete', now: todayMs });
+    assert.equal(delPage.ok, true);
+    assert.equal(delPage.deleted, true);
+    assert.equal(delPage.backupCreated, true);
+    assert.equal(existsSync(delPage.backupPath), true);
+    assert.deepEqual(delPage.linkedFrom, ['手沖咖啡']);
+    assert.equal(openWikiPage(root, '草莓大福').ok, false);
+
+    // Pickup prompt lists wikiDir & existing pages, and includes 3-step review rules
+    const pickupPrompt = buildXingxiPickupPrompt(root, { date: today, scheduleMode: 'both' });
+    assert.match(pickupPrompt, /主題認識頁資料夾/);
+    assert.match(pickupPrompt, /\[\[手沖咖啡\]\]/);
+    assert.match(pickupPrompt, /不寫結論/);
   });
 });
 
@@ -2168,6 +2196,8 @@ test('central prompt registry customizes every injection timing while preserving
         'speakUp.wrapperIntro': '（自訂搭話開場引導）',
         'speakUp.proactiveCue': '【自訂暫離提示】{{statusTag}}',
         'speakUp.freshBrowseHeader': '【自訂見聞標題】',
+        'xingxi.wikiRule': '## 自訂認識規則\n位置：{{wikiDir}}',
+        'xingxi.wikiCatalogHeader': '【自訂認識目錄標題】{{wikiDir}}',
         'xingxi.pickupIntro': '（自訂拾星開場 {{date}}）',
         'xingxi.pickupRulesBoth': '【自訂拾星完整原則】只保留精華',
         'telegram.incomingIntro': '（自訂TG來訊來自 {{sender}}）',
@@ -2207,6 +2237,11 @@ test('central prompt registry customizes every injection timing while preserving
     assert.ok(pickup.startsWith('[XINGXI_AUTO_PICKUP]'));
     assert.match(pickup, /自訂拾星開場 2026-11-26/);
     assert.match(pickup, /【自訂拾星完整原則】/);
+
+    // Custom wiki catalog header flows into buildSessionStartupContext when a wiki page exists
+    writeWikiPage(root, { title: '咖啡筆記', content: '淺焙為主。', now });
+    const customStartup = buildSessionStartupContext(root);
+    assert.match(customStartup, /【自訂認識目錄標題】/);
 
     // Telegram incoming keeps [TELEGRAM_INCOMING] + 訊息內容： structure while using custom intro
     const tgPrompt = formatTelegramIncomingPrompt({ text: '到家囉', senderLabel: '@owner', now, root });

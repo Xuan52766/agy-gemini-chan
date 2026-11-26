@@ -34,6 +34,7 @@ import {
   buildWikiGapReport,
   computePageRelations,
   extractWikiLinks,
+  getWikiDir,
   listWikiPages,
   normalizeTitleKey,
   renderWikiCatalogBlock,
@@ -914,15 +915,18 @@ export function readMemoryCard(root) {
 
 /**
  * Search across `記憶卡.md`, `認識/*.md`, `日記/*.md`, and `原始對話/*.txt` (mirrors `xingxi_read` tool).
- * Defaults to a compact 2,000-char page with explicit `offset` / `truncated` / `nextOffset` reporting.
+ * Defaults to a compact 2,000-char page with explicit `offset` / `truncated` / `nextOffset` reporting,
+ * optional `kind` filtering (`all` | `wiki` | `diary` | `card` | `raw`), and zero-hit literal-match guidance.
  */
-export function searchXingxiArchive({ keyword = '', date = '', file = '', maxChars = 2000, offset = 0 } = {}, root) {
+export function searchXingxiArchive({ keyword = '', date = '', file = '', kind = 'all', maxChars = 2000, offset = 0 } = {}, root) {
   const files = listXingxiFiles(root, { includeRaw: true });
   const limit = Math.max(200, Math.min(20000, Number(maxChars) || 2000));
   const safeOffset = Math.max(0, Math.round(Number(offset) || 0));
   const k = String(keyword || '').trim();
   const d = String(date || '').trim();
   const fName = String(file || '').trim();
+  const rawKind = String(kind || 'all').trim().toLowerCase();
+  const effectiveKind = ['wiki', 'diary', 'card', 'raw'].includes(rawKind) ? rawKind : 'all';
 
   const pageText = (fullText) => {
     const totalChars = fullText.length;
@@ -950,11 +954,24 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
     .sort();
 
   if (!k && !d && !fName) {
+    if (effectiveKind === 'wiki') {
+      const pages = listWikiPages(root);
+      const topicPages = pages.filter((p) => !p.isCatalog);
+      if (!topicPages.length) {
+        return pageText('目前尚無主題認識頁；可於對話中或整理時用 `xingxi_wiki_write` 新開主題頁並維護 `目錄`。');
+      }
+      const lines = [
+        `主題認識頁共 ${topicPages.length} 頁（用 \`xingxi_open({ title })\` 開啟全文與雙向連結）：`,
+        '',
+        ...topicPages.map((p) => `- [[${p.title}]]（${p.chars} 字${p.links.length ? `｜連結：${p.links.slice(0, 4).map((l) => `[[${l}]]`).join('、')}` : ''}）`),
+      ];
+      return pageText(lines.join('\n'));
+    }
     const card = files.find((x) => /記憶卡|记忆卡/.test(x.name));
     const lines = [`檔案共有 ${files.length} 個檔案：`, ''];
     if (card) lines.push(`· ${card.name}（${card.text.length} 字）`);
     if (wikiFiles.length) {
-      lines.push(`· 主題認識頁 ${wikiFiles.length} 份（用 \`xingxi_open\` 按標題翻閱）`);
+      lines.push(`· 主題認識頁 ${wikiFiles.length} 份（用 \`xingxi_open\` 按標題翻閱，或 \`kind: "wiki"\` 列出）`);
     }
     for (const o of otherFiles) lines.push(`· ${o.name}（${o.text.length} 字）`);
     if (diaryDates.length) {
@@ -965,7 +982,7 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
     if (rawDates.length) {
       lines.push(`· 原始對話 ${rawDates.length} 天：${rawDates[0]} ~ ${rawDates[rawDates.length - 1]}`);
     }
-    lines.push('', '查詢方式：給 `keyword` 全文檢索、`date` 看該日日記、`file` 看指定檔案，或用 `xingxi_open` 翻閱認識頁。');
+    lines.push('', '查詢方式：給 `keyword`（可搭配 `kind: "wiki"|"diary"|"card"|"raw"`）全文檢索、`date` 看該日日記、`file` 看指定檔案，或用 `xingxi_open` 翻閱認識頁。');
     return pageText(lines.join('\n'));
   }
 
@@ -1005,10 +1022,23 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
     return pageText(full);
   }
 
-  const wikiHits = searchWikiPages(root, k, { limit: 6, excerptChars: 180 });
+  const includeWiki = effectiveKind === 'all' || effectiveKind === 'wiki';
+  const wikiHits = includeWiki
+    ? searchWikiPages(root, k, { limit: 8, excerptChars: 180, includeRelations: true })
+    : [];
+
+  const scopeFiles = effectiveKind === 'wiki'
+    ? []
+    : files.filter((f) => {
+        if (/^(?:認識|认识)\//.test(f.name)) return false;
+        if (effectiveKind === 'diary') return /^(?:日記|日记)\//.test(f.name);
+        if (effectiveKind === 'card') return /記憶卡|记忆卡/.test(f.name);
+        if (effectiveKind === 'raw') return /^(?:原始對話|原始对话)\//.test(f.name);
+        return true;
+      });
+
   const results = [];
-  for (const f of files) {
-    if (/^(?:認識|认识)\//.test(f.name)) continue;
+  for (const f of scopeFiles) {
     const lines = f.text.split(/\r?\n/);
     let count = 0;
     const snippets = [];
@@ -1023,7 +1053,11 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
   }
 
   if (!results.length && !wikiHits.length) {
-    return { ok: false, text: `檔案裡沒有「${k}」（已檢查 ${files.length} 個檔案）` };
+    const checkedCount = (includeWiki ? wikiFiles.length : 0) + scopeFiles.length;
+    return {
+      ok: false,
+      text: `照字面沒找到「${k}」（已檢查 ${checkedCount} 個檔案）。原文可能用了別的說法（如口語代稱或同義詞）：換個關鍵詞再搜，或看『認識/目錄』用 \`xingxi_open\` 翻相關主題頁，或帶 \`date\` 按日期翻那幾天的日記。`,
+    };
   }
 
   results.sort((a, b) => b.count - a.count);
@@ -1031,7 +1065,15 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
   if (wikiHits.length) {
     blocks.push(
       `【主題認識頁命中 ${wikiHits.length} 頁（可用 \`xingxi_open\` 展開全文與雙向連結）】\n` +
-      wikiHits.map((w) => `- [[${w.title}]]（${w.chars} 字）：${w.excerpt}`).join('\n'),
+      wikiHits.map((w) => {
+        const rel = w.relations || {};
+        const relTags = [];
+        if (rel.links?.length) relTags.push(`連出：${rel.links.slice(0, 4).map((t) => `[[${t}]]`).join('、')}`);
+        if (rel.linkedFrom?.length) relTags.push(`連入：${rel.linkedFrom.slice(0, 4).map((t) => `[[${t}]]`).join('、')}`);
+        if (rel.missing?.length) relTags.push(`缺頁：${rel.missing.slice(0, 3).map((t) => `[[${t}]]`).join('、')}`);
+        const relSuffix = relTags.length ? `\n  （${relTags.join('｜')}）` : '';
+        return `- [[${w.title}]]（${w.chars} 字）：${w.excerpt}${relSuffix}`;
+      }).join('\n'),
     );
   }
   if (results.length) {
@@ -1439,13 +1481,18 @@ export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = 
 }
 
 export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', material } = {}) {
-  const { cardPath, diaryDir } = ensureXingxiArchive(root);
+  const { cardPath, diaryDir, wikiDir } = ensureXingxiArchive(root);
   const day = date || localDayKey();
+  const topicPages = listWikiPages(root).filter((p) => !p.isCatalog);
+  const wikiSummary = topicPages.length
+    ? `目前共 ${topicPages.length} 頁：${topicPages.slice(0, 12).map((p) => `[[${p.title}]]`).join('、')}${topicPages.length > 12 ? '…' : ''}`
+    : '目前尚無主題頁，若今日或既有記憶已有重要人物、專案、偏好或常聊話題，可趁這次整理建出首批主題頁並同步寫入 `目錄`';
+
   const modeNote = scheduleMode === 'card_only'
-    ? '本次模式為「只拾星更新記憶卡」：請只整理有長期價值的條目呼叫 `xingxi_append` 寫入記憶卡對應章節，這次不必生成日記。'
+    ? '本次模式為「只拾星更新記憶卡 ＋ 認識」：請整理長期價值條目呼叫 `xingxi_append` 寫入記憶卡，並視需要用 `xingxi_wiki_write` 維護主題認識頁與 `目錄`，這次不必生成日記。'
     : scheduleMode === 'diary_only'
       ? `本次模式為「只寫今日日記」：請替今天發生的事與心情脈絡呼叫 \`xingxi_diary\`（參數為 \`entry\` 與 \`date: "${day}"\`）寫進今日日記。`
-      : `本次模式為「拾星（更新記憶卡 ＋ 寫今日日記）」：長期仍有用的重點用 \`xingxi_append\` 加到記憶卡第 1~8 章，今天發生的日常細節與情緒脈絡用 \`xingxi_diary\`（參數為 \`entry\` 與 \`date: "${day}"\`）寫成今日日記。`;
+      : `本次模式為「拾星（日記 ＋ 記憶卡 ＋ 認識）」：依序用 \`xingxi_diary\`（參數為 \`entry\` 與 \`date: "${day}"\`）寫今日日記、用 \`xingxi_append\` 維護記憶卡第 1~8 章、並用 \`xingxi_wiki_write\` 整理主題認識頁與 \`目錄\`。`;
 
   const parts = [
     XINGXI_PICKUP_MARKER,
@@ -1454,6 +1501,7 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
     modeNote,
     `- 記憶卡位置：\`${cardPath}\`（先呼叫 \`xingxi\` 確認現有內容，避免重複）`,
     `- 日記資料夾：\`${diaryDir}\`（目標日期：\`${day}\`，\`entry\` 開頭不必自帶 \`# ${day} 日記\` 標題，系統會自動補上）`,
+    `- 主題認識頁資料夾：\`${wikiDir}\`（${wikiSummary}）`,
   ];
 
   const existingDiary = scheduleMode === 'card_only' ? '' : readExistingDiarySnippet(root, day, 1500);
@@ -1481,7 +1529,7 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
     : scheduleMode === 'card_only'
       ? 'xingxi.pickupRulesCardOnly'
       : 'xingxi.pickupRulesBoth';
-  const rulesText = resolvePrompt(rulesKey, { date: day }, root);
+  const rulesText = resolvePrompt(rulesKey, { date: day, wikiDir }, root);
   if (rulesText) {
     parts.push('', rulesText);
   }
@@ -1490,6 +1538,62 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
     parts.push('', gapReport);
   }
   return parts.join('\n');
+}
+
+/**
+ * Builds an on-demand distillation prompt to create/organize `認識/*.md` + `目錄.md`
+ * from existing Memory Card, historical Diaries, and current Wiki pages.
+ */
+export function buildWikiBootstrapPrompt(root) {
+  const { wikiDir } = ensureXingxiArchive(root);
+  const files = listXingxiFiles(root);
+  const diaryDates = files
+    .filter((f) => /^(?:日記|日记)\//.test(f.name))
+    .map((f) => detectDate(f.name))
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort();
+  const diarySummary = diaryDates.length
+    ? `共 ${diaryDates.length} 天：${diaryDates[0]} ~ ${diaryDates[diaryDates.length - 1]}`
+    : '尚無日記';
+  const topicPages = listWikiPages(root).filter((p) => !p.isCatalog);
+  const existingSummary = topicPages.length
+    ? `目前已有 ${topicPages.length} 頁：${topicPages.slice(0, 12).map((p) => `[[${p.title}]]`).join('、')}${topicPages.length > 12 ? '…' : ''}`
+    : '目前 0 頁，尚未建立任何主題頁';
+
+  const body = resolvePrompt(
+    'xingxi.wikiBootstrapPrompt',
+    { wikiDir, existingSummary, diarySummary },
+    root,
+  );
+  const parts = [XINGXI_PICKUP_MARKER, body];
+  const gapReport = buildWikiGapReport(root);
+  if (gapReport) parts.push('', gapReport);
+  return parts.join('\n');
+}
+
+/**
+ * Dispatches the one-click historical Wiki distillation prompt to the active verified conversation.
+ */
+export async function executeWikiBootstrap({ root, targetConvId = '', sender = null } = {}) {
+  const promptText = buildWikiBootstrapPrompt(root);
+  let sent = false;
+  let sendError = '';
+  if (typeof sender === 'function' && targetConvId) {
+    try {
+      await sender(targetConvId, promptText);
+      sent = true;
+    } catch (err) {
+      sendError = err?.message || String(err);
+    }
+  } else {
+    sendError = '目前沒有已連線的 gemini_cat 對話視窗可供派發，請先開啟或回到貓窩對話後再試。';
+  }
+  return {
+    ok: sent,
+    sent,
+    error: sendError,
+    promptPreview: promptText.slice(0, 240),
+  };
 }
 
 /**
@@ -1758,7 +1862,11 @@ export function buildSessionStartupContext(
     blocks.push('【星汐長期記憶卡】記憶卡目前剛建檔還沒有寫入具體經歷；若這段對話裡有值得長留一週以上的約定、性格或里程碑，記得用 `xingxi_append` 寫入記憶卡，長篇主題可寫入 `xingxi_wiki_write`。');
   }
 
-  const wikiCatalogBlock = renderWikiCatalogBlock(root, { maxChars: maxWikiCatalogChars });
+  const wikiCatalogHeader = resolvePrompt('xingxi.wikiCatalogHeader', { wikiDir: getWikiDir(root) }, root);
+  const wikiCatalogBlock = renderWikiCatalogBlock(root, {
+    maxChars: maxWikiCatalogChars,
+    header: wikiCatalogHeader,
+  });
   if (wikiCatalogBlock) {
     blocks.push(wikiCatalogBlock);
   }
