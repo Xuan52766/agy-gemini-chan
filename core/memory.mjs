@@ -63,6 +63,7 @@ export function buildDefaultMemoryRuleTemplate() {
   return [
     '【對話內長期記憶提醒（今日剩餘額度 {{left}}/{{dailyQuota}}）】這一輪如果出現值得長期記住的事（{{ownerName}}的喜好／禁忌／作息、明確約定、身體狀態或重要里程碑），請直接安靜呼叫 `remember` 記下來——**不用等對方特地提醒**，也不要在回覆裡說「我記住了」。日常純寒暄與一次性流水瑣事不用記。',
     '寫法規範：一條一件事；自稱用「{{selfPronoun}}」，{{ownerCall}}{{selfGuard}}；不要寫「今天／昨天」（時間交給系統）；若屬狀態更新（如作息、住處、計畫變更），請加填 `factKey`（如「{{ownerPronoun}}.作息」）或 `supersedes`。',
+    '主題歸檔分工：日常單點事實交給 `remember`；人物、偏好、專案或長篇經歷可先看啟動注入的 `認識/目錄`（`xingxi_open` 細讀），需要整理或補充成頁時用 `xingxi_wiki_write` 維護，並以 `[[主題]]` 串聯相關頁。',
   ].join('\n');
 }
 
@@ -842,6 +843,30 @@ export function batchRememberMemories(items = [], { root, now = Date.now(), bypa
     else skipped++;
   }
   return { ok: true, added, reinforced, skipped };
+}
+
+/**
+ * Read-only query: active memories created on a specific local calendar day (`YYYY-MM-DD`).
+ */
+export function listMemoriesCreatedOnDay(root, dayKey, { limit = 12 } = {}) {
+  const targetDay = String(dayKey || '').trim();
+  if (!targetDay) return [];
+  const data = loadMemoryStore(root);
+  const matched = (data.memories || []).filter(
+    (m) => m && !m.superseded && m.createdAt && localDayKey(m.createdAt) === targetDay,
+  );
+  return limit > 0 ? matched.slice(-limit) : matched;
+}
+
+/**
+ * Read-only query: active high-importance memory anchors (`importance >= minImportance`).
+ */
+export function listCoreMemoryAnchors(root, { minImportance = 0.85, limit = 8 } = {}) {
+  const data = loadMemoryStore(root);
+  const matched = (data.memories || []).filter(
+    (m) => m && !m.superseded && Number(m.importance || 0) >= minImportance,
+  );
+  return limit > 0 ? matched.slice(-limit) : matched;
 }
 
 export function getMemorySnapshot(root, now = Date.now()) {

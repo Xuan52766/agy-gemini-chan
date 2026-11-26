@@ -1572,7 +1572,9 @@ button:disabled {
 
 .leg-core { background: #fff4d6; box-shadow: 0 0 6px #eab354; }
 .leg-card { background: #8b88f8; }
+.leg-wiki { background: #38e8c6; box-shadow: 0 0 6px rgba(56, 232, 198, 0.72); }
 .leg-diary { background: #eab354; }
+.leg-wikilink { background: #5eead4; border-radius: 2px !important; width: 12px !important; height: 2.5px !important; }
 .leg-bridge { background: #fbbf24; }
 
 .star-detail {
@@ -1648,6 +1650,36 @@ button:disabled {
   font-style: normal;
   font-weight: 600;
   color: var(--accent);
+}
+
+.star-bridge-chip.wiki-chip {
+  border-color: color-mix(in srgb, #2dd4bf 48%, var(--line));
+}
+
+.star-bridge-chip.wiki-chip:hover {
+  border-color: #2dd4bf;
+  background: color-mix(in srgb, #2dd4bf 14%, var(--surface));
+}
+
+.star-bridge-chip.wiki-chip em {
+  color: light-dark(#0f766e, #5eead4);
+}
+
+.wiki-card {
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out);
+  border-radius: var(--radius-sm);
+  padding-inline: 6px;
+}
+
+.wiki-card:hover {
+  background: var(--surface-subtle);
+}
+
+.wiki-meta-links {
+  margin-top: 3px;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
 }
 
 .targets-wrap {

@@ -75,6 +75,7 @@ import {
   restoreXingxiBackup,
   saveXingxiConfig,
 } from '../core/xingxi.mjs';
+import { openWikiPage, writeWikiPage } from '../core/xingxi-wiki.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -110,6 +111,9 @@ function computeDataVersionToken(root, convId, inProject) {
     join(p.telegramDir, 'outbox'),
     p.xingxiDir,
     join(p.xingxiDir, 'diary'),
+    join(p.xingxiDir, '日記'),
+    join(p.xingxiDir, '認識'),
+    join(p.xingxiDir, '认识'),
   ];
   let maxMtime = 0;
   let totalEntries = 0;
@@ -393,7 +397,20 @@ export function registerSidecarRoutes(
   }, 'POST');
 
   router.api('/api/xingxi/diary', (data = {}) => {
-    const res = appendDiary({ date: data.date, entry: data.entry }, root);
+    const res = appendDiary({ date: data.date, entry: data.entry, allowHistorical: true }, root);
+    return { ...res, snapshot: getFullStateSnapshot({ root }) };
+  }, 'POST');
+
+  router.api('/api/xingxi/wiki', (data = {}) => {
+    return openWikiPage(root, data.title, { offset: data.offset, limit: data.limit });
+  }, 'GET');
+
+  router.api('/api/xingxi/wiki', (data = {}) => {
+    const res = writeWikiPage(root, {
+      title: data.title,
+      content: data.content,
+      mode: data.mode || 'replace',
+    });
     return { ...res, snapshot: getFullStateSnapshot({ root }) };
   }, 'POST');
 

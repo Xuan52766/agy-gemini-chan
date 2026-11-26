@@ -527,7 +527,7 @@
             <h2>
               <button type="button" class="title-hint" interestfor="tip-xx-main" popovertarget="tip-xx-main" popovertargetaction="show">星汐記憶星圖</button>
             </h2>
-            <div id="tip-xx-main" class="hint-popover" popover="hint">開新對話時自動注入八章核心記憶卡與近 3 天日記。支援拖曳旋轉、滾輪縮放與點星檢視。</div>
+            <div id="tip-xx-main" class="hint-popover" popover="hint">開新對話時自動注入八章核心記憶卡、認識目錄與近 3 天日記。支援拖曳旋轉、滾輪縮放與點星檢視。</div>
             <span id="xingxi-stats-badge" class="meta-text tabular">0 顆星</span>
           </div>
 
@@ -573,7 +573,9 @@
             <div class="starmap-legend" aria-hidden="true">
               <span class="leg"><i class="leg-core"></i>核心星</span>
               <span class="leg"><i class="leg-card"></i>記憶卡</span>
+              <span class="leg"><i class="leg-wiki"></i>主題頁</span>
               <span class="leg"><i class="leg-diary"></i>日記</span>
+              <span class="leg"><i class="leg-wikilink"></i>雙向連結</span>
               <span class="leg"><i class="leg-bridge"></i>共詞橋</span>
             </div>
             <div id="star-detail" class="star-detail">點選任一星點檢視關聯星座與全文。</div>
@@ -638,6 +640,47 @@
           </div>
           <div id="xingxi-sched-logs" class="item-list compact-top"></div>
         </div>
+
+        <details class="drawer" id="drawer-xingxi-wiki">
+          <summary>主題認識頁 <span id="xingxi-wiki-badge" class="meta-text tabular">0 頁</span></summary>
+          <div class="drawer-body">
+            <div id="xingxi-wiki-gaps" class="dirty-bar hidden" role="status"></div>
+            <div id="xingxi-wiki-list" class="item-list scroll-list"></div>
+            <div class="sub-group">
+              <div class="block-head">
+                <h4>
+                  <button type="button" class="title-hint" interestfor="tip-xx-wiki-edit" popovertarget="tip-xx-wiki-edit" popovertargetaction="show">新增或編輯主題頁</button>
+                </h4>
+                <div id="tip-xx-wiki-edit" class="hint-popover" popover="hint">寫入「認識/&lt;主題&gt;.md」（或填「目錄」維護總覽）；正文可用 [[主題]] 建立雙向連結，覆寫時自動留存 .history/ 當日初版快照。</div>
+                <div class="btn-group-compact">
+                  <button id="btn-xx-wiki-catalog" type="button" class="btn-mini">載入目錄</button>
+                  <button id="btn-xx-wiki-clear" type="button" class="btn-mini">清空</button>
+                </div>
+              </div>
+              <div class="field-grid-2">
+                <div class="field">
+                  <label for="xx-wiki-title">主題標題</label>
+                  <input id="xx-wiki-title" type="text" placeholder="例如：咖啡偏好 或 目錄" maxlength="80" />
+                </div>
+                <div class="field">
+                  <label for="xx-wiki-mode">寫入方式</label>
+                  <select id="xx-wiki-mode">
+                    <option value="replace" selected>整頁更新（自動備份）</option>
+                    <option value="append">接續追加（自動去重）</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label for="xx-wiki-content" class="sr-only">主題頁正文</label>
+                <textarea id="xx-wiki-content" rows="4" placeholder="輸入 Markdown 內容，可用 [[其他主題]] 建立雙向連結…"></textarea>
+              </div>
+              <div class="action-row-end">
+                <span id="xx-wiki-save-msg" class="muted-meta" role="status"></span>
+                <button id="btn-xx-wiki-save" type="button" class="btn-primary">儲存主題頁</button>
+              </div>
+            </div>
+          </div>
+        </details>
 
         <details class="drawer" open>
           <summary>星曆日記</summary>

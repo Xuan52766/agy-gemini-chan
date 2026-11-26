@@ -53,6 +53,7 @@
     lastStarDrawMs: 0,
     // Interactive UI states preserved across 1.5s polls
     expandedDiaries: new Set(),
+    expandedWikis: new Set(),
     expandedPersonas: new Set(),
     editingMemId: '',
     renamingPersonaId: '',
@@ -566,10 +567,12 @@
     return c;
   }
 
+  const WIKI_STAR_HEX = '#38e8c6';
   const pearlPaletteSprites = STAR_PALETTE_HEX.map(makePearlSprite);
   const pearlMonthSprites = Object.fromEntries(Object.entries(MONTH_HEX).map(([k, v]) => [k, makePearlSprite(v)]));
   const pearlDefaultSprite = makePearlSprite('#eaf0ff');
   const pearlCoreSprite = makePearlSprite('#ffe6a1');
+  const pearlWikiSprite = makePearlSprite(WIKI_STAR_HEX);
 
   function makeSeededRand(seed) {
     let a = seed >>> 0;
@@ -701,6 +704,7 @@
     const sp = state.spotlightChapter;
     if (!sp) return true;
     if (sp === 'diary') return s.kind === 'diary';
+    if (sp === 'wiki') return s.kind === 'wiki';
     return s.kind === 'card' && Number(s.chapter) === Number(sp);
   }
 
@@ -709,11 +713,13 @@
     if (!bar) return;
     const presentChapters = new Set();
     let hasDiary = false;
+    let hasWiki = false;
     for (const s of state.stars3D) {
       if (s.kind === 'diary') hasDiary = true;
+      else if (s.kind === 'wiki') hasWiki = true;
       else if (Number(s.chapter) >= 1 && Number(s.chapter) <= 8) presentChapters.add(Number(s.chapter));
     }
-    if (!presentChapters.size && !hasDiary) {
+    if (!presentChapters.size && !hasDiary && !hasWiki) {
       bar.innerHTML = '';
       return;
     }
@@ -726,6 +732,12 @@
         `<button type="button" class="ch-dot-btn${active ? ' active' : ''}" data-spot="${key}" style="--dot-color:${CHAPTER_HEX[ch]}" title="${CHAPTER_NAMES[ch]}" aria-label="篩選${CHAPTER_NAMES[ch]}" aria-pressed="${active}"></button>`,
       );
     }
+    if (hasWiki) {
+      const active = state.spotlightChapter === 'wiki';
+      items.push(
+        `<button type="button" class="ch-dot-btn${active ? ' active' : ''}" data-spot="wiki" style="--dot-color:${WIKI_STAR_HEX}" title="主題認識頁" aria-label="篩選主題認識頁" aria-pressed="${active}"></button>`,
+      );
+    }
     if (hasDiary) {
       const active = state.spotlightChapter === 'diary';
       items.push(
@@ -735,7 +747,9 @@
     if (state.spotlightChapter) {
       const lbl = state.spotlightChapter === 'diary'
         ? '星曆日記 ×'
-        : `${CHAPTER_NAMES[Number(state.spotlightChapter)] || ''} ×`;
+        : state.spotlightChapter === 'wiki'
+          ? '主題認識頁 ×'
+          : `${CHAPTER_NAMES[Number(state.spotlightChapter)] || ''} ×`;
       items.push(`<span class="ch-bar-label" data-spot-clear="1" title="點擊清除章節篩選">${esc(lbl)}</span>`);
     }
     bar.innerHTML = items.join('');
@@ -786,6 +800,7 @@
 
   function pickStarColorAndSprite(s) {
     if (s.isCore) return { hex: '#ffe6a1', sprite: pearlCoreSprite };
+    if (s.kind === 'wiki') return { hex: WIKI_STAR_HEX, sprite: pearlWikiSprite };
     if (s.kind === 'diary') {
       const m = Number(String(s.date || '').slice(5, 7));
       return {
@@ -883,7 +898,7 @@
 
     const firstByChapter = new Map();
     for (const s of cloned) {
-      s.bodySize = (s.kind === 'diary' ? 7 : 8.5)
+      s.bodySize = (s.kind === 'diary' ? 7 : s.kind === 'wiki' ? 10.5 : 8.5)
         + Math.min(10, Math.log10(1 + String(s.text || '').length) * 4.4) * 0.76;
       if (s.kind === 'card' && Number(s.chapter) > 0 && !firstByChapter.has(Number(s.chapter))) {
         firstByChapter.set(Number(s.chapter), s);
@@ -938,7 +953,9 @@
       for (const s of nonCore) {
         const gKey = s.kind === 'diary'
           ? `diary:${String(s.date || '').slice(0, 7) || 'all'}`
-          : `ch:${Number(s.chapter) || 0}`;
+          : s.kind === 'wiki'
+            ? 'wiki'
+            : `ch:${Number(s.chapter) || 0}`;
         if (!groups.has(gKey)) groups.set(gKey, []);
         groups.get(gKey).push(s);
       }
@@ -1024,8 +1041,16 @@
       }
     }
 
+    // Emit auxiliary links first and real [[wiki-link]] edges last so wiki links render crisply on top
     for (const l of rawLinks) {
-      if (l.kind === 'chapter') continue;
+      if (l.kind === 'chapter' || l.kind === 'wiki-link') continue;
+      const a = byId.get(l.source);
+      const b = byId.get(l.target);
+      if (!a || !b) continue;
+      pushLink(a, b, l.kind, { label: l.label, weight: l.weight });
+    }
+    for (const l of rawLinks) {
+      if (l.kind !== 'wiki-link') continue;
       const a = byId.get(l.source);
       const b = byId.get(l.target);
       if (!a || !b) continue;
@@ -1172,9 +1197,18 @@
       detail.textContent = '點選任一星點檢視關聯星座與全文。';
       return;
     }
+    const wikiLinks = [];
     const bridges = [];
     for (const l of state.starLinks3D) {
-      if (l.kind === 'bridge' && l.label && (l.a.id === star.id || l.b.id === star.id)) {
+      if (l.kind === 'wiki-link' && (l.a.id === star.id || l.b.id === star.id)) {
+        const other = l.a.id === star.id ? l.b : l.a;
+        const fullOther = getFullStarHeadline(other);
+        const previewOther = fullOther.length > 34 ? `${fullOther.slice(0, 34)}…` : fullOther;
+        const chipLabel = (l.label && l.label !== star.title)
+          ? l.label
+          : (other.kind === 'wiki' ? other.title : '引用此頁');
+        wikiLinks.push({ label: chipLabel || other.title || '', targetId: other.id, preview: previewOther });
+      } else if (l.kind === 'bridge' && l.label && (l.a.id === star.id || l.b.id === star.id)) {
         const other = l.a.id === star.id ? l.b : l.a;
         const fullOther = getFullStarHeadline(other);
         const previewOther = fullOther.length > 34 ? `${fullOther.slice(0, 34)}…` : fullOther;
@@ -1183,9 +1217,11 @@
     }
     const kindTag = star.isCore
       ? '核心星｜第一章・我是誰'
-      : star.kind === 'diary'
-        ? `星曆日記｜${star.date || star.doc}`
-        : `八章記憶卡｜${star.chapterName || star.doc}${star.eventDate ? `（事件日 ${star.eventDate}）` : ''}`;
+      : star.kind === 'wiki'
+        ? `主題認識頁｜認識/${star.title || star.doc}.md`
+        : star.kind === 'diary'
+          ? `星曆日記｜${star.date || star.doc}`
+          : `八章記憶卡｜${star.chapterName || star.doc}${star.eventDate ? `（事件日 ${star.eventDate}）` : ''}`;
 
     const fullBody = String(star.text || '').trim();
     const rawTitle = String(star.title || '').trim();
@@ -1195,8 +1231,17 @@
       .trim();
     // Only show separate title in header if it isn't just a truncated prefix of the body text
     const titleIsBodyPrefix = Boolean(rawTitle && cleanBodyHead && cleanBodyHead.startsWith(rawTitle));
-    const headTitleHtml = !titleIsBodyPrefix && rawTitle
+    const headTitleHtml = star.kind !== 'wiki' && !titleIsBodyPrefix && rawTitle
       ? `<span>${esc(rawTitle)}</span>`
+      : '';
+    const editWikiBtnHtml = star.kind === 'wiki' && rawTitle
+      ? `<button type="button" class="btn-mini" data-star-edit-wiki="${esc(rawTitle)}">編輯此頁</button>`
+      : '';
+
+    const wikiLinksHtml = wikiLinks.length
+      ? `<div class="star-detail-bridges"><span>◈ 雙向連結：</span>${wikiLinks.map((b) =>
+          `<button type="button" class="star-bridge-chip wiki-chip" data-jump-star="${esc(b.targetId)}"><em>[[${esc(b.label)}]]</em><span>→ ${esc(b.preview)}</span></button>`,
+        ).join('')}</div>`
       : '';
 
     const bridgeHtml = bridges.length
@@ -1206,8 +1251,9 @@
       : '';
 
     detail.innerHTML =
-      `<div class="star-detail-head"><span class="star-detail-tag">${esc(kindTag)}</span>${headTitleHtml}</div>` +
+      `<div class="star-detail-head"><span class="star-detail-tag">${esc(kindTag)}</span>${headTitleHtml}${editWikiBtnHtml}</div>` +
       `<div class="star-detail-body">${esc(fullBody || rawTitle || '（暫無條目正文）')}</div>` +
+      wikiLinksHtml +
       bridgeHtml;
   }
 
@@ -1224,9 +1270,16 @@
       }
       const hudStats = $('xx-hud-stats');
       if (hudStats) {
+        const wikisCount = xingxi.stats?.wikis ?? stars.filter((s) => s.kind === 'wiki').length;
         const diariesCount = xingxi.stats?.diaries ?? stars.filter((s) => s.kind === 'diary').length;
+        const wikiLinksCount = xingxi.stats?.wikiLinks ?? links.filter((l) => l.kind === 'wiki-link').length;
         const bridgesCount = xingxi.bridges?.length ?? links.filter((l) => l.kind === 'bridge').length;
-        hudStats.textContent = `${stars.length} 顆星 · ${diariesCount} 篇日記 · ${bridgesCount} 座共詞橋`;
+        const parts = [`${stars.length} 顆星`];
+        if (wikisCount > 0) parts.push(`${wikisCount} 頁主題`);
+        parts.push(`${diariesCount} 篇日記`);
+        if (wikiLinksCount > 0) parts.push(`${wikiLinksCount} 雙向連結`);
+        parts.push(`${bridgesCount} 共詞橋`);
+        hudStats.textContent = parts.join(' · ');
       }
     }
 
@@ -1344,8 +1397,9 @@
     const focusId = state.selectedStarId || state.hoveredStarId;
     const focusNeighbors = (focusId && state.mapLinksOn) ? state.neighborsById.get(focusId) : null;
 
-    // 3. Constellation straight lines + curved shared-bridge arcs + dual-color focus gradients & shimmer
+    // 3. Constellation straight lines + curved shared-bridge arcs + elevated [[wiki-link]] arcs
     if (state.mapLinksOn) {
+      const wikiMidpoints = [];
       const bridgeMidpoints = [];
       const focusShimmers = [];
       for (let li = 0; li < state.starLinks3D.length; li++) {
@@ -1359,6 +1413,59 @@
         const spotBoth = hasSpotlight && l.a.spotMatched && l.b.spotMatched;
         const avgZ = (pa.z + pb.z) * 0.5;
         const edgeDepth = Math.max(0.45, Math.min(1.08, 1.0 - (avgZ / 560) * 0.38));
+
+        if (l.kind === 'wiki-link') {
+          const { cx, cy } = computeBridgeArcControl(pa, pb, w, h);
+          ctx.save();
+          if (isFocusEdge) {
+            const grad = ctx.createLinearGradient(pa.sx, pa.sy, pb.sx, pb.sy);
+            grad.addColorStop(0, 'rgba(56,232,198,0.45)');
+            grad.addColorStop(0.2, 'rgba(94,234,212,0.96)');
+            grad.addColorStop(0.8, 'rgba(186,250,240,0.96)');
+            grad.addColorStop(1, 'rgba(56,232,198,0.45)');
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 2.1;
+          } else {
+            const baseA = focusId
+              ? 0.1
+              : hasSpotlight
+                ? (isSpotEdge ? 0.72 : 0.08)
+                : 0.42;
+            const grad = ctx.createLinearGradient(pa.sx, pa.sy, pb.sx, pb.sy);
+            grad.addColorStop(0, `rgba(56,232,198,${(baseA * 0.65 * edgeDepth).toFixed(3)})`);
+            grad.addColorStop(0.5, `rgba(110,242,222,${(baseA * edgeDepth).toFixed(3)})`);
+            grad.addColorStop(1, `rgba(56,232,198,${(baseA * 0.65 * edgeDepth).toFixed(3)})`);
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = isSpotEdge && !focusId ? 1.65 : 1.25;
+          }
+          ctx.beginPath();
+          ctx.moveTo(pa.sx, pa.sy);
+          ctx.quadraticCurveTo(cx, cy, pb.sx, pb.sy);
+          ctx.stroke();
+          ctx.restore();
+
+          if (isFocusEdge) {
+            const bx = 0.25 * pa.sx + 0.5 * cx + 0.25 * pb.sx;
+            const by = 0.25 * pa.sy + 0.5 * cy + 0.25 * pb.sy;
+            const edgeSpan = Math.hypot(pb.sx - pa.sx, pb.sy - pa.sy);
+            const otherNode = l.a.id === focusId ? l.b : l.a;
+            const focusNode = l.a.id === focusId ? l.a : l.b;
+            const pillName = (l.label && l.label !== focusNode.title)
+              ? `[[${l.label}]]`
+              : (otherNode.kind === 'wiki' ? `[[${otherNode.title}]]` : String(otherNode.title || '').slice(0, 12));
+            if (pillName && edgeSpan >= 68) wikiMidpoints.push({ x: bx, y: by, text: pillName, isWiki: true });
+            if (!prefersReducedMotion && focusShimmers.length < 12) {
+              const u = (tSec * 0.34 + li * 0.17) % 1;
+              const inv = 1 - u;
+              focusShimmers.push({
+                x: inv * inv * pa.sx + 2 * inv * u * cx + u * u * pb.sx,
+                y: inv * inv * pa.sy + 2 * inv * u * cy + u * u * pb.sy,
+                isWiki: true,
+              });
+            }
+          }
+          continue;
+        }
 
         if (l.kind === 'chapter') {
           if (isFocusEdge) {
@@ -1451,35 +1558,42 @@
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
         for (const pt of focusShimmers) {
-          const sg = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, 6);
-          sg.addColorStop(0, 'rgba(255,248,224,0.95)');
-          sg.addColorStop(0.45, 'rgba(255,212,138,0.48)');
-          sg.addColorStop(1, 'rgba(255,198,120,0)');
+          const sg = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, pt.isWiki ? 7 : 6);
+          if (pt.isWiki) {
+            sg.addColorStop(0, 'rgba(224,255,250,0.98)');
+            sg.addColorStop(0.45, 'rgba(56,232,198,0.58)');
+            sg.addColorStop(1, 'rgba(56,232,198,0)');
+          } else {
+            sg.addColorStop(0, 'rgba(255,248,224,0.95)');
+            sg.addColorStop(0.45, 'rgba(255,212,138,0.48)');
+            sg.addColorStop(1, 'rgba(255,198,120,0)');
+          }
           ctx.fillStyle = sg;
           ctx.beginPath();
-          ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, pt.isWiki ? 7 : 6, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
       }
 
-      if (bridgeMidpoints.length) {
+      const allMidpoints = [...wikiMidpoints, ...bridgeMidpoints];
+      if (allMidpoints.length) {
         ctx.save();
         ctx.font = '10.5px "Microsoft JhengHei UI", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        for (const m of bridgeMidpoints.slice(0, 8)) {
+        for (const m of allMidpoints.slice(0, 8)) {
           const tw = ctx.measureText(m.text).width;
           const pw = tw + 10;
           const ph = 15;
-          ctx.fillStyle = 'rgba(10, 14, 28, 0.88)';
-          ctx.strokeStyle = 'rgba(255, 214, 150, 0.45)';
-          ctx.lineWidth = 0.8;
+          ctx.fillStyle = m.isWiki ? 'rgba(6, 26, 30, 0.92)' : 'rgba(10, 14, 28, 0.88)';
+          ctx.strokeStyle = m.isWiki ? 'rgba(56, 232, 198, 0.72)' : 'rgba(255, 214, 150, 0.45)';
+          ctx.lineWidth = m.isWiki ? 1 : 0.8;
           ctx.beginPath();
           ctx.roundRect(m.x - pw / 2, m.y - ph / 2, pw, ph, 7);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = 'rgba(255, 232, 184, 0.96)';
+          ctx.fillStyle = m.isWiki ? 'rgba(186, 252, 240, 0.98)' : 'rgba(255, 232, 184, 0.96)';
           ctx.fillText(m.text, m.x, m.y + 0.5);
         }
         ctx.restore();
@@ -1502,7 +1616,8 @@
       let sz = Math.max(7, (s.bodySize || 12) * (0.8 + 0.5 * state.mapZoom) * pr.depth * breath);
       if (q && !s.matched) sz *= 0.55;
       if (hasSpotlight && !s.spotMatched && !isSelected && !isHovered) sz *= 0.78;
-      if (s.kind !== 'card') sz *= 0.85;
+      if (s.kind === 'diary') sz *= 0.85;
+      if (s.kind === 'wiki') sz *= 1.06;
       if (isNeighbor && s.id !== focusId) sz *= 1.12;
       if (s.isCore) sz *= 1.15;
       if (isSelected) sz *= 1.6;
@@ -1556,6 +1671,16 @@
           ctx.stroke();
           ctx.restore();
         }
+      }
+
+      if (s.kind === 'wiki') {
+        ctx.save();
+        ctx.strokeStyle = hexAlpha(WIKI_STAR_HEX, alpha * 0.55);
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.arc(pr.sx, pr.sy, Math.max(5.5, sz * 0.42), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
       }
 
       if (s.isCore) {
@@ -1681,9 +1806,11 @@
     }
     const meta = hit.isCore
       ? '核心星 · 第一章｜我是誰'
-      : hit.kind === 'diary'
-        ? `日記 · ${hit.date || hit.doc}`
-        : `記憶卡 · ${hit.chapterName || hit.doc}${hit.eventDate ? ` · ${hit.eventDate}` : ''}`;
+      : hit.kind === 'wiki'
+        ? `主題認識頁 · 認識/${hit.title || hit.doc}.md`
+        : hit.kind === 'diary'
+          ? `日記 · ${hit.date || hit.doc}`
+          : `記憶卡 · ${hit.chapterName || hit.doc}${hit.eventDate ? ` · ${hit.eventDate}` : ''}`;
     const snippet = String(hit.text || '').replace(/\s+/g, ' ').slice(0, 72);
     starTip.innerHTML =
       `<div class="tip-meta">${esc(meta)}</div>` +
@@ -1872,6 +1999,20 @@
   });
 
   $('star-detail')?.addEventListener('click', (e) => {
+    const editWikiBtn = e.target.closest?.('[data-star-edit-wiki]');
+    if (editWikiBtn) {
+      const title = editWikiBtn.dataset.starEditWiki || '';
+      const page = (state.snap?.xingxi?.wikiPages || []).find((p) => p.title === title);
+      const drawer = $('drawer-xingxi-wiki');
+      if (drawer) drawer.open = true;
+      if ($('xx-wiki-title')) $('xx-wiki-title').value = title;
+      if ($('xx-wiki-mode')) $('xx-wiki-mode').value = 'replace';
+      if ($('xx-wiki-content')) {
+        $('xx-wiki-content').value = page?.text || '';
+        $('xx-wiki-content').focus();
+      }
+      return;
+    }
     const chip = e.target.closest?.('[data-jump-star]');
     if (!chip) return;
     const targetId = chip.dataset.jumpStar || '';
@@ -2450,6 +2591,53 @@
         </div>
       `;
     }).join('') || '<p class="muted-meta">尚無日記檔案；每日拾星或手動寫日記後會於開新對話自動帶入最近 3 天。</p>');
+
+    const wikiPages = xingxi.wikiPages || [];
+    const wikiGaps = xingxi.wikiGaps || { broken: [], outsideCatalog: [] };
+    const brokenList = Array.isArray(wikiGaps.broken) ? wikiGaps.broken : [];
+    const outsideList = Array.isArray(wikiGaps.outsideCatalog) ? wikiGaps.outsideCatalog : [];
+    const gapCount = brokenList.length + outsideList.length;
+    if ($('xingxi-wiki-badge')) {
+      $('xingxi-wiki-badge').textContent = `${wikiPages.length} 頁${gapCount ? ` · ${gapCount} 待補` : ''}`;
+    }
+    const gapsBar = $('xingxi-wiki-gaps');
+    if (gapsBar) {
+      if (gapCount > 0) {
+        const parts = [];
+        if (brokenList.length) {
+          parts.push(`斷鏈待補：${brokenList.slice(0, 5).join('、')}`);
+        }
+        if (outsideList.length) {
+          parts.push(`未入目錄：${outsideList.slice(0, 5).join('、')}`);
+        }
+        gapsBar.textContent = parts.join(' ｜ ');
+        gapsBar.classList.remove('hidden');
+      } else {
+        gapsBar.classList.add('hidden');
+      }
+    }
+    setHtmlStable($('xingxi-wiki-list'), wikiPages.map((p) => {
+      const open = state.expandedWikis.has(p.title);
+      const previewText = open ? (p.text || '') : String(p.text || '').slice(0, 140);
+      const metaParts = [];
+      if (p.links?.length) metaParts.push(`連出：${p.links.slice(0, 4).map((t) => `[[${t}]]`).join(' ')}`);
+      if (p.linkedFrom?.length) metaParts.push(`被連：${p.linkedFrom.slice(0, 4).map((t) => `[[${t}]]`).join(' ')}`);
+      if (p.missing?.length) metaParts.push(`缺頁：${p.missing.slice(0, 3).map((t) => `[[${t}]]`).join(' ')}`);
+      return `
+        <div class="row-item wiki-card" data-wiki-title="${esc(p.title)}">
+          <div class="row-top">
+            <strong>${esc(p.title)}</strong>
+            <div class="row-actions">
+              <span class="meta-text tabular">${p.chars} 字</span>
+              <button type="button" class="btn-mini" data-wiki-locate="${esc(p.title)}">星圖</button>
+              <button type="button" class="btn-mini" data-wiki-edit="${esc(p.title)}">編輯</button>
+            </div>
+          </div>
+          <div class="row-body">${esc(previewText)}${!open && (p.text || '').length > 140 ? '…' : ''}</div>
+          ${metaParts.length ? `<div class="wiki-meta-links">${esc(metaParts.join(' · '))}</div>` : ''}
+        </div>
+      `;
+    }).join('') || '<p class="muted-meta">尚未建立主題認識頁；在下方建立或在對話中由貓貓以 xingxi_wiki_write 沉澱人物、偏好與專案筆記。</p>');
 
     // Tab 4: Speak-Up
     const spPrev = speakUp.preview;
@@ -3236,6 +3424,78 @@
   }));
 
   // ---------- 9. Xingxi Tab Events ----------
+  $('xingxi-wiki-list')?.addEventListener('click', (e) => {
+    const editBtn = e.target.closest('button[data-wiki-edit]');
+    if (editBtn) {
+      const title = editBtn.dataset.wikiEdit || '';
+      const page = (state.snap?.xingxi?.wikiPages || []).find((p) => p.title === title);
+      if ($('xx-wiki-title')) $('xx-wiki-title').value = title;
+      if ($('xx-wiki-mode')) $('xx-wiki-mode').value = 'replace';
+      if ($('xx-wiki-content')) {
+        $('xx-wiki-content').value = page?.text || '';
+        $('xx-wiki-content').focus();
+      }
+      return;
+    }
+    const locBtn = e.target.closest('button[data-wiki-locate]');
+    if (locBtn) {
+      const title = locBtn.dataset.wikiLocate || '';
+      const target = state.stars3D.find((s) => s.kind === 'wiki' && s.title === title);
+      if (target) {
+        state.selectedStarId = target.id;
+        focusCameraOnStar(target);
+        renderSelectedStarDetail(target);
+        drawStarMap(null);
+        $('starmap-viewport')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      return;
+    }
+    const card = e.target.closest('.wiki-card[data-wiki-title]');
+    if (!card) return;
+    const title = card.dataset.wikiTitle;
+    if (state.expandedWikis.has(title)) state.expandedWikis.delete(title);
+    else state.expandedWikis.add(title);
+    if (state.snap) renderSnapshot(state.snap);
+  });
+
+  $('btn-xx-wiki-catalog')?.addEventListener('click', () => {
+    if ($('xx-wiki-title')) $('xx-wiki-title').value = '目錄';
+    if ($('xx-wiki-mode')) $('xx-wiki-mode').value = 'replace';
+    if ($('xx-wiki-content')) {
+      const cur = state.snap?.xingxi?.wikiCatalogText || '';
+      const pages = state.snap?.xingxi?.wikiPages || [];
+      $('xx-wiki-content').value = cur || (`# 目錄\n\n${pages.map((p) => `- [[${p.title}]]`).join('\n')}\n`);
+      $('xx-wiki-content').focus();
+    }
+  });
+
+  $('btn-xx-wiki-clear')?.addEventListener('click', () => {
+    if ($('xx-wiki-title')) $('xx-wiki-title').value = '';
+    if ($('xx-wiki-content')) $('xx-wiki-content').value = '';
+    if ($('xx-wiki-mode')) $('xx-wiki-mode').value = 'replace';
+  });
+
+  $('btn-xx-wiki-save')?.addEventListener('click', () => withBusy($('btn-xx-wiki-save'), async () => {
+    const title = String($('xx-wiki-title')?.value || '').trim();
+    const content = String($('xx-wiki-content')?.value || '').trim();
+    const mode = $('xx-wiki-mode')?.value === 'append' ? 'append' : 'replace';
+    if (!title || !content) {
+      showToast('請輸入主題標題與正文內容', 'error', 2400);
+      return;
+    }
+    const res = await apiFetch('/api/xingxi/wiki', {
+      method: 'POST',
+      body: JSON.stringify({ title, content, mode }),
+    });
+    if (res?.snapshot) renderSnapshot(res.snapshot);
+    if (res?.ok) {
+      flashMsg('xx-wiki-save-msg', res.skipped ? '內容已存在，略過重複 ✓' : '已儲存主題頁 ✓');
+      showToast(`已儲存主題頁「${res.title}」`, 'ok', 2200);
+    } else if (res?.error) {
+      showToast(res.error, 'error', 3000);
+    }
+  }));
+
   $('xingxi-diary-list').addEventListener('click', (e) => {
     const card = e.target.closest('.diary-card[data-diary-name]');
     if (!card) return;

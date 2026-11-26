@@ -57,7 +57,9 @@ import {
   validateAndPreviewFeed,
   validateExternalFeedUrl,
 } from '../core/fresh-browse.mjs';
-import { classifyInputSource } from '../core/bridge.mjs';
+import { classifyInputSource, registerProjectConversation } from '../core/bridge.mjs';
+import { getWorkMarkers, isWorkMarkerPrefix } from '../core/markers.mjs';
+import { getLatestDesktopSpeechAt } from '../core/sessions.mjs';
 import {
   chunkTelegramText,
   extractMarkdownFileLinks,
@@ -93,6 +95,7 @@ import {
   buildStarGraph,
   buildXingxiPickupPrompt,
   executeXingxiPickup,
+  getXingxiSnapshot,
   listXingxiBackups,
   parseMarkdownToStars,
   prepareXingxiPickupMaterial,
@@ -102,6 +105,14 @@ import {
   saveXingxiConfig,
   searchXingxiArchive,
 } from '../core/xingxi.mjs';
+import {
+  analyzeWikiGaps,
+  buildWikiGapReport,
+  openWikiPage,
+  renderWikiCatalogBlock,
+  sanitizeWikiTitle,
+  writeWikiPage,
+} from '../core/xingxi-wiki.mjs';
 
 async function withTempRoot(fn) {
   const root = mkdtempSync(join(tmpdir(), 'gemini-cat-test-'));
@@ -399,10 +410,10 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
     assert.doesNotMatch(startupCtx, /魚的記憶/);
 
     const cappedCtx = buildSessionStartupContext(root, { maxCardChars: 1200 });
-    assert.match(cappedCtx, /請呼叫 `xingxi` 讀取全文/);
+    assert.match(cappedCtx, /需要全文請呼叫 `xingxi`/);
     assert.doesNotMatch(cappedCtx, /尾巴標記Ch7/);
 
-    // 7-day full diaries + sliding keyword index with strict size cap
+    // Default 3-day full diaries + 4-30 day sliding keyword index with strict size cap
     for (let dayNum = 15; dayNum <= 24; dayNum++) {
       const dd = `2026-11-${String(dayNum).padStart(2, '0')}`;
       const body = dayNum === 16
@@ -410,16 +421,16 @@ test('xingxi 8-chapter card, dedupe, Ch2 shrink protection, diary, scheduled pic
         : dayNum === 17
           ? `這天中午點了摩斯漢堡等超久，今天也在貓窩陪他聊天。${'補充生活瑣事記錄字數。'.repeat(18)}`
           : `這天也是平常相處的日常紀錄，今天在貓窩聊天喝茶。${'補充生活瑣事記錄字數。'.repeat(18)}`;
-      appendDiary({ date: dd, entry: body }, root);
+      appendDiary({ date: dd, entry: body, allowHistorical: true }, root);
     }
-    const sevenDayCtx = buildSessionStartupContext(root);
-    assert.match(sevenDayCtx, /最近 7 天/);
-    assert.match(sevenDayCtx, /### 日記 2026-11-24/);
-    assert.match(sevenDayCtx, /### 日記 2026-11-18/);
-    assert.doesNotMatch(sevenDayCtx, /### 日記 2026-11-17/);
-    assert.match(sevenDayCtx, /更早日記關鍵字索引/);
-    assert.match(sevenDayCtx, /2026-11-16：棒球比賽、珍珠鮮奶茶/);
-    assert.match(sevenDayCtx, /2026-11-17：.*摩斯漢堡/);
+    const defaultThreeDayCtx = buildSessionStartupContext(root);
+    assert.match(defaultThreeDayCtx, /最近 3 天/);
+    assert.match(defaultThreeDayCtx, /### 日記 2026-11-24/);
+    assert.match(defaultThreeDayCtx, /### 日記 2026-11-22/);
+    assert.doesNotMatch(defaultThreeDayCtx, /### 日記 2026-11-21/);
+    assert.match(defaultThreeDayCtx, /更早日記關鍵字索引/);
+    assert.match(defaultThreeDayCtx, /2026-11-16：棒球比賽、珍珠鮮奶茶/);
+    assert.match(defaultThreeDayCtx, /2026-11-17：.*摩斯漢堡/);
 
     // Index strictly respects maxOlderIndexChars and summarizes older dates
     const boundedCtx = buildSessionStartupContext(root, { maxDiaryDays: 3, olderIndexDays: 10, maxOlderIndexChars: 95 });
@@ -444,7 +455,10 @@ test('xingxi diary strips duplicate date headings, advances same-day watermark, 
     assert.equal((diaryTxt1.match(new RegExp(`# ${dayDate} 日記`, 'g')) || []).length, 1);
 
     // Exact re-append is skipped without duplicating content
-    const dDup = appendDiary({ date: dayDate, entry: '中午點了摩斯和牛堡。' }, root);
+    const dDup = appendDiary(
+      { date: dayDate, entry: '中午點了摩斯和牛堡。', now: new Date(`${dayDate}T15:00:00`).getTime() },
+      root,
+    );
     assert.equal(dDup.skippedDuplicate, true);
 
     // Afternoon + evening transcript: earlier 12:50 turn must be skipped because manual appendDiary ran at 14:33
@@ -504,7 +518,14 @@ test('xingxi diary strips duplicate date headings, advances same-day watermark, 
     assert.equal(noDeltaAgain.action, 'empty_skipped');
 
     // Appending part 2 merges keywords across multiple 關鍵詞 lines
-    appendDiary({ date: dayDate, entry: `# ${dayDate} 日記\n\n關鍵詞：和牛堡\n傍晚收到感謝函。\n關鍵詞：矽品感謝函` }, root);
+    appendDiary(
+      {
+        date: dayDate,
+        entry: `# ${dayDate} 日記\n\n關鍵詞：和牛堡\n傍晚收到感謝函。\n關鍵詞：矽品感謝函`,
+        now: new Date(`${dayDate}T23:50:00`).getTime(),
+      },
+      root,
+    );
     const diaryTxt2 = readFileSync(dFirst.path, 'utf8');
     assert.equal((diaryTxt2.match(new RegExp(`# ${dayDate} 日記`, 'g')) || []).length, 1);
     assert.match(diaryTxt2, /傍晚收到感謝函/);
@@ -1930,5 +1951,190 @@ test('fresh-browse opts off by default, blocks SSRF/DNS rebinding, limits daily 
     assert.equal(mcpToggleOff.ok, true);
     assert.equal(mcpToggleOff.config.freshBrowse.enabled, false);
     assert.equal(mcpToggleOff.config.freshBrowse.customFeeds.length, 1);
+  });
+});
+
+test('Phase 1 decoupling: custom mood slotId feeds xingxi pickup, sessions.mjs tracks desktop speech, and GEMINI_CAT_WORK_MARKERS overrides work markers', async () => {
+  await withTempRoot((root) => {
+    const dayDate = '2026-11-26';
+    const dayTs = new Date(`${dayDate}T14:20:00`).getTime();
+
+    // Configure non-default mood slotId ('custom-cat') and record mood event
+    saveMoodConfig({ slotId: 'custom-cat' }, root);
+    applyMoodDelta(
+      { moodDelta: 6, dims: { happy: 5 }, reason: '在自訂槽位裡一起喝手搖飲超開心', confidence: 90 },
+      { root, now: dayTs, slotId: 'custom-cat' },
+    );
+    const mat = prepareXingxiPickupMaterial(root, { date: dayDate });
+    assert.match(mat.previewText, /自訂槽位裡一起喝手搖飲超開心/);
+
+    // sessions.mjs tracks latest desktop speech cleanly
+    registerProjectConversation(
+      {
+        conversationId: 'conv-desk-1',
+        workspacePaths: [root],
+        sourceKind: 'user',
+        lastDesktopMessageAt: dayTs,
+      },
+      root,
+    );
+    assert.equal(getLatestDesktopSpeechAt(root), dayTs);
+
+    // GEMINI_CAT_WORK_MARKERS env override extends work-prefix classification
+    const prevMarkers = process.env.GEMINI_CAT_WORK_MARKERS;
+    try {
+      process.env.GEMINI_CAT_WORK_MARKERS = '[CUSTOM_CRON],[NIGHTLY_SYNC]';
+      const markers = getWorkMarkers();
+      assert.ok(markers.includes('CUSTOM_CRON'));
+      assert.ok(markers.includes('NIGHTLY_SYNC'));
+      assert.equal(isWorkMarkerPrefix('[CUSTOM_CRON] run sync'), true);
+      assert.equal(classifyInputSource('[CUSTOM_CRON] run sync'), 'work');
+      assert.equal(classifyInputSource('普通聊天不是工作'), 'user');
+    } finally {
+      if (prevMarkers === undefined) delete process.env.GEMINI_CAT_WORK_MARKERS;
+      else process.env.GEMINI_CAT_WORK_MARKERS = prevMarkers;
+    }
+  });
+});
+
+test('Phase A & B & D core: xingxi-wiki CRUD, .history snapshot, paging, gap report, diary read-only lock, and wiki-link star graph', async () => {
+  await withTempRoot((root) => {
+    const today = '2026-11-26';
+    const todayMs = new Date(`${today}T12:00:00`).getTime();
+
+    // Empty wiki yields zero tokens in startup catalog block & clean gap report
+    assert.equal(renderWikiCatalogBlock(root), '');
+    assert.equal(buildWikiGapReport(root), '');
+
+    // Sanitization rejects traversal & illegal filename chars
+    for (const bad of ['', '../secret', 'a/b', 'a\\b', 'foo*bar', 'foo?bar', '.hidden']) {
+      assert.equal(sanitizeWikiTitle(bad), '', `expected invalid title: ${bad}`);
+    }
+
+    // Create two interlinked pages + one broken link, check fallback catalog without 目錄.md
+    const w1 = writeWikiPage(root, {
+      title: '手沖咖啡',
+      content: '# 手沖咖啡\n\n偏愛淺焙衣索比亞水洗，常配 [[草莓大福]] 和 [[尚未建立的甜點]]。',
+      now: todayMs,
+    });
+    assert.equal(w1.ok, true);
+    assert.equal(w1.backupCreated, false);
+    assert.deepEqual(w1.links, ['草莓大福', '尚未建立的甜點']);
+
+    const w2 = writeWikiPage(root, {
+      title: '草莓大福',
+      content: '# 草莓大福\n\n冬天限定，配 [[手沖咖啡]] 剛剛好。',
+      now: todayMs,
+    });
+    assert.equal(w2.ok, true);
+
+    // Without 目錄.md, renderWikiCatalogBlock still renders fallback topic listing
+    const fallbackCat = renderWikiCatalogBlock(root);
+    assert.match(fallbackCat, /手沖咖啡/);
+    assert.match(fallbackCat, /草莓大福/);
+
+    // Overwriting existing page creates .history/<title>-<YYYY-MM-DD>.md initial snapshot; second overwrite same day keeps original snapshot
+    const w1v2 = writeWikiPage(root, {
+      title: '手沖咖啡',
+      content: `# 手沖咖啡\n\n改版v2，仍是衣索比亞水洗，配 [[草莓大福]] 與 [[尚未建立的甜點]]。\n${'詳情筆記_'.repeat(300)}`,
+      mode: 'replace',
+      now: todayMs + 1000,
+    });
+    assert.equal(w1v2.ok, true);
+    assert.equal(w1v2.backupCreated, true);
+    assert.equal(existsSync(w1v2.backupPath), true);
+    assert.match(readFileSync(w1v2.backupPath, 'utf-8'), /偏愛淺焙衣索比亞水洗/);
+
+    const w1v3 = writeWikiPage(root, {
+      title: '手沖咖啡',
+      content: '追加一行：週末自己磨豆。',
+      mode: 'append',
+      now: todayMs + 2000,
+    });
+    assert.equal(w1v3.ok, true);
+    assert.equal(w1v3.skipped, false);
+    const w1Dup = writeWikiPage(root, {
+      title: '手沖咖啡',
+      content: '追加一行：週末自己磨豆。',
+      mode: 'append',
+      now: todayMs + 3000,
+    });
+    assert.equal(w1Dup.skipped, true);
+    // Initial snapshot preserved
+    assert.match(readFileSync(w1v2.backupPath, 'utf-8'), /偏愛淺焙衣索比亞水洗/);
+
+    // openWikiPage returns relations (links, linkedFrom, missing) and offset/nextOffset paging
+    const opened1 = openWikiPage(root, '手沖咖啡', { offset: 0, limit: 300 });
+    assert.equal(opened1.ok, true);
+    assert.deepEqual(opened1.relations.links, ['草莓大福', '尚未建立的甜點']);
+    assert.deepEqual(opened1.relations.linkedFrom, ['草莓大福']);
+    assert.deepEqual(opened1.relations.missing, ['尚未建立的甜點']);
+    assert.equal(opened1.truncated, true);
+    assert.ok(opened1.nextOffset > 0);
+    const opened2 = openWikiPage(root, '手沖咖啡', { offset: opened1.nextOffset, limit: 4000 });
+    assert.equal(opened2.ok, true);
+    assert.match(opened2.content, /週末自己磨豆/);
+
+    // Near-title suggestion when page doesn't exist
+    const notFound = openWikiPage(root, '咖啡');
+    assert.equal(notFound.ok, false);
+    assert.ok(notFound.suggestions.includes('手沖咖啡'));
+
+    // Write 目錄 omitting 草莓大福 -> gap report flags both broken link & outsideCatalog
+    writeWikiPage(root, {
+      title: '目錄',
+      content: `# 目錄\n- [[手沖咖啡]]\n${'補充目錄說明。'.repeat(400)}`,
+      now: todayMs,
+    });
+    const gaps = analyzeWikiGaps(root);
+    assert.ok(gaps.broken.some((b) => b.includes('尚未建立的甜點')));
+    assert.ok(gaps.outsideCatalog.includes('草莓大福'));
+    const gapReport = buildWikiGapReport(root);
+    assert.match(gapReport, /尚未建立的甜點/);
+    assert.match(gapReport, /草莓大福/);
+
+    // Catalog block respects 2000-char cap
+    const catBlock = renderWikiCatalogBlock(root, { maxChars: 2000 });
+    assert.match(catBlock, /目錄尚餘 \d+ 字/);
+
+    // Historical diary read-only lock (`allowHistorical: false` allows today & yesterday, blocks 3-day-old existing diary)
+    const oldDiary = appendDiary({ date: '2026-11-23', entry: '三天前的原始紀錄', allowHistorical: true, now: todayMs }, root);
+    assert.equal(oldDiary.ok, true);
+    const blockedOld = appendDiary({ date: '2026-11-23', entry: '嘗試覆寫歷史日記', now: todayMs }, root);
+    assert.equal(blockedOld.ok, false);
+    assert.equal(blockedOld.readOnly, true);
+    const allowedOld = appendDiary({ date: '2026-11-23', entry: '使用者從側邊欄補充歷史日記', allowHistorical: true, now: todayMs }, root);
+    assert.equal(allowedOld.ok, true);
+    const allowedYesterday = appendDiary({ date: '2026-11-25', entry: '昨天的補記內容', now: todayMs }, root);
+    assert.equal(allowedYesterday.ok, true);
+    const allowedToday = appendDiary({ date: today, entry: '今天喝了 [[手沖咖啡]] 超香', now: todayMs }, root);
+    assert.equal(allowedToday.ok, true);
+
+    // searchXingxiArchive offset pagination & wiki keyword hits
+    const searchWiki = searchXingxiArchive({ keyword: '衣索比亞', maxChars: 120, offset: 0 }, root);
+    assert.equal(searchWiki.ok, true);
+    assert.match(searchWiki.text, /手沖咖啡/);
+    assert.equal(searchWiki.truncated, true);
+    assert.ok(searchWiki.nextOffset > 0);
+    const searchWikiPage2 = searchXingxiArchive({ keyword: '衣索比亞', maxChars: 2000, offset: searchWiki.nextOffset }, root);
+    assert.equal(searchWikiPage2.ok, true);
+
+    // Star graph includes wiki stars & elevated wiki-link edges (both wiki<->wiki and diary->wiki)
+    const graph = buildStarGraph(root);
+    assert.equal(graph.stats.wikis, 2);
+    assert.ok(graph.stats.wikiLinks >= 2);
+    assert.ok(graph.stars.some((s) => s.kind === 'wiki' && s.title === '手沖咖啡'));
+    assert.ok(graph.links.some((l) => l.kind === 'wiki-link' && l.label === '手沖咖啡'));
+    assert.ok(graph.links.some((l) => l.kind === 'wiki-link' && l.label === '草莓大福'));
+
+    const snap = getXingxiSnapshot(root);
+    assert.equal(snap.wikiPages.length, 2);
+    assert.ok(snap.wikiCatalogText.includes('手沖咖啡'));
+    assert.ok(snap.wikiGaps.outsideCatalog.includes('草莓大福'));
+
+    // Startup context injects wiki catalog block right alongside card & diaries
+    const startup = buildSessionStartupContext(root);
+    assert.match(startup, /星汐主題認識目錄/);
+    assert.match(startup, /\[\[手沖咖啡\]\]/);
   });
 });

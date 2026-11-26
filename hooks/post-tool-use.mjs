@@ -15,6 +15,8 @@ const TOOL_LABELS = {
   recall: '在記憶湖裡打撈相關回憶…',
   xingxi: '正在翻閱完整的星汐記憶卡…',
   xingxi_read: '正在星汐日記檔案裡翻找片段…',
+  xingxi_open: '正在翻開這一頁主題記憶…',
+  xingxi_wiki_write: '正在把新的認識仔細寫進主題頁…',
   xingxi_append: '把重要的一筆收進星汐記憶卡…',
   xingxi_diary: '正在補寫今天的星汐日記…',
   xingxi_pickup: '正在整理今日對話原料準備拾星…',

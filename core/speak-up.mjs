@@ -27,6 +27,7 @@ import {
   normalizeFreshBrowseConfig,
   peekFreshBrowsePicks,
 } from './fresh-browse.mjs';
+import { SPEAK_UP_MARKER } from './markers.mjs';
 import {
   clampNum,
   getDataPaths,
@@ -37,7 +38,7 @@ import {
   writeJsonAtomic,
 } from './storage.mjs';
 
-export const SPEAK_UP_MARKER = '[SPEAK_UP_INTERNAL]';
+export { SPEAK_UP_MARKER };
 
 const DEFAULT_PEAK_WINDOWS_TEXT = '09:00-12:00, 14:00-18:00';
 const DEFAULT_PEAK_DAYS = [1, 2, 3, 4, 5];

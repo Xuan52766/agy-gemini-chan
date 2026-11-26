@@ -485,7 +485,12 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
 
     const list = await rpc(2, 'tools/list');
     const names = list.result.tools.map((t) => t.name);
-    for (const reqTool of ['remember', 'recall', 'xingxi', 'xingxi_read', 'xingxi_append', 'xingxi_diary', 'xingxi_pickup', 'mood_status', 'mood_update', 'nest_interact', 'speak_up_plan', 'telegram_send']) {
+    assert.equal(names.length, 15, `expected 15 MCP tools, got ${names.length}: ${names.join(',')}`);
+    for (const reqTool of [
+      'remember', 'recall', 'memory_forget',
+      'xingxi', 'xingxi_read', 'xingxi_open', 'xingxi_wiki_write', 'xingxi_append', 'xingxi_diary', 'xingxi_pickup',
+      'mood_status', 'mood_update', 'nest_interact', 'speak_up_plan', 'telegram_send',
+    ]) {
       assert.ok(names.includes(reqTool), `Missing tool ${reqTool}`);
     }
 
@@ -616,6 +621,40 @@ test('MCP stdio server exposes all companion tools and executes remember -> reca
       arguments: { chapter: '2', content: '1. 「只剩一條」', wholeChapter: true },
     });
     assert.match(ch2Reject.result.content[0].text, /安全攔截/);
+
+    // Test xingxi_wiki_write -> xingxi_open (with links & pagination) -> xingxi_read offset
+    const wikiWrite1 = await rpc(20, 'tools/call', {
+      name: 'xingxi_wiki_write',
+      arguments: {
+        title: '貓窩專案',
+        content: `# 貓窩專案\n\n關聯頁面：[[星圖設計]]。\n${'詳細紀錄文字_'.repeat(160)}`,
+        mode: 'replace',
+      },
+    });
+    assert.match(wikiWrite1.result.content[0].text, /已寫入主題頁「貓窩專案」/);
+    assert.match(wikiWrite1.result.content[0].text, /\[\[星圖設計\]\]/);
+
+    const wikiOpen1 = await rpc(21, 'tools/call', {
+      name: 'xingxi_open',
+      arguments: { title: '貓窩專案', offset: 0, limit: 200 },
+    });
+    assert.match(wikiOpen1.result.content[0].text, /【主題頁】貓窩專案/);
+    assert.match(wikiOpen1.result.content[0].text, /offset=200/);
+
+    const wikiOpen2 = await rpc(22, 'tools/call', {
+      name: 'xingxi_open',
+      arguments: { title: '貓窩專案', offset: 200, limit: 2000 },
+    });
+    assert.match(wikiOpen2.result.content[0].text, /詳細紀錄文字/);
+
+    // MCP xingxi_diary blocks overwriting an existing historical diary (>1 day old)
+    mkdirSync(join(dataDir, 'xingxi', '日記'), { recursive: true });
+    writeFileSync(join(dataDir, 'xingxi', '日記', '2020-01-01.md'), '# 2020-01-01 日記\n\n封存舊紀錄。\n', 'utf-8');
+    const histLock = await rpc(23, 'tools/call', {
+      name: 'xingxi_diary',
+      arguments: { date: '2020-01-01', entry: '不應該覆寫舊日記' },
+    });
+    assert.match(histLock.result.content[0].text, /封存為唯讀/);
   } finally {
     child.kill();
     rmSync(dataDir, { recursive: true, force: true });
@@ -927,12 +966,48 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.equal(spResetUnans.ok, true);
     assert.equal(spResetUnans.state.unansweredCount, 0);
 
-    // Xingxi file viewer & path traversal guard
+    // Xingxi file viewer, Wiki APIs, historical diary UI edit, & path traversal guard
     const xxRead = await apis.get('/api/xingxi/file').get('GET')({ name: '記憶卡.md' });
     assert.equal(xxRead.ok, true);
     assert.match(xxRead.text, /記憶卡/);
     const xxBad = await apis.get('/api/xingxi/file').get('GET')({ name: '../outside.txt' });
     assert.equal(xxBad.ok, false);
+
+    // Sidecar POST /api/xingxi/diary allows historical diary editing by user
+    mkdirSync(join(dataDir, 'xingxi', '日記'), { recursive: true });
+    writeFileSync(join(dataDir, 'xingxi', '日記', '2020-01-01.md'), '# 2020-01-01 日記\n\n原本舊紀錄。\n', 'utf-8');
+    const histDiaryUi = await apis.get('/api/xingxi/diary').get('POST')({
+      date: '2020-01-01',
+      entry: '從側邊欄補寫的歷史註記。',
+    });
+    assert.equal(histDiaryUi.ok, true);
+
+    // Sidecar Wiki POST + GET + /api/xingxi/file + Star Map wiki-link snapshot
+    const wikiUiWrite = await apis.get('/api/xingxi/wiki').get('POST')({
+      title: '散步路線',
+      content: '# 散步路線\n\n常去河濱公園，順便買 [[手沖咖啡]]。',
+      mode: 'replace',
+    });
+    assert.equal(wikiUiWrite.ok, true);
+    assert.ok(wikiUiWrite.snapshot.xingxi.wikiPages.some((p) => p.title === '散步路線'));
+    await apis.get('/api/xingxi/wiki').get('POST')({
+      title: '手沖咖啡',
+      content: '# 手沖咖啡\n\n走完 [[散步路線]] 後喝一杯。',
+      mode: 'replace',
+    });
+    const wikiUiGet = await apis.get('/api/xingxi/wiki').get('GET')({ title: '手沖咖啡' });
+    assert.equal(wikiUiGet.ok, true);
+    assert.deepEqual(wikiUiGet.relations.linkedFrom, ['散步路線']);
+    const wikiFileRead = await apis.get('/api/xingxi/file').get('GET')({ name: '認識/手沖咖啡.md' });
+    assert.equal(wikiFileRead.ok, true);
+    assert.match(wikiFileRead.text, /散步路線/);
+    const wikiHistoryBlocked = await apis.get('/api/xingxi/file').get('GET')({ name: '認識/.history/手沖咖啡.md' });
+    assert.equal(wikiHistoryBlocked.ok, false);
+
+    assert.match(html.body, /id="drawer-xingxi-wiki"/);
+    assert.match(html.body, /id="xx-wiki-title"/);
+    assert.match(html.body, /id="btn-xx-wiki-save"/);
+    assert.match(appJs.body, /wiki-link/);
 
     // Telegram API endpoints: config saves token safely masked, blank update preserves token, pair-code issues 6-char code
     const tgSave = await apis.get('/api/telegram/config').get('POST')({

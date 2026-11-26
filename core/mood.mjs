@@ -853,6 +853,22 @@ export function resetMoodState({ root, slotId, now = Date.now() } = {}) {
   return saveMoodState(s, { slotId, root });
 }
 
+/**
+ * Read-only query: mood timeline entries recorded on a specific local calendar day (`YYYY-MM-DD`).
+ * Uses configured `slotId` and `persist: false` so read queries never mutate disk state.
+ */
+export function listDayMoodTimeline(root, dayKey, { slotId, limit = 10 } = {}) {
+  const targetDay = String(dayKey || '').trim();
+  if (!targetDay) return [];
+  const cfg = loadMoodConfig(root);
+  const effectiveSlot = slotId || cfg.slotId;
+  const state = loadMoodState({ root, slotId: effectiveSlot, persist: false });
+  const matched = (state.timeline || []).filter(
+    (e) => e && e.at && localDayKey(e.at) === targetDay && e.reason,
+  );
+  return limit > 0 ? matched.slice(-limit) : matched;
+}
+
 export function getMoodSnapshot({ root, slotId, now = Date.now() } = {}) {
   const cfg = loadMoodConfig(root);
   const state = loadMoodState({ slotId, root, now, persist: true });

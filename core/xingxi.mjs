@@ -12,6 +12,10 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
+import { isInternalPickupSkipText, XINGXI_PICKUP_MARKER } from './markers.mjs';
+import { listCoreMemoryAnchors, listMemoriesCreatedOnDay } from './memory.mjs';
+import { listDayMoodTimeline } from './mood.mjs';
+import { listSessionTranscriptPaths } from './sessions.mjs';
 import {
   clampNum,
   getDataPaths,
@@ -24,8 +28,19 @@ import {
   writeTextAtomic,
 } from './storage.mjs';
 import { loadChineseDict, loadCommonWords, tokenize, toSimplifiedApprox } from './tokenizer.mjs';
+import {
+  analyzeWikiGaps,
+  buildWikiGapReport,
+  computePageRelations,
+  extractWikiLinks,
+  listWikiPages,
+  normalizeTitleKey,
+  renderWikiCatalogBlock,
+  searchWikiPages,
+  WIKI_DIR_NAME,
+} from './xingxi-wiki.mjs';
 
-export const XINGXI_PICKUP_MARKER = '[XINGXI_AUTO_PICKUP]';
+export { XINGXI_PICKUP_MARKER };
 
 export const DEFAULT_XINGXI_CONFIG = {
   autoScheduleEnabled: true,
@@ -73,6 +88,7 @@ function archiveFiles(root) {
     cardPath,
     diaryDir: join(xingxiDir, '日記'),
     diaryDirCompat: join(xingxiDir, '日记'),
+    wikiDir: join(xingxiDir, WIKI_DIR_NAME),
     rawDir: join(xingxiDir, '原始對話'),
     ledgerPath: join(xingxiDir, '.xingxi.json'),
     configPath: join(xingxiDir, 'config.json'),
@@ -721,7 +737,37 @@ export function buildStarGraph(root) {
   const files = listXingxiFiles(root, { includeRaw: false });
   const stars = [];
   for (const f of files) {
+    if (/^(?:認識|认识)\//i.test(f.name)) continue;
     stars.push(...parseMarkdownToStars(f.path, f.name.replace(/\.md$/i, '')));
+  }
+
+  // Topic Wiki pages (`認識/*.md`, excluding `目錄.md`) become first-class `kind: 'wiki'` stars
+  const allWikiPages = listWikiPages(root);
+  const wikiStars = [];
+  const wikiIdByKey = new Map();
+  const now = Date.now();
+  for (const p of allWikiPages) {
+    if (p.isCatalog) continue;
+    const id = `wiki:${p.key}`;
+    const ts = p.mtimeMs || now;
+    const ageDays = Math.max(0, (now - ts) / 86400000);
+    const star = {
+      id,
+      kind: 'wiki',
+      chapter: 0,
+      chapterName: '主題認識頁',
+      title: p.title,
+      date: '',
+      doc: p.relPath,
+      text: p.content,
+      order: wikiStars.length,
+      ts,
+      energy: Math.max(0.45, Math.min(1, 1 - ageDays / 180)),
+      linksCount: (p.links || []).length,
+    };
+    stars.push(star);
+    wikiStars.push(star);
+    wikiIdByKey.set(p.key, { id, title: p.title });
   }
 
   const links = [];
@@ -733,6 +779,19 @@ export function buildStarGraph(root) {
     seenEdge.add(key);
     links.push({ source: a, target: b, kind, weight, ...extra });
   };
+
+  // 0. True semantic `[[Wiki]]` bidirectional links (highest priority, never truncated)
+  if (wikiIdByKey.size > 0) {
+    for (const s of stars) {
+      const refs = extractWikiLinks(`${s.title || ''}\n${s.text || ''}`, s.kind === 'wiki' ? s.title : '');
+      for (const rawTarget of refs) {
+        const hit = wikiIdByKey.get(normalizeTitleKey(rawTarget));
+        if (hit && hit.id !== s.id) {
+          pushEdge(s.id, hit.id, 'wiki-link', 0.95, { label: hit.title });
+        }
+      }
+    }
+  }
 
   // 1. Same chapter chain (`dsh-xingxi` 造線)
   const byChapter = new Map();
@@ -812,17 +871,20 @@ export function buildStarGraph(root) {
   });
 
   const ledger = syncLedgerWithRealDiaries(root);
+  const wikiLinksCount = links.filter((l) => l.kind === 'wiki-link').length;
   return {
     xingxiDir,
     ledger,
     fileCount: files.length,
     stars,
-    links: links.slice(0, 900),
+    links: links.slice(0, 1200),
     bridges,
     stats: {
       stars: stars.length,
       cards: stars.filter((s) => s.kind === 'card').length,
       diaries: diaries.length,
+      wikis: wikiStars.length,
+      wikiLinks: wikiLinksCount,
       links: links.length,
       firstDay: diaries.length ? diaries[0].date : '',
       lastDay: diaries.length ? diaries[diaries.length - 1].date : '',
@@ -850,18 +912,32 @@ export function readMemoryCard(root) {
 }
 
 /**
- * Search across `記憶卡.md`, `日記/*.md`, and `原始對話/*.txt` (mirrors `xingxi_read` tool).
+ * Search across `記憶卡.md`, `認識/*.md`, `日記/*.md`, and `原始對話/*.txt` (mirrors `xingxi_read` tool).
+ * Defaults to a compact 2,000-char page with explicit `offset` / `truncated` / `nextOffset` reporting.
  */
-export function searchXingxiArchive({ keyword = '', date = '', file = '', maxChars = 4000 } = {}, root) {
+export function searchXingxiArchive({ keyword = '', date = '', file = '', maxChars = 2000, offset = 0 } = {}, root) {
   const files = listXingxiFiles(root, { includeRaw: true });
-  const limit = Math.max(600, Math.min(20000, Number(maxChars) || 4000));
+  const limit = Math.max(200, Math.min(20000, Number(maxChars) || 2000));
+  const safeOffset = Math.max(0, Math.round(Number(offset) || 0));
   const k = String(keyword || '').trim();
   const d = String(date || '').trim();
   const fName = String(file || '').trim();
 
+  const pageText = (fullText) => {
+    const totalChars = fullText.length;
+    const slice = fullText.slice(safeOffset, safeOffset + limit);
+    const nextOffset = (safeOffset + slice.length) < totalChars ? (safeOffset + slice.length) : null;
+    const truncated = nextOffset !== null;
+    const text = truncated
+      ? `${slice}\n\n…（共 ${totalChars} 字，尚餘 ${totalChars - nextOffset} 字，可帶 \`offset: ${nextOffset}\` 繼續翻頁）`
+      : slice;
+    return { ok: true, text, totalChars, offset: safeOffset, truncated, nextOffset };
+  };
+
   const diaryFiles = files.filter((x) => /^(?:日記|日记)\//.test(x.name));
+  const wikiFiles = files.filter((x) => /^(?:認識|认识)\//.test(x.name));
   const rawFiles = files.filter((x) => /^(?:原始對話|原始对话)\//.test(x.name));
-  const otherFiles = files.filter((x) => !/^(?:日記|日记|原始對話|原始对话)\//.test(x.name) && !/記憶卡|记忆卡/.test(x.name));
+  const otherFiles = files.filter((x) => !/^(?:日記|日记|認識|认识|原始對話|原始对话)\//.test(x.name) && !/記憶卡|记忆卡/.test(x.name));
 
   const diaryDates = diaryFiles
     .map((f) => detectDate(f.name))
@@ -876,6 +952,9 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
     const card = files.find((x) => /記憶卡|记忆卡/.test(x.name));
     const lines = [`檔案共有 ${files.length} 個檔案：`, ''];
     if (card) lines.push(`· ${card.name}（${card.text.length} 字）`);
+    if (wikiFiles.length) {
+      lines.push(`· 主題認識頁 ${wikiFiles.length} 份（用 \`xingxi_open\` 按標題翻閱）`);
+    }
     for (const o of otherFiles) lines.push(`· ${o.name}（${o.text.length} 字）`);
     if (diaryDates.length) {
       lines.push(`· 日記 ${diaryDates.length} 天：${diaryDates[0]} ~ ${diaryDates[diaryDates.length - 1]}`);
@@ -885,18 +964,16 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
     if (rawDates.length) {
       lines.push(`· 原始對話 ${rawDates.length} 天：${rawDates[0]} ~ ${rawDates[rawDates.length - 1]}`);
     }
-    lines.push('', '查詢方式：給 `keyword` 全文檢索、`date` 看該日日記，或 `file` 看指定檔案。');
-    return { ok: true, text: lines.join('\n') };
+    lines.push('', '查詢方式：給 `keyword` 全文檢索、`date` 看該日日記、`file` 看指定檔案，或用 `xingxi_open` 翻閱認識頁。');
+    return pageText(lines.join('\n'));
   }
 
   if (d) {
     const shortD = d.length >= 10 ? d.slice(5) : d;
     const hits = files.filter((x) => x.name.includes(d) || x.name.includes(shortD));
     if (hits.length) {
-      return {
-        ok: true,
-        text: hits.slice(0, 3).map((x) => `【${x.name}】\n${x.text.slice(0, limit)}`).join('\n\n').slice(0, limit),
-      };
+      const full = hits.slice(0, 3).map((x) => `【${x.name}】\n${x.text}`).join('\n\n');
+      return pageText(full);
     }
     const inlineHits = [];
     for (const f of files) {
@@ -912,7 +989,7 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
       if (block.length) inlineHits.push(`【${f.name}】\n${block.join('\n')}`);
     }
     if (inlineHits.length) {
-      return { ok: true, text: inlineHits.join('\n\n').slice(0, limit) };
+      return pageText(inlineHits.join('\n\n'));
     }
     return {
       ok: false,
@@ -923,14 +1000,14 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
   if (fName && !k) {
     const hits = files.filter((x) => x.name.includes(fName));
     if (!hits.length) return { ok: false, text: `找不到檔案：${fName}` };
-    return {
-      ok: true,
-      text: hits.slice(0, 2).map((x) => `【${x.name}】\n${x.text.slice(0, limit)}`).join('\n\n').slice(0, limit),
-    };
+    const full = hits.slice(0, 2).map((x) => `【${x.name}】\n${x.text}`).join('\n\n');
+    return pageText(full);
   }
 
+  const wikiHits = searchWikiPages(root, k, { limit: 6, excerptChars: 180 });
   const results = [];
   for (const f of files) {
+    if (/^(?:認識|认识)\//.test(f.name)) continue;
     const lines = f.text.split(/\r?\n/);
     let count = 0;
     const snippets = [];
@@ -944,24 +1021,26 @@ export function searchXingxiArchive({ keyword = '', date = '', file = '', maxCha
     if (count > 0) results.push({ name: f.name, count, snippets });
   }
 
-  if (!results.length) {
+  if (!results.length && !wikiHits.length) {
     return { ok: false, text: `檔案裡沒有「${k}」（已檢查 ${files.length} 個檔案）` };
   }
 
   results.sort((a, b) => b.count - a.count);
-  const total = results.reduce((s, r) => s + r.count, 0);
-  const out = [`「${k}」在 ${results.length} 個檔案裡出現 ${total} 次：`];
-  let len = out[0].length;
-  for (const r of results) {
-    const block = `【${r.name}】（${r.count} 處）\n${r.snippets.join('\n\n')}`;
-    if (len + block.length > limit) {
-      out.push(`…還有其他檔案包含關鍵字，可指定 file 參數查看`);
-      break;
-    }
-    out.push(block);
-    len += block.length;
+  const blocks = [];
+  if (wikiHits.length) {
+    blocks.push(
+      `【主題認識頁命中 ${wikiHits.length} 頁（可用 \`xingxi_open\` 展開全文與雙向連結）】\n` +
+      wikiHits.map((w) => `- [[${w.title}]]（${w.chars} 字）：${w.excerpt}`).join('\n'),
+    );
   }
-  return { ok: true, text: out.join('\n\n') };
+  if (results.length) {
+    const total = results.reduce((s, r) => s + r.count, 0);
+    blocks.push(`「${k}」在 ${results.length} 個檔案裡出現 ${total} 次：`);
+    for (const r of results) {
+      blocks.push(`【${r.name}】（${r.count} 處）\n${r.snippets.join('\n\n')}`);
+    }
+  }
+  return pageText(blocks.join('\n\n'));
 }
 
 /**
@@ -1130,9 +1209,10 @@ export function readExistingDiarySnippet(root, day, maxChars = 1500) {
 
 /**
  * Appends a diary section to `日記/YYYY-MM-DD.md`, strips duplicate date headings,
- * and advances `.xingxi.json` progress (+ same-day `水位Ms` watermark).
+ * enforces historical read-only lock (`allowHistorical: false` blocks overwriting
+ * already-archived diaries older than yesterday), and advances `.xingxi.json` progress.
  */
-export function appendDiary({ date = localDayKey(), entry = '', now = Date.now() } = {}, root) {
+export function appendDiary({ date = localDayKey(), entry = '', now = Date.now(), allowHistorical = false } = {}, root) {
   const { diaryDir, ledgerPath } = ensureXingxiArchive(root);
   const nowMs = Number(now) || Date.now();
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date).trim()) ? String(date).trim() : localDayKey(nowMs);
@@ -1142,6 +1222,18 @@ export function appendDiary({ date = localDayKey(), entry = '', now = Date.now()
   const path = join(diaryDir, `${day}.md`);
   const prev = readTextSafe(path, '');
   const prevClean = prev.trim();
+
+  // Historical read-only lock: archived diaries older than yesterday cannot be rewritten by AI
+  const yesterday = localDayKey(nowMs - 86_400_000);
+  if (!allowHistorical && day < yesterday && existsSync(path) && prevClean.length > 0) {
+    return {
+      ok: false,
+      readOnly: true,
+      date: day,
+      error: '該日期日記已封存為唯讀，不可回頭修改歷史；若發現當時記錯，請改用 xingxi_diary 在今天的日記裡補寫勘誤說明。',
+    };
+  }
+
   if (prevClean && prevClean.includes(body)) {
     return { ok: true, path, date: day, skippedDuplicate: true };
   }
@@ -1240,17 +1332,10 @@ function appendMaterialBlock(rawFilePath, headerLine, bodyLines) {
   return true;
 }
 
-const SKIP_MATERIAL_PREFIXES = [
-  '[SPEAK_UP_INTERNAL]',
-  '[XINGXI_AUTO_PICKUP]',
-  '[CAT_NEST_EVENT]',
-];
-
 function isInternalTurnText(text) {
   const raw = String(text || '').trim();
   const clean = stripAntigravityWrappers(raw);
-  if (!clean || clean.startsWith('<')) return true;
-  return SKIP_MATERIAL_PREFIXES.some((p) => raw.includes(p) || clean.includes(p));
+  return isInternalPickupSkipText(raw, clean);
 }
 
 /**
@@ -1267,14 +1352,12 @@ export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = 
   const watermarkDay = watermark > 0 ? localDayKey(watermark) : '';
   const cutoffTs = Number(maxTs) > 0 ? Number(maxTs) : Number(now) || 0;
 
-  const { runtimeDir, memoryDir, moodDir } = getDataPaths(root);
-  const sessionsData = readJsonSafe(join(runtimeDir, 'sessions.json'), { sessions: [] }) || { sessions: [] };
+  const transcriptPaths = listSessionTranscriptPaths(root);
   const collectedTurns = [];
   const seenTurnKeys = new Set();
   let maxSeenTs = 0;
 
-  for (const sess of sessionsData.sessions || []) {
-    const tPath = String(sess.transcriptPath || '').trim();
+  for (const tPath of transcriptPaths) {
     if (!tPath || !existsSync(tPath)) continue;
     const raw = readTextSafe(tPath, '');
     if (!raw) continue;
@@ -1314,22 +1397,19 @@ export function prepareXingxiPickupMaterial(root, { date = localDayKey(), now = 
   const linesOut = collectedTurns.map((t) => `[${t.clock}] ${t.speaker}：${t.content}`);
   const turnCount = collectedTurns.length;
 
-  // Also include same-day Memory & Mood timeline highlights cleanly
-  const memStore = readJsonSafe(join(memoryDir, 'store.json'), { memories: [] }) || { memories: [] };
-  const dayMems = (memStore.memories || []).filter((m) => !m.superseded && m.createdAt && localDayKey(m.createdAt) === day);
+  // Also include same-day Memory & Mood timeline highlights via read-only module contracts
+  const dayMems = listMemoriesCreatedOnDay(root, day, { limit: 12 });
   if (dayMems.length) {
     linesOut.push('', '【今日新增的記憶要點】');
-    for (const m of dayMems.slice(-12)) {
+    for (const m of dayMems) {
       linesOut.push(`- ${m.text}${m.factKey ? `（鍵：${m.factKey}）` : ''}`);
     }
   }
 
-  const moodFile = join(moodDir, 'states', 'gemini-cat-main.json');
-  const moodState = readJsonSafe(moodFile, { timeline: [] }) || { timeline: [] };
-  const dayMoods = (moodState.timeline || []).filter((e) => e.at && localDayKey(e.at) === day && e.reason);
+  const dayMoods = listDayMoodTimeline(root, day, { limit: 10 });
   if (dayMoods.length) {
     linesOut.push('', '【今日心情波動紀錄】');
-    for (const e of dayMoods.slice(-10)) {
+    for (const e of dayMoods) {
       linesOut.push(`- [${localClockDisplay(e.at)}] 心情=${e.mood}：${e.reason}`);
     }
   }
@@ -1404,16 +1484,22 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
     parts.push(
       '',
       '歸檔原則：',
-      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章只收「過了一週再看還有價值」的重點，這次不必生成日記。',
+      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章保持精簡核心總覽（只收長期大原則與關鍵里程碑），這次不必生成日記。',
+      '- 主題認識頁（`認識/*.md`）：若今日對話對某個人、專案、偏好或重要經歷形成跨日脈絡，請用 `xingxi_wiki_write` 更新 `認識/<主題>.md`（關聯處用 `[[主題]]` 互連）並同步更新 `title: "目錄"`（每頁只寫一行簡介，不寫正文結論）。',
       '- 性格與說話演進（不刪舊記憶、勿推翻核心人設）：回顧今日互動，若有長期成立的新偏好、吐槽點、相處共識或反應習慣，可帶日期追加進第 1 或第 7 章；若有特別傳神的新口癖或代表台詞，可用 `xingxi_append`（`chapter: "2", wholeChapter: true`）適度更新第 2 章原話照抄（上限 10 句，保留既有準則）；沒有明確成長變化就維持原樣、不要硬湊。',
     );
   } else {
     parts.push(
       '',
       '歸檔原則：',
-      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章只收「過了一週再看還有價值」的重點，流水過程寫進日記（日記結尾可附一行 `關鍵詞：詞1、詞2、詞3` 方便日後索引）。',
+      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章保持精簡核心總覽，流水過程寫進日記（日記結尾可附一行 `關鍵詞：詞1、詞2、詞3` 方便日後索引）。',
+      '- 主題認識頁（`認識/*.md`）：若今日對話對某個人、專案、偏好或重要經歷形成跨日認知，請用 `xingxi_wiki_write` 更新 `認識/<主題>.md`（互相關聯處用 `[[主題]]`）並同步精簡維護 `title: "目錄"`（每頁只寫一行簡介，不寫結論）。',
       '- 性格與說話演進（不刪舊記憶、勿推翻核心人設）：回顧今日互動，若有長期成立的新偏好、吐槽點、相處共識或反應習慣，可帶日期追加進第 1 或第 7 章；若有特別傳神的新口癖或代表台詞，可用 `xingxi_append`（`chapter: "2", wholeChapter: true`）適度更新第 2 章原話照抄（上限 10 句，保留既有準則）；沒有明確成長變化就維持原樣、不要硬湊。',
     );
+  }
+  const gapReport = buildWikiGapReport(root);
+  if (gapReport) {
+    parts.push('', gapReport);
   }
   return parts.join('\n');
 }
@@ -1625,11 +1711,12 @@ function buildOlderDiaryIndexLines(allDiaries, olderDiaries, { maxIndexChars = 8
 export function buildSessionStartupContext(
   root,
   {
-    maxCardChars = 20000,
-    maxDiaryDays = 7,
-    maxDiaryChars = 10000,
-    olderIndexDays = 23,
-    maxOlderIndexChars = 800,
+    maxCardChars = 5000,
+    maxWikiCatalogChars = 2000,
+    maxDiaryDays = 3,
+    maxDiaryChars = 4000,
+    olderIndexDays = 27,
+    maxOlderIndexChars = 1200,
   } = {},
 ) {
   const { cardPath, ledgerPath } = ensureXingxiArchive(root);
@@ -1667,11 +1754,7 @@ export function buildSessionStartupContext(
     .sort((a, b) => (a.date > b.date ? -1 : 1));
 
   // Core high-importance fish memories (importance >= 0.85, non-superseded)
-  const { memoryDir } = getDataPaths(root);
-  const memStore = readJsonSafe(join(memoryDir, 'store.json'), { memories: [] }) || { memories: [] };
-  const coreAnchors = (memStore.memories || [])
-    .filter((m) => !m.superseded && Number(m.importance || 0) >= 0.85)
-    .slice(-8);
+  const coreAnchors = listCoreMemoryAnchors(root, { minImportance: 0.85, limit: 8 });
 
   const ledger = readJsonSafe(ledgerPath, { 已整理到: '' }) || { 已整理到: '' };
   const blocks = [];
@@ -1680,11 +1763,16 @@ export function buildSessionStartupContext(
     const fullCard = populatedSections.join('\n\n');
     const isTruncated = maxCardChars > 0 && fullCard.length > maxCardChars;
     const joinedCard = isTruncated
-      ? `${fullCard.slice(0, maxCardChars)}\n…（記憶卡總長 ${fullCard.length} 字，以上顯示前 ${maxCardChars} 字；後半尚未展開，需要查閱請呼叫 \`xingxi\` 讀取全文）`
+      ? `${fullCard.slice(0, maxCardChars)}\n…（記憶卡總長 ${fullCard.length} 字，以上顯示前 ${maxCardChars} 字；需要全文請呼叫 \`xingxi\`，長篇人物／偏好／經歷建議拆入 \`認識/\` 主題頁並以 \`xingxi_wiki_write\` 維護）`
       : fullCard;
     blocks.push(`【星汐長期記憶卡（開新對話自動注入｜已整理到：${ledger['已整理到'] || '持續累積中'}）】\n${joinedCard}`);
   } else {
-    blocks.push('【星汐長期記憶卡】記憶卡目前剛建檔還沒有寫入具體經歷；若這段對話裡有值得長留一週以上的約定、性格或里程碑，記得用 `xingxi_append` 寫入記憶卡。');
+    blocks.push('【星汐長期記憶卡】記憶卡目前剛建檔還沒有寫入具體經歷；若這段對話裡有值得長留一週以上的約定、性格或里程碑，記得用 `xingxi_append` 寫入記憶卡，長篇主題可寫入 `xingxi_wiki_write`。');
+  }
+
+  const wikiCatalogBlock = renderWikiCatalogBlock(root, { maxChars: maxWikiCatalogChars });
+  if (wikiCatalogBlock) {
+    blocks.push(wikiCatalogBlock);
   }
 
   if (diaryFiles.length) {
@@ -1761,9 +1849,31 @@ export function getXingxiSnapshot(root) {
   const todayRawPath = join(rawDir, `${today}.txt`);
   const todayMaterialChars = existsSync(todayRawPath) ? readTextSafe(todayRawPath, '').length : 0;
 
+  const allWikiPages = listWikiPages(root);
+  const catalogPage = allWikiPages.find((p) => p.isCatalog);
+  const wikiPages = allWikiPages
+    .filter((p) => !p.isCatalog)
+    .map((p) => {
+      const rel = computePageRelations(p, allWikiPages);
+      return {
+        title: p.title,
+        relPath: p.relPath,
+        chars: p.chars,
+        mtimeMs: p.mtimeMs,
+        links: rel.links,
+        linkedFrom: rel.linkedFrom,
+        missing: rel.missing,
+        text: p.content,
+      };
+    });
+  const wikiGaps = analyzeWikiGaps(root);
+
   return {
     ...graph,
     cardText: card.text,
+    wikiPages,
+    wikiCatalogText: catalogPage?.content || '',
+    wikiGaps,
     files,
     diaries: diaries.slice(0, 20),
     rawLogs: rawLogs.slice(0, 14),

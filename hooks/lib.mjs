@@ -4,6 +4,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { isSidecarDispatchedPrefix } from '../core/markers.mjs';
 import {
   getProjectRoot,
   isProjectWorkspaceActive,
@@ -57,14 +58,7 @@ export function isSidecarInputStep(step) {
   }
   const c = unwrapSidecarSystemEnvelope(step.content);
   if (!c) return false;
-  return (
-    c.startsWith('[SPEAK_UP_INTERNAL]') ||
-    c.startsWith('<speak-up>') ||
-    c.startsWith('[XINGXI_AUTO_PICKUP]') ||
-    c.startsWith('[CAT_NEST_EVENT]') ||
-    c.startsWith('[TELEGRAM_INCOMING]') ||
-    c.startsWith('[YOUTUBE_PATROL]')
-  );
+  return isSidecarDispatchedPrefix(c);
 }
 
 /**

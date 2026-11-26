@@ -30,6 +30,7 @@ import {
   replaceChapterTwo,
   searchXingxiArchive,
 } from '../core/xingxi.mjs';
+import { openWikiPage, writeWikiPage } from '../core/xingxi-wiki.mjs';
 
 const ROOT = getProjectRoot();
 const APP_VERSION = String(readJsonSafe(join(ROOT, 'package.json'), {})?.version || '0.0.0-unknown');
@@ -94,7 +95,7 @@ const TOOLS = [
   },
   {
     name: 'xingxi_read',
-    description: '檢索星汐長期檔案（記憶卡與按日分檔的日記）。不帶參數回傳總覽索引；帶 keyword 全文搜尋；帶 date（如 2026-11-14）查當日日記。',
+    description: '檢索星汐長期檔案（記憶卡、認識/ 主題頁與按日分檔的日記）。不帶參數回傳總覽索引；帶 keyword 全文搜尋；帶 date（如 2026-11-14）查當日日記；支援 offset/maxChars 分頁。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -102,7 +103,40 @@ const TOOLS = [
         keyword: { type: 'string', description: '搜尋關鍵詞' },
         date: { type: 'string', description: '日期 YYYY-MM-DD 或 MM-DD' },
         file: { type: 'string', description: '指定檔名或片段' },
-        maxChars: { type: 'number', description: '最大回傳字數（預設 4000）' },
+        maxChars: { type: 'number', description: '最大回傳字數（預設 2000）' },
+        offset: { type: 'number', description: '分頁起始字元位移（預設 0，截斷時接續 nextOffset）' },
+      },
+    },
+  },
+  {
+    name: 'xingxi_open',
+    description: '打開「認識/<主題>.md」主題頁（或傳入 "目錄" 檢視所有主題索引），回傳正文、[[雙向連結]]、被引用頁（linkedFrom）、缺頁清單與分頁資訊。',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['title'],
+      properties: {
+        title: { type: 'string', description: '主題頁標題（例如「目錄」、「人物名」、「專案名」，不含 .md 與路徑）' },
+        offset: { type: 'number', description: '分頁起始字元位移（預設 0）' },
+        limit: { type: 'number', description: '單次讀取字數上限（預設 2000，最高 8000）' },
+      },
+    },
+  },
+  {
+    name: 'xingxi_wiki_write',
+    description: '建立或更新「認識/<主題>.md」主題頁（或「目錄」），適合整理人物、偏好、專案、長期經歷並以 [[主題]] 雙向連結；覆寫既有頁時會自動留存 .history/ 當日初版快照。',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['title', 'content'],
+      properties: {
+        title: { type: 'string', description: '主題頁標題（或「目錄」，不可含路徑斜線或特殊符號）' },
+        content: { type: 'string', description: 'Markdown 內容，可用 [[其他主題]] 建立雙向連結' },
+        mode: {
+          type: 'string',
+          enum: ['replace', 'append'],
+          description: 'replace=整頁更新（預設，自動備份當日初版快照）；append=接續追加並自動去重',
+        },
       },
     },
   },
@@ -125,7 +159,7 @@ const TOOLS = [
   },
   {
     name: 'xingxi_diary',
-    description: '記錄某一天的日記（日記/YYYY-MM-DD.md），保留當日細節與情緒脈絡並推進帳本進度。',
+    description: '記錄今天或昨天的日記（日記/YYYY-MM-DD.md），保留當日細節與情緒脈絡並推進帳本進度（昨天以前的既有歷史日記為唯讀保護）。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -303,6 +337,50 @@ async function callTool(name, args = {}) {
     case 'xingxi_read': {
       const res = searchXingxiArchive(args, ROOT);
       return { content: [{ type: 'text', text: res.text }] };
+    }
+    case 'xingxi_open': {
+      const res = openWikiPage(ROOT, args.title, { offset: args.offset, limit: args.limit });
+      if (!res.ok) {
+        const sug = Array.isArray(res.suggestions) && res.suggestions.length
+          ? `\n相近主題：${res.suggestions.map((s) => `[[${s}]]`).join('、')}`
+          : '';
+        return { content: [{ type: 'text', text: `✗ ${res.error}${sug}` }] };
+      }
+      const rel = res.relations || {};
+      const metaLines = [
+        `【主題頁】${res.title}（${res.relPath}｜共 ${res.totalChars} 字）`,
+      ];
+      if (rel.links?.length) metaLines.push(`對外連結：${rel.links.map((t) => `[[${t}]]`).join('、')}`);
+      if (rel.linkedFrom?.length) metaLines.push(`被引用於：${rel.linkedFrom.map((t) => `[[${t}]]`).join('、')}`);
+      if (rel.missing?.length) metaLines.push(`尚未建頁：${rel.missing.map((t) => `[[${t}]]`).join('、')}`);
+      if (res.truncated) {
+        metaLines.push(`分頁：offset=${res.offset}，尚餘內容可帶 offset=${res.nextOffset} 續讀`);
+      }
+      return {
+        content: [{
+          type: 'text',
+          text: `${metaLines.join('\n')}\n\n${res.content}`,
+        }],
+      };
+    }
+    case 'xingxi_wiki_write': {
+      const res = writeWikiPage(ROOT, {
+        title: args.title,
+        content: args.content,
+        mode: args.mode,
+      });
+      if (!res.ok) {
+        return { content: [{ type: 'text', text: `✗ ${res.error}` }] };
+      }
+      const parts = [
+        res.skipped
+          ? `主題頁「${res.title}」已包含相同片段，略過重複寫入（${res.relPath}）。`
+          : `已${res.mode === 'append' ? '追加' : '寫入'}主題頁「${res.title}」（${res.relPath}，共 ${res.chars} 字）${res.backupCreated ? '，已留存當日初版快照' : ''}。`,
+      ];
+      if (res.missing?.length) {
+        parts.push(`提示：文中提到尚未建頁的連結 ${res.missing.map((t) => `[[${t}]]`).join('、')}。`);
+      }
+      return { content: [{ type: 'text', text: parts.join('\n') }] };
     }
     case 'xingxi_append': {
       const chSpec = String(args.chapter || '').trim();

@@ -24,6 +24,8 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TELEGRAM_INCOMING_MARKER } from './markers.mjs';
+import { getLatestDesktopSpeechAt, getSessionsFilePath } from './sessions.mjs';
 import {
   clampNum,
   getDataPaths,
@@ -39,7 +41,7 @@ import {
   writeJsonAtomic,
 } from './storage.mjs';
 
-export const TELEGRAM_INCOMING_MARKER = '[TELEGRAM_INCOMING]';
+export { TELEGRAM_INCOMING_MARKER };
 const MAX_BOT_API_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_BOT_API_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_PHOTO_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -376,21 +378,9 @@ export function isTelegramSidecarAlive(root = getProjectRoot(), now = Date.now()
   return st.sidecarAliveAt > 0 && (now - st.sidecarAliveAt) <= maxStaleMs;
 }
 
-function readLatestDesktopSpeechAt(root = getProjectRoot()) {
-  const { runtimeDir } = getDataPaths(root);
-  const sessData = readJsonSafe(join(runtimeDir, 'sessions.json'), null);
-  const sessions = Array.isArray(sessData?.sessions) ? sessData.sessions : [];
-  let maxTs = 0;
-  for (const s of sessions) {
-    const t = Number(s?.lastDesktopSpeechAt || 0);
-    if (t > maxTs) maxTs = t;
-  }
-  return maxTs;
-}
-
 export function isDesktopActiveMute(root = getProjectRoot(), cfg = loadTelegramConfig(root), st = loadTelegramState(root), now = Date.now(), overrideDesktopSpeechAt = 0) {
   if (!cfg.muteWhenDesktopActive) return { active: false, minsLeft: 0 };
-  const lastDesktopAt = Math.max(Number(overrideDesktopSpeechAt || 0), readLatestDesktopSpeechAt(root));
+  const lastDesktopAt = Math.max(Number(overrideDesktopSpeechAt || 0), getLatestDesktopSpeechAt(root));
   if (!lastDesktopAt) return { active: false, minsLeft: 0 };
   // If user subsequently spoke via Telegram more recently than Desktop IDE, unmute immediately!
   if (st.lastReceivedAt > lastDesktopAt) return { active: false, minsLeft: 0 };
@@ -542,13 +532,14 @@ export function isAllowedTelegramSendPath(filePath, root = getProjectRoot(), cfg
     return { ok: false, reason: '安全封鎖：禁止傳送貓窩設定與憑證檔' };
   }
 
+  const sessionsPath = getSessionsFilePath(root);
   const blockedExact = new Set([
     normalizePathOrUri(tg.configPath),
     resolveCanonicalRealPath(tg.configPath),
     normalizePathOrUri(tg.statePath),
     resolveCanonicalRealPath(tg.statePath),
-    normalizePathOrUri(join(paths.runtimeDir, 'sessions.json')),
-    resolveCanonicalRealPath(join(paths.runtimeDir, 'sessions.json')),
+    normalizePathOrUri(sessionsPath),
+    resolveCanonicalRealPath(sessionsPath),
   ].filter(Boolean));
   if (candidates.some((c) => blockedExact.has(c))) {
     return { ok: false, reason: '安全封鎖：禁止傳送 Telegram Token 或會話敏感設定檔' };

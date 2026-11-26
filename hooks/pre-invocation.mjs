@@ -52,7 +52,7 @@ function computePersonaHash(persona) {
 function computeRulesHash(moodCfg, memPolicy, spCfg) {
   return createHash('sha1')
     .update(JSON.stringify([
-      'rules-v4',
+      'rules-v5',
       Boolean(moodCfg?.enabled),
       moodCfg?.judgeMode || 'hybrid',
       Boolean(moodCfg?.innerThoughtEnabled),
