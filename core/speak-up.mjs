@@ -28,6 +28,7 @@ import {
   peekFreshBrowsePicks,
 } from './fresh-browse.mjs';
 import { SPEAK_UP_MARKER } from './markers.mjs';
+import { resolvePrompt } from './prompts.mjs';
 import {
   clampNum,
   getDataPaths,
@@ -647,16 +648,16 @@ export function formatCurrentTimeLine(date = new Date()) {
 export function wrapInnerThought(
   promptText,
   date = new Date(),
-  { wokeFromSleep = false, followUpHint = '', kind = '', label = '', unansweredCount = 0, freshBrowseBlock = '' } = {},
+  { wokeFromSleep = false, followUpHint = '', kind = '', label = '', unansweredCount = 0, freshBrowseBlock = '', root } = {},
 ) {
   const clean = String(promptText || DEFAULT_SPEAK_UP_CONFIG.triggerPrompt).trim();
   const lines = [
     '<speak-up>',
     SPEAK_UP_MARKER,
-    '（這是你自己心裡冒出的念頭，順著它自然開口或處理就行。）',
+    resolvePrompt('speakUp.wrapperIntro', null, root),
   ];
   if (wokeFromSleep) {
-    lines.push('（你在貓窩軟墊上睡夠一覺剛自己伸懶腰醒過來，側邊欄也已切換為清醒姿態；順著剛睡醒的心情開口吧。）');
+    lines.push(resolvePrompt('speakUp.wokeFromSleepNote', null, root));
   }
   if (kind === 'reminder') {
     lines.push(`（這是主人請你到點提醒的事${label ? `「${label}」` : ''}。）`);
@@ -664,7 +665,7 @@ export function wrapInnerThought(
     lines.push(`（日常節律${label ? `「${label}」` : ''}探頭時間，隨口打聲招呼就好。）`);
   }
   if (unansweredCount >= 2 && kind !== 'reminder') {
-    lines.push(`（註：這是連續第 ${unansweredCount} 則未獲回覆的搭話；若覺得他多半還在睡或在忙，呼叫 \`speak_up_plan\` 的 \`silence\` 保持安靜就好。）`);
+    lines.push(resolvePrompt('speakUp.unansweredNote', { unansweredCount }, root));
   }
   lines.push(formatCurrentTimeLine(date), clean);
   if (freshBrowseBlock) {
@@ -701,7 +702,7 @@ export function buildProactivePlanCue(root, userInput = '', nowMs = Date.now()) 
     ? '（高主動排程開啟中：適合自己決定過陣子再關心時請積極排入 `autonomous`）'
     : '';
   const statusTag = [queueNote, silenceNote].filter(Boolean).join(' · ');
-  return `（貓窩排程小提示 [${statusTag}]：對方這句帶有暫離／休息／忙碌／約時間訊號；若適合稍後自己來關心他或到點提醒，請順手呼叫 \`speak_up_plan\`（\`schedule\`）；若該安靜一陣子別提前吵到他，請呼叫 \`silence\`（或提醒帶 \`silenceUntilTrigger:true\`），正文正常聊天、別提工具。${tendencyNote}）`;
+  return resolvePrompt('speakUp.proactiveCue', { statusTag, tendencyNote }, root);
 }
 
 function appendSpeakLog(state, text, now = Date.now()) {
@@ -812,7 +813,7 @@ async function deliverSpeakUpThought({
         maxPick: 2,
       })
     : [];
-  const freshBrowseBlock = formatFreshBrowsePromptBlock(freshPicks);
+  const freshBrowseBlock = formatFreshBrowsePromptBlock(freshPicks, root);
   const wrapped = wrapInnerThought(promptText, nowDate, {
     wokeFromSleep: wokeRes.woke,
     followUpHint,
@@ -820,6 +821,7 @@ async function deliverSpeakUpThought({
     label,
     unansweredCount: nextUnanswered,
     freshBrowseBlock,
+    root,
   });
 
   try {
@@ -1500,7 +1502,7 @@ export async function executeSpeakUpRoll({
   }
 
   if (typeof sender !== 'function') {
-    const wrapped = wrapInnerThought(cfg.triggerPrompt, nowDate);
+    const wrapped = wrapInnerThought(cfg.triggerPrompt, nowDate, { root });
     appendSpeakLog(state, `擲中但目前無發送管道：${eq}`, nowMs);
     saveSpeakUpState(state, root);
     return { action: 'no_sender', hit: true, message: wrapped, state };

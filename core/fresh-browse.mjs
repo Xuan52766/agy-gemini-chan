@@ -13,6 +13,7 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
+import { resolvePrompt } from './prompts.mjs';
 import {
   clampNum,
   getDataPaths,
@@ -1244,10 +1245,10 @@ export function clearFreshBrowseCache(root = getProjectRoot(), { clearSeen = fal
  * Formats selected fresh picks into a token-lean, non-news-anchor block
  * strictly injected inside `<speak-up>` only.
  */
-export function formatFreshBrowsePromptBlock(picks = []) {
+export function formatFreshBrowsePromptBlock(picks = [], root = getProjectRoot()) {
   if (!Array.isArray(picks) || !picks.length) return '';
   const lines = [
-    '【順手逛到的新鮮事（自由選0~1件自然聊、可無視；勿播報條列、不必硬接上輪工作）】',
+    resolvePrompt('speakUp.freshBrowseHeader', null, root),
   ];
   for (const item of picks) {
     const src = item.source ? `[${item.source}] ` : '';

@@ -10,6 +10,7 @@ import {
   analyzeTurnLocally,
   applyMoodDelta,
   buildInChatMoodRule,
+  buildSessionMoodGuide,
   consumeMoodInjection,
   decayMoodState,
   getMoodSnapshot,
@@ -47,6 +48,7 @@ import {
 import {
   clearFreshBrowseCache,
   fetchWeatherNotice,
+  formatFreshBrowsePromptBlock,
   isPrivateOrReservedIp,
   maybeRefreshFreshFeed,
   normalizeYouTubeOrFeedUrl,
@@ -59,6 +61,13 @@ import {
 } from '../core/fresh-browse.mjs';
 import { classifyInputSource, registerProjectConversation } from '../core/bridge.mjs';
 import { getWorkMarkers, isWorkMarkerPrefix } from '../core/markers.mjs';
+import {
+  getCentralPromptDefs,
+  loadPromptOverrides,
+  resetPromptOverride,
+  resolvePrompt,
+  savePromptOverrides,
+} from '../core/prompts.mjs';
 import { getLatestDesktopSpeechAt } from '../core/sessions.mjs';
 import {
   chunkTelegramText,
@@ -2136,5 +2145,80 @@ test('Phase A & B & D core: xingxi-wiki CRUD, .history snapshot, paging, gap rep
     const startup = buildSessionStartupContext(root);
     assert.match(startup, /星汐主題認識目錄/);
     assert.match(startup, /\[\[手沖咖啡\]\]/);
+  });
+});
+
+test('central prompt registry customizes every injection timing while preserving protocol markers and collapsing defaults', async () => {
+  await withTempRoot((root) => {
+    const defs = getCentralPromptDefs();
+    assert.ok(defs.length >= 25);
+
+    // Saving identical default collapses cleanly to empty override map
+    const firstDef = defs[0];
+    const collapsed = savePromptOverrides({ [firstDef.key]: firstDef.defaultText }, root);
+    assert.deepEqual(collapsed, {});
+
+    // Customize prompts across all timing groups
+    savePromptOverrides(
+      {
+        'memory.recallHeader': '【自訂回憶前導】只講真實記得的：',
+        'mood.sessionGuide': '【自訂開局心情】{{score}}分({{label}}) 給{{ownerName}}',
+        'mood.eventInject': '【自訂事件注入】{{originLine}} -> {{ownerName}}',
+        'nest.sleepRule': '【自訂睡眠準則】閉眼小聲呢喃就好',
+        'speakUp.wrapperIntro': '（自訂搭話開場引導）',
+        'speakUp.proactiveCue': '【自訂暫離提示】{{statusTag}}',
+        'speakUp.freshBrowseHeader': '【自訂見聞標題】',
+        'xingxi.pickupIntro': '（自訂拾星開場 {{date}}）',
+        'xingxi.pickupRulesBoth': '【自訂拾星完整原則】只保留精華',
+        'telegram.incomingIntro': '（自訂TG來訊來自 {{sender}}）',
+      },
+      root,
+    );
+
+    const now = Date.UTC(2026, 10, 26, 10, 0, 0);
+    // Memory recall header
+    rememberMemory({ text: '主人很喜歡抹茶拿鐵', importance: 0.9 }, { root, now });
+    const rec = recallMemories('抹茶拿鐵', { root, now: now + 1000 });
+    assert.match(rec.rendered, /【自訂回憶前導】/);
+
+    // Mood session guide & event inject
+    applyMoodDelta({ moodDelta: 9, dims: { happy: 6 }, reason: '一起吃了布丁', confidence: 90 }, { root, now });
+    const guide = buildSessionMoodGuide(root, now + 1000);
+    assert.match(guide, /【自訂開局心情】/);
+    const moodInj = consumeMoodInjection({ root, consume: true, now: now + 1000 });
+    assert.match(moodInj.inject, /【自訂事件注入】.*一起吃了布丁/);
+
+    // Nest sleep rule
+    performNestAction('nap', { root, now });
+    const nestCtx = consumePendingNestContext(root, { consume: true, now: now + 1000 });
+    assert.match(nestCtx.text, /【自訂睡眠準則】/);
+
+    // Speak-up wrapper, proactive cue, fresh browse header (control markers stay intact!)
+    const wrapped = wrapInnerThought('去打招呼', new Date(now), { root });
+    assert.match(wrapped, /\[SPEAK_UP_INTERNAL\]/);
+    assert.match(wrapped, /自訂搭話開場引導/);
+    const cue = buildProactivePlanCue(root, '我先去睡了明天叫我', now);
+    assert.match(cue, /【自訂暫離提示】/);
+    const freshBlock = formatFreshBrowsePromptBlock([{ source: 'PanSci', title: '貓咪為何愛紙箱' }], root);
+    assert.match(freshBlock, /【自訂見聞標題】/);
+
+    // Xingxi pickup prompt keeps [XINGXI_AUTO_PICKUP] marker while applying custom intro & rules
+    const pickup = buildXingxiPickupPrompt(root, { date: '2026-11-26', scheduleMode: 'both' });
+    assert.ok(pickup.startsWith('[XINGXI_AUTO_PICKUP]'));
+    assert.match(pickup, /自訂拾星開場 2026-11-26/);
+    assert.match(pickup, /【自訂拾星完整原則】/);
+
+    // Telegram incoming keeps [TELEGRAM_INCOMING] + 訊息內容： structure while using custom intro
+    const tgPrompt = formatTelegramIncomingPrompt({ text: '到家囉', senderLabel: '@owner', now, root });
+    assert.ok(tgPrompt.startsWith('[TELEGRAM_INCOMING]'));
+    assert.match(tgPrompt, /自訂TG來訊來自 @owner/);
+    assert.equal(extractTelegramCleanUserText(tgPrompt), '到家囉');
+
+    // Reset single & reset all
+    resetPromptOverride('memory.recallHeader', root);
+    assert.equal(Object.hasOwn(loadPromptOverrides(root), 'memory.recallHeader'), false);
+    assert.match(resolvePrompt('memory.recallHeader', null, root), /你記得的事/);
+    resetPromptOverride('all', root);
+    assert.deepEqual(loadPromptOverrides(root), {});
   });
 });

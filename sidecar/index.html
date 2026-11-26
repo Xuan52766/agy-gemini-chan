@@ -130,6 +130,7 @@
       <button type="button" role="tab" id="tabbtn-speakup" class="tab-btn" data-tab="speakup" aria-selected="false" tabindex="-1">搭話</button>
       <button type="button" role="tab" id="tabbtn-persona" class="tab-btn" data-tab="persona" aria-selected="false" tabindex="-1">人設</button>
       <button type="button" role="tab" id="tabbtn-telegram" class="tab-btn" data-tab="telegram" aria-selected="false" tabindex="-1" title="Telegram 雙向橋接與傳檔">通訊</button>
+      <button type="button" role="tab" id="tabbtn-prompts" class="tab-btn" data-tab="prompts" aria-selected="false" tabindex="-1" title="自由設定所有時機點注入的提示詞">提示</button>
     </nav>
 
     <main class="panels-wrap">
@@ -1328,6 +1329,35 @@
           <h3>橋接紀錄</h3>
           <div id="tg-logs" class="item-list scroll-list"></div>
         </div>
+      </section>
+
+      <!-- ==================== TAB 7: PROMPTS ==================== -->
+      <section id="tab-prompts" role="tabpanel" aria-labelledby="tabbtn-prompts" class="tab-panel" hidden>
+        <div class="panel-section">
+          <div class="sec-head">
+            <h2>
+              <button type="button" class="title-hint" interestfor="tip-prompts-main" popovertarget="tip-prompts-main" popovertargetaction="show">全時機注入提示詞</button>
+            </h2>
+            <div id="tip-prompts-main" class="hint-popover" popover="hint">集中管理開新對話、每輪觸發、貓窩互動、主動搭話、星汐拾星與 Telegram 的所有系統注入文案。控制用前綴標記由程式自動保護，怎麼改都不會破壞路由。</div>
+            <span id="prompts-count-badge" class="meta-text tabular">已自訂 0 / 0</span>
+          </div>
+
+          <div class="filter-bar">
+            <label for="prompts-search" class="sr-only">篩選提示詞</label>
+            <input id="prompts-search" type="search" placeholder="篩選時機點、標題或內文…" />
+            <label class="check-row check-inline" for="prompts-only-custom">
+              <input type="checkbox" id="prompts-only-custom" />
+              <span>只看已自訂</span>
+            </label>
+          </div>
+
+          <div class="action-row-between">
+            <span id="prompts-save-msg" class="muted-meta" role="status"></span>
+            <button id="btn-prompts-reset-all" type="button" class="btn-mini danger">全部恢復預設</button>
+          </div>
+        </div>
+
+        <div id="prompts-groups-wrap"></div>
       </section>
     </main>
   </div>

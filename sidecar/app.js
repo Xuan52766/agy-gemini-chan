@@ -55,6 +55,10 @@
     expandedDiaries: new Set(),
     expandedWikis: new Set(),
     expandedPersonas: new Set(),
+    openPromptGroups: new Set(['startup']),
+    promptDrafts: new Map(),
+    promptsSearch: '',
+    promptsOnlyCustom: false,
     editingMemId: '',
     renamingPersonaId: '',
     editingPersonaId: '',
@@ -2063,6 +2067,8 @@
     'btn-xx-raw-view',
     'xx-tl-play',
     'xx-tl-range',
+    'prompts-search',
+    'prompts-only-custom',
   ]);
 
   function updateProjectScopeUI() {
@@ -2286,6 +2292,69 @@
       </div>
     `).join('');
     setHtmlStable(wrap, nextHtml);
+  }
+
+  function renderPromptsTab(prompts, { force = false } = {}) {
+    const wrap = $('prompts-groups-wrap');
+    if (!wrap || !prompts) return;
+    const badge = $('prompts-count-badge');
+    if (badge) {
+      badge.textContent = `已自訂 ${prompts.customCount || 0} / ${prompts.totalCount || 0}`;
+    }
+    if (!force && wrap.contains(document.activeElement)) return;
+
+    const q = String(state.promptsSearch || '').trim().toLowerCase();
+    const onlyCustom = Boolean(state.promptsOnlyCustom);
+    const items = Array.isArray(prompts.items) ? prompts.items : [];
+    const groups = Array.isArray(prompts.groups) ? prompts.groups : [];
+
+    const filtered = items.filter((it) => {
+      if (onlyCustom && !it.isCustom && !state.promptDrafts.has(it.key)) return false;
+      if (!q) return true;
+      return [it.label, it.timing, it.hint, it.key, it.value].some(
+        (v) => String(v || '').toLowerCase().includes(q),
+      );
+    });
+
+    const html = groups.map((g) => {
+      const list = filtered.filter((it) => it.group === g.id);
+      if (!list.length) return '';
+      const groupCustom = list.filter((it) => it.isCustom).length;
+      const isOpen = Boolean(q || onlyCustom || state.openPromptGroups.has(g.id));
+      const rowsHtml = list.map((it) => {
+        const draftVal = state.promptDrafts.has(it.key) ? state.promptDrafts.get(it.key) : it.value;
+        const dirtyMark = state.promptDrafts.has(it.key) && state.promptDrafts.get(it.key) !== it.value;
+        const rowsCount = Math.min(7, Math.max(2, String(draftVal || '').split('\n').length + 1));
+        const varsHtml = (it.vars && it.vars.length)
+          ? `<div class="prompt-vars"><span>變數：</span>${it.vars.map((v) =>
+              `<button type="button" class="prompt-var-chip" data-prompt-var="{{${esc(v)}}}" data-prompt-target="${esc(it.key)}" title="點擊插入 {{${esc(v)}}}">{{${esc(v)}}}</button>`,
+            ).join('')}</div>`
+          : '';
+        return `
+          <div class="prompt-card" data-prompt-card="${esc(it.key)}">
+            <div class="prompt-head">
+              <span class="prompt-title" title="${esc(it.hint || '')}">${esc(it.label)}${it.isCustom ? '<span class="prompt-custom-tag">已自訂</span>' : ''}${dirtyMark ? '<span class="prompt-custom-tag">未儲存</span>' : ''}</span>
+              <span class="prompt-timing">${esc(it.timing || '')}</span>
+            </div>
+            ${it.hint ? `<p class="muted-meta">${esc(it.hint)}</p>` : ''}
+            ${varsHtml}
+            <textarea class="prompt-textarea" rows="${rowsCount}" data-prompt-input="${esc(it.key)}" aria-label="${esc(it.label)}">${esc(draftVal || '')}</textarea>
+            <div class="action-row-end">
+              <button type="button" class="btn-mini" data-prompt-reset="${esc(it.key)}" ${it.isCustom || dirtyMark ? '' : 'disabled'}>恢復預設</button>
+              <button type="button" class="btn-primary" data-prompt-save="${esc(it.key)}">儲存</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+      return `
+        <details class="drawer" data-prompt-group="${esc(g.id)}" ${isOpen ? 'open' : ''}>
+          <summary>${esc(g.title)} <span class="meta-text tabular">${list.length} 項${groupCustom ? ` · ${groupCustom} 已自訂` : ''}</span></summary>
+          <div class="drawer-body">${rowsHtml}</div>
+        </details>
+      `;
+    }).filter(Boolean).join('') || '<p class="muted-meta">沒有符合篩選條件的提示詞。</p>';
+
+    setHtmlStable(wrap, html);
   }
 
   function renderSpeakUpTargets(speakUp, verifiedConversations) {
@@ -2966,6 +3035,8 @@
         </div>
       `).join('') || '<p class="muted-meta">尚無 Telegram 傳訊或傳檔紀錄。</p>');
     }
+
+    renderPromptsTab(snap.prompts);
 
     updateProjectScopeUI();
   }
@@ -4418,6 +4489,107 @@
       });
     }
   }
+
+  // ---------- 11b. Prompt Studio Tab Events ----------
+  $('prompts-search')?.addEventListener('input', (e) => {
+    state.promptsSearch = e.target.value;
+    renderPromptsTab(state.snap?.prompts, { force: true });
+  });
+
+  $('prompts-only-custom')?.addEventListener('change', (e) => {
+    state.promptsOnlyCustom = Boolean(e.target.checked);
+    renderPromptsTab(state.snap?.prompts, { force: true });
+  });
+
+  $('prompts-groups-wrap')?.addEventListener('toggle', (e) => {
+    const det = e.target;
+    if (!det || !det.dataset?.promptGroup) return;
+    const gid = det.dataset.promptGroup;
+    if (det.open) state.openPromptGroups.add(gid);
+    else state.openPromptGroups.delete(gid);
+  }, true);
+
+  $('prompts-groups-wrap')?.addEventListener('input', (e) => {
+    const ta = e.target.closest?.('textarea[data-prompt-input]');
+    if (!ta) return;
+    const key = ta.dataset.promptInput;
+    state.promptDrafts.set(key, ta.value);
+    const card = ta.closest('.prompt-card');
+    const rstBtn = card?.querySelector(`button[data-prompt-reset="${CSS.escape(key)}"]`);
+    if (rstBtn) rstBtn.disabled = false;
+  });
+
+  $('prompts-groups-wrap')?.addEventListener('click', (e) => {
+    const varChip = e.target.closest?.('button[data-prompt-var]');
+    if (varChip) {
+      const token = varChip.dataset.promptVar || '';
+      const key = varChip.dataset.promptTarget || '';
+      const ta = $('prompts-groups-wrap')?.querySelector(`textarea[data-prompt-input="${CSS.escape(key)}"]`);
+      if (ta && token) {
+        const start = ta.selectionStart ?? ta.value.length;
+        const end = ta.selectionEnd ?? ta.value.length;
+        ta.value = `${ta.value.slice(0, start)}${token}${ta.value.slice(end)}`;
+        ta.selectionStart = ta.selectionEnd = start + token.length;
+        ta.focus();
+        state.promptDrafts.set(key, ta.value);
+      }
+      return;
+    }
+
+    const saveBtn = e.target.closest?.('button[data-prompt-save]');
+    if (saveBtn) {
+      const key = saveBtn.dataset.promptSave;
+      const ta = $('prompts-groups-wrap')?.querySelector(`textarea[data-prompt-input="${CSS.escape(key)}"]`);
+      if (!ta) return;
+      return withBusy(saveBtn, async () => {
+        const res = await apiFetch('/api/prompts', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'save', key, value: ta.value, conversationId: activeConversationId() }),
+        });
+        state.promptDrafts.delete(key);
+        if (res?.snapshot) {
+          renderSnapshot(res.snapshot);
+          renderPromptsTab(res.snapshot.prompts, { force: true });
+        }
+        flashMsg('prompts-save-msg', '已儲存提示詞 ✓');
+        showToast('已儲存提示詞設定', 'ok', 2000);
+      });
+    }
+
+    const rstBtn = e.target.closest?.('button[data-prompt-reset]');
+    if (rstBtn) {
+      const key = rstBtn.dataset.promptReset;
+      return withBusy(rstBtn, async () => {
+        const res = await apiFetch('/api/prompts', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'reset', key, conversationId: activeConversationId() }),
+        });
+        state.promptDrafts.delete(key);
+        if (res?.snapshot) {
+          renderSnapshot(res.snapshot);
+          renderPromptsTab(res.snapshot.prompts, { force: true });
+        }
+        flashMsg('prompts-save-msg', '已恢復此條預設 ✓');
+      });
+    }
+  });
+
+  $('btn-prompts-reset-all')?.addEventListener('click', () => {
+    const btn = $('btn-prompts-reset-all');
+    confirmBtnAction(btn, 'prompts-reset-all', '#btn-prompts-reset-all', async () => {
+      const res = await apiFetch('/api/prompts', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'reset_all', conversationId: activeConversationId() }),
+      });
+      state.promptDrafts.clear();
+      if (res?.snapshot) {
+        renderSnapshot(res.snapshot);
+        renderPromptsTab(res.snapshot.prompts, { force: true });
+      }
+      flashMsg('prompts-save-msg', '全部提示詞已恢復預設 ✓');
+      showToast('已將全部提示詞恢復為預設值', 'ok', 2400);
+    }, '確定全部恢復？');
+  });
 
   // ---------- 12. Initialize Workspace Watcher + Poll Loop ----------
   async function init() {

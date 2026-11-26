@@ -15,6 +15,7 @@ import { basename, dirname, extname, join } from 'node:path';
 import { isInternalPickupSkipText, XINGXI_PICKUP_MARKER } from './markers.mjs';
 import { listCoreMemoryAnchors, listMemoriesCreatedOnDay } from './memory.mjs';
 import { listDayMoodTimeline } from './mood.mjs';
+import { resolvePrompt } from './prompts.mjs';
 import { listSessionTranscriptPaths } from './sessions.mjs';
 import {
   clampNum,
@@ -1448,7 +1449,7 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
 
   const parts = [
     XINGXI_PICKUP_MARKER,
-    `（這是定時／手動「星汐拾星」整理任務，日期：${day}。不是對方新問的問題，請自行完成歸檔並給一個簡短溫柔的晚安或完成招呼即可。）`,
+    resolvePrompt('xingxi.pickupIntro', { date: day }, root),
     '',
     modeNote,
     `- 記憶卡位置：\`${cardPath}\`（先呼叫 \`xingxi\` 確認現有內容，避免重複）`,
@@ -1475,27 +1476,14 @@ export function buildXingxiPickupPrompt(root, { date, scheduleMode = 'both', mat
     parts.push('', '（目前找不到落盤的歷史紀錄檔案或今日尚無新對話紀錄；請回顧你在本對話看過的近期互動來整理，如果真的沒什麼新內容可寫，就不用硬湊，簡短說一聲即可。）');
   }
 
-  if (scheduleMode === 'diary_only') {
-    parts.push(
-      '',
-      '歸檔原則：不要重複呼叫 `remember`；只把今日日常細節與情緒脈絡寫進日記（日記結尾可附一行 `關鍵詞：詞1、詞2、詞3` 方便日後索引）。',
-    );
-  } else if (scheduleMode === 'card_only') {
-    parts.push(
-      '',
-      '歸檔原則：',
-      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章保持精簡核心總覽（只收長期大原則與關鍵里程碑），這次不必生成日記。',
-      '- 主題認識頁（`認識/*.md`）：若今日對話對某個人、專案、偏好或重要經歷形成跨日脈絡，請用 `xingxi_wiki_write` 更新 `認識/<主題>.md`（關聯處用 `[[主題]]` 互連）並同步更新 `title: "目錄"`（每頁只寫一行簡介，不寫正文結論）。',
-      '- 性格與說話演進（不刪舊記憶、勿推翻核心人設）：回顧今日互動，若有長期成立的新偏好、吐槽點、相處共識或反應習慣，可帶日期追加進第 1 或第 7 章；若有特別傳神的新口癖或代表台詞，可用 `xingxi_append`（`chapter: "2", wholeChapter: true`）適度更新第 2 章原話照抄（上限 10 句，保留既有準則）；沒有明確成長變化就維持原樣、不要硬湊。',
-    );
-  } else {
-    parts.push(
-      '',
-      '歸檔原則：',
-      '- 不要重複呼叫 `remember`；記憶卡第 1~8 章保持精簡核心總覽，流水過程寫進日記（日記結尾可附一行 `關鍵詞：詞1、詞2、詞3` 方便日後索引）。',
-      '- 主題認識頁（`認識/*.md`）：若今日對話對某個人、專案、偏好或重要經歷形成跨日認知，請用 `xingxi_wiki_write` 更新 `認識/<主題>.md`（互相關聯處用 `[[主題]]`）並同步精簡維護 `title: "目錄"`（每頁只寫一行簡介，不寫結論）。',
-      '- 性格與說話演進（不刪舊記憶、勿推翻核心人設）：回顧今日互動，若有長期成立的新偏好、吐槽點、相處共識或反應習慣，可帶日期追加進第 1 或第 7 章；若有特別傳神的新口癖或代表台詞，可用 `xingxi_append`（`chapter: "2", wholeChapter: true`）適度更新第 2 章原話照抄（上限 10 句，保留既有準則）；沒有明確成長變化就維持原樣、不要硬湊。',
-    );
+  const rulesKey = scheduleMode === 'diary_only'
+    ? 'xingxi.pickupRulesDiaryOnly'
+    : scheduleMode === 'card_only'
+      ? 'xingxi.pickupRulesCardOnly'
+      : 'xingxi.pickupRulesBoth';
+  const rulesText = resolvePrompt(rulesKey, { date: day }, root);
+  if (rulesText) {
+    parts.push('', rulesText);
   }
   const gapReport = buildWikiGapReport(root);
   if (gapReport) {

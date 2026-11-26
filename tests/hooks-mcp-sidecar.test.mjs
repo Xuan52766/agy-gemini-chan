@@ -1009,6 +1009,45 @@ test('Sidecar router serves clean UI, enforces cooldown/project boundaries, and 
     assert.match(html.body, /id="btn-xx-wiki-save"/);
     assert.match(appJs.body, /wiki-link/);
 
+    // Unified Prompt Studio API (central + bridged prompts, control marker preservation, reset & reset_all)
+    const promptsGet = await apis.get('/api/prompts').get('GET')({});
+    assert.equal(promptsGet.ok, true);
+    assert.equal(promptsGet.prompts.groups.length, 6);
+    assert.ok(promptsGet.prompts.totalCount >= 30);
+
+    const saveCentral = await apis.get('/api/prompts').get('POST')({
+      action: 'save',
+      key: 'nest.directCare',
+      value: '（自訂互動直推：「{{actionLabel}}」）',
+    });
+    assert.equal(saveCentral.ok, true);
+    assert.ok(saveCentral.prompts.items.find((i) => i.key === 'nest.directCare')?.isCustom);
+
+    const customCare = await apis.get('/api/nest/action').get('POST')({
+      action: 'play',
+      sendToChat: true,
+      conversationId: 'cat-conv-verified',
+      workspaceUris: [REPO_ROOT],
+    });
+    assert.equal(customCare.dispatched, true);
+    assert.match(dispatched[dispatched.length - 1].text, /^\[CAT_NEST_EVENT\] （自訂互動直推：「逗貓棒玩耍」）$/);
+
+    const saveBridged = await apis.get('/api/prompts').get('POST')({
+      action: 'save',
+      key: 'mood.inChatRule',
+      value: 'CUSTOM_BRIDGED_MOOD_RULE',
+    });
+    assert.equal(saveBridged.snapshot.mood.config.inChatRulePrompt, 'CUSTOM_BRIDGED_MOOD_RULE');
+
+    const resetAllPrompts = await apis.get('/api/prompts').get('POST')({ action: 'reset_all' });
+    assert.equal(resetAllPrompts.ok, true);
+    assert.equal(resetAllPrompts.prompts.customCount, 0);
+    assert.equal(resetAllPrompts.snapshot.mood.config.inChatRulePrompt, '');
+
+    assert.match(html.body, /id="tabbtn-prompts"/);
+    assert.match(html.body, /id="tab-prompts"/);
+    assert.match(html.body, /id="prompts-groups-wrap"/);
+
     // Telegram API endpoints: config saves token safely masked, blank update preserves token, pair-code issues 6-char code
     const tgSave = await apis.get('/api/telegram/config').get('POST')({
       enabled: true,

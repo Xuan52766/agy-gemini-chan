@@ -25,6 +25,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TELEGRAM_INCOMING_MARKER } from './markers.mjs';
+import { resolvePrompt } from './prompts.mjs';
 import { getLatestDesktopSpeechAt, getSessionsFilePath } from './sessions.mjs';
 import {
   clampNum,
@@ -920,13 +921,14 @@ export function formatTelegramIncomingPrompt({
   failedFiles = [],
   senderLabel = '',
   now = Date.now(),
+  root = getProjectRoot(),
 } = {}) {
   const lines = [
     TELEGRAM_INCOMING_MARKER,
-    `（這是${senderLabel || '主人'}從 Telegram 傳來的訊息，請直接自然回覆；你這輪的最終文字與生成的檔案會自動轉發回 Telegram。）`,
+    resolvePrompt('telegram.incomingIntro', { sender: senderLabel || '主人' }, root),
   ];
   if (files.length) {
-    lines.push('（對方夾帶了以下檔案並已下載至本機；需要檢視圖片、音訊或文件內容時可直接用 read_file 開啟路徑；若要主動回傳指定本機檔案或圖片可呼叫 `telegram_send`）');
+    lines.push(resolvePrompt('telegram.incomingFilesHint', null, root));
   }
   lines.push(`時間：${localClockDisplay(now)}`);
   const safeText = neutralizeTelegramMarkers(String(text || '').trim());
@@ -1174,6 +1176,7 @@ export async function handleTelegramUpdatesBatch(
       failedFiles,
       senderLabel: userLabel,
       now,
+      root,
     });
 
     if (typeof dispatchToConversation === 'function') {

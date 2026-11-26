@@ -13,6 +13,7 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { moodLabel, moodTier } from './mood.mjs';
+import { resolvePrompt } from './prompts.mjs';
 import {
   clampNum,
   getDataPaths,
@@ -726,9 +727,9 @@ export function consumePendingNestContext(root, { consume = true, now = Date.now
   }
 
   if (state.sleeping) {
-    lines.push('【睡覺狀態表現準則】你現在正閉著眼睛在貓窩裡睡覺，並沒有清醒地坐起來聊天；若這輪收到撫摸／抱抱／晚安或剛蓋被子入睡，請只用半夢半醒、迷糊帶濃濃困意的短句夢囈應聲（切勿突然表現得精力充沛、問東問西或把話題打開），也不要寫 `*動作*` 或 `（動作旁白）`。');
+    lines.push(resolvePrompt('nest.sleepRule', null, root));
   } else if (events.length) {
-    lines.push('（帶著這份貓窩互動的心情自然接著聊就好，不用把系統字眼唸出來。）');
+    lines.push(resolvePrompt('nest.careFooter', null, root));
   }
 
   if (dirty) {

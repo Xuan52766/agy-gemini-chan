@@ -16,6 +16,7 @@ import { buildInChatMemoryRule, loadMemoryStore, recallMemories } from '../core/
 import { buildInChatMoodRule, buildSessionMoodGuide, consumeMoodInjection, getMoodSnapshot, loadMoodConfig } from '../core/mood.mjs';
 import { getNestSnapshot, consumePendingNestContext, loadNestState, setNestActivity, wakeFromSleep } from '../core/nest.mjs';
 import { resolvePersona } from '../core/persona.mjs';
+import { loadPromptOverrides, resolvePrompt } from '../core/prompts.mjs';
 import {
   buildInChatSpeakUpRule,
   buildProactivePlanCue,
@@ -49,7 +50,7 @@ function computePersonaHash(persona) {
     .slice(0, 16);
 }
 
-function computeRulesHash(moodCfg, memPolicy, spCfg) {
+function computeRulesHash(moodCfg, memPolicy, spCfg, promptOverrides = {}) {
   return createHash('sha1')
     .update(JSON.stringify([
       'rules-v5',
@@ -70,6 +71,7 @@ function computeRulesHash(moodCfg, memPolicy, spCfg) {
       Boolean(spCfg?.proactiveCueEnabled),
       spCfg?.respectActiveChatGapMin ?? 8,
       spCfg?.inChatRulePrompt || '',
+      promptOverrides || {},
     ]))
     .digest('hex')
     .slice(0, 16);
@@ -112,7 +114,8 @@ function main() {
   const moodCfgNow = loadMoodConfig(ROOT);
   const memPolicyNow = loadMemoryStore(ROOT).policy;
   const spCfgNow = loadSpeakUpConfig(ROOT);
-  const rulesHash = computeRulesHash(moodCfgNow, memPolicyNow, spCfgNow);
+  const promptOverridesNow = loadPromptOverrides(ROOT);
+  const rulesHash = computeRulesHash(moodCfgNow, memPolicyNow, spCfgNow, promptOverridesNow);
   const canInjectTurn = !isMidTurnContinuation && sourceKind !== 'xingxi-pickup';
   const needsStartupInject = canInjectTurn && !prevSess?.hasInjectedStartupContext;
   const needsPersonaInject = Boolean(
@@ -165,7 +168,7 @@ function main() {
     const woke = wakeFromSleep(ROOT, {
       reason: 'user-chat',
       label: '聽到你的聲音揉揉眼醒來，正準備回你話…',
-      wakeNote: '你原本正在貓窩軟墊上打盹，剛聽到主人直接開口跟你說話才揉著眼睛醒過來（語氣可帶一絲剛睡醒的迷糊，若交辦正事就收起睡意認真處理；側邊欄已同步切成清醒姿態）',
+      wakeNote: resolvePrompt('nest.wakeByChatNote', null, ROOT),
     });
     wokeByChat = woke.woke;
     nestState = woke.state;
@@ -217,7 +220,7 @@ function main() {
   if (needsPersonaInject) {
     sections.push(persona.effectiveText);
   } else if (needsStartupInject) {
-    sections.push('【Gemini-chan 貓窩（僅限 gemini_cat 專案）】目前尚未選定固定人物設定，保持自然真誠即可（無任何全域人設會干擾外部專案）。');
+    sections.push(resolvePrompt('startup.noPersonaFallback', null, ROOT));
   }
 
   // 2. Startup Xingxi Memory Card + recent 3 days of diaries + core persistent anchors (once per session on Turn 1)
@@ -262,7 +265,17 @@ function main() {
     if (spRule) sections.push(spRule);
     const nest = getNestSnapshot(ROOT, moodSnap.mood, Date.now(), moodSnap.dims);
     sections.push(
-      `【貓窩即時狀態】羈絆 Lv.${nest.bondLevel}（${nest.bond}）｜今日陪伴 ${nest.todayCareCount || 0} 次${nest.sleeping ? '｜打盹中' : ''}${nest.pendingCount ? `｜待帶入互動 ${nest.pendingCount} 項` : ''}`,
+      resolvePrompt(
+        'nest.startupStatusLine',
+        {
+          bondLevel: nest.bondLevel,
+          bond: nest.bond,
+          todayCareCount: nest.todayCareCount || 0,
+          sleepTag: nest.sleeping ? '｜打盹中' : '',
+          pendingTag: nest.pendingCount ? `｜待帶入互動 ${nest.pendingCount} 項` : '',
+        },
+        ROOT,
+      ),
     );
   } else if (needsStaticRules) {
     const moodCfg = loadMoodConfig(ROOT);

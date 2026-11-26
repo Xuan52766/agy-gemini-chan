@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  CAT_NEST_EVENT_MARKER,
   getFullStateSnapshot,
   isVerifiedProjectConversation,
   loadRegisteredSessions,
@@ -41,6 +42,12 @@ import {
 } from '../core/nest.mjs';
 import { mutatePersona } from '../core/persona.mjs';
 import {
+  resetPromptOverride,
+  resolvePrompt,
+  savePromptOverrides,
+} from '../core/prompts.mjs';
+import {
+  DEFAULT_SPEAK_UP_CONFIG,
   executeSpeakUpRoll,
   loadSpeakUpConfig,
   mutateSpeakUpPlan,
@@ -274,22 +281,24 @@ export function registerSidecarRoutes(
       } else {
         try {
           const actionLabel = res.state.history[res.state.history.length - 1]?.label || action;
-          let msg;
-          if (action === 'whisper' && data.note) {
-            msg = res.state?.sleeping
-              ? `[CAT_NEST_EVENT] （你目前還在軟墊上睡覺、還沒被叫醒，主人趁你打盹把一張小紙條壓在你枕邊並推了你一下：「${String(data.note).trim()}」；請只用半夢半醒、含糊困倦的一兩句夢囈簡短回應，不要寫 *動作* 或 （動作旁白）～）`
-              : `[CAT_NEST_EVENT] （主人在側邊欄貓窩遞來一張小紙條，並點擊了直接傳送）「${String(data.note).trim()}」`;
+          const noteText = String(data.note || '').trim();
+          let body;
+          if (action === 'whisper' && noteText) {
+            body = res.state?.sleeping
+              ? resolvePrompt('nest.directWhisperSleep', { note: noteText }, root)
+              : resolvePrompt('nest.directWhisper', { note: noteText }, root);
           } else if (action === 'nap' && res.state?.sleeping) {
-            msg = '[CAT_NEST_EVENT] （主人在側邊欄貓窩替你「蓋小被子休息」，你現在正閉上眼睛準備入睡；只用一句短短帶著濃厚睡意的晚安或咕噥回應，不要打開新話題，也不要寫 *動作* 或 （動作旁白），說完就會睡著～）';
+            body = resolvePrompt('nest.directSleep', null, root);
           } else if (action === 'nap' && !res.state?.sleeping) {
-            msg = '[CAT_NEST_EVENT] （主人在側邊欄貓窩輕輕拍了拍你，把正在打盹的你「叫醒」了；你剛剛才睜開眼睛醒過來，請直接用自然口語回應主人，不要寫 *動作* 或 （動作旁白）～）';
+            body = resolvePrompt('nest.directWake', null, root);
           } else if (action === 'feed' && res.wokeFromSleep) {
-            msg = '[CAT_NEST_EVENT] （原本還在軟墊打盹的你，被主人在側邊欄遞來的「小魚乾」香味香醒並一口吃掉了；請以剛被美食叫醒的自然口語回應主人，不要寫 *動作* 或 （動作旁白）～）';
+            body = resolvePrompt('nest.directFeedWake', null, root);
           } else if (res.state?.sleeping) {
-            msg = `[CAT_NEST_EVENT] （你此刻正在貓窩軟墊上閉著眼熟睡中、還沒被叫醒，主人在側邊欄輕輕對你進行了「${actionLabel}」互動；請務必以半夢半醒、帶著濃濃睡意的小聲夢囈簡短應一兩句就好，切勿表現得像已經完全清醒，也不要寫 *動作* 或 （動作旁白）～）`;
+            body = resolvePrompt('nest.directCareSleep', { actionLabel }, root);
           } else {
-            msg = `[CAT_NEST_EVENT] （主人在側邊欄貓窩點了「${actionLabel}」陪你一下，順著當下氣氛自然應一兩句就好～）`;
+            body = resolvePrompt('nest.directCare', { actionLabel }, root);
           }
+          const msg = `${CAT_NEST_EVENT_MARKER} ${body}`;
           await sendMessageFn(targetId, msg);
           dispatched = true;
         } catch (err) {
@@ -684,5 +693,68 @@ export function registerSidecarRoutes(
       : null;
     const res = syncTelegramHistoryFromTranscript(root, matched?.transcriptPath || '');
     return { ...res, snapshot: getFullStateSnapshot({ root, sessionId: targetSid }) };
+  }, 'POST');
+
+  // Unified Prompt Studio endpoints (covers all central + bridged module prompts)
+  const applyPromptEntry = (key, rawValue) => {
+    const val = typeof rawValue === 'string' ? rawValue : '';
+    switch (key) {
+      case 'mood.inChatRule':
+        saveMoodConfig({ inChatRulePrompt: val }, root);
+        return true;
+      case 'memory.inChatRule':
+        mutateMemory('updatePolicy', { policy: { inChatRulePrompt: val } }, root);
+        return true;
+      case 'speakUp.inChatRule':
+        saveSpeakUpConfig({ inChatRulePrompt: val }, root);
+        return true;
+      case 'speakUp.triggerPrompt':
+        saveSpeakUpConfig({ triggerPrompt: val.trim() ? val : DEFAULT_SPEAK_UP_CONFIG.triggerPrompt }, root);
+        return true;
+      case 'speakUp.followUpHint':
+        saveSpeakUpConfig({ followUpHintPrompt: val }, root);
+        return true;
+      default:
+        savePromptOverrides({ [key]: val }, root);
+        return true;
+    }
+  };
+
+  router.api('/api/prompts', (data = {}) => {
+    const snap = getFullStateSnapshot({ root, sessionId: String(data.conversationId || '') });
+    return { ok: true, prompts: snap.prompts };
+  }, 'GET');
+
+  router.api('/api/prompts', (data = {}) => {
+    const action = String(data.action || 'save').trim();
+    const sessionId = String(data.conversationId || '');
+    if (action === 'reset_all') {
+      resetPromptOverride('all', root);
+      saveMoodConfig({ inChatRulePrompt: '' }, root);
+      mutateMemory('updatePolicy', { policy: { inChatRulePrompt: '' } }, root);
+      saveSpeakUpConfig(
+        {
+          inChatRulePrompt: '',
+          triggerPrompt: DEFAULT_SPEAK_UP_CONFIG.triggerPrompt,
+          followUpHintPrompt: '',
+        },
+        root,
+      );
+    } else if (action === 'reset') {
+      const key = String(data.key || '').trim();
+      if (!key) return { ok: false, error: '請指定要恢復預設的提示詞鍵名' };
+      applyPromptEntry(key, '');
+    } else if (action === 'save_batch') {
+      const entries = data.prompts && typeof data.prompts === 'object' ? Object.entries(data.prompts) : [];
+      for (const [k, v] of entries) {
+        if (k) applyPromptEntry(String(k), v);
+      }
+    } else {
+      const key = String(data.key || '').trim();
+      if (!key) return { ok: false, error: '請指定提示詞鍵名' };
+      applyPromptEntry(key, data.value ?? '');
+    }
+    const snap = getFullStateSnapshot({ root, sessionId });
+    return { ok: true, prompts: snap.prompts, snapshot: snap };
   }, 'POST');
 }

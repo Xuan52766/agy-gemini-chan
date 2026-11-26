@@ -15,9 +15,11 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolvePrompt } from './prompts.mjs';
 import {
   clampNum,
   getDataPaths,
+  getProjectRoot,
   localDayKey,
   normalizeCustomPrompt,
   readJsonSafe,
@@ -503,10 +505,11 @@ function relativeMoodTime(ms, now = Date.now()) {
   return '前幾天';
 }
 
-export function renderMoodLine(state, cfg, now = Date.now()) {
+export function renderMoodLine(state, cfg, now = Date.now(), root = getProjectRoot()) {
   if (!cfg.enabled || !cfg.injectMode || cfg.injectMode === 'off') return '';
   const who = String(cfg.ownerName || '主人').trim() || '主人';
   const score = Math.round(state.mood);
+  const label = moodLabel(score);
   const toneGuide = score >= 80
     ? '此刻心情明亮歡喜，回覆語氣可自然更輕快、主動貼近、帶點雀躍。'
     : score >= 62
@@ -523,10 +526,19 @@ export function renderMoodLine(state, cfg, now = Date.now()) {
     const top = topDims(state, 1)[0];
     const statusLine = `（這會兒）${moodToneLine(score)}${top ? '，還' + (DIM_SHORT[top.k] || top.label) : ''}`;
     const originLine = state.kind === 'decay' ? r : `（${relativeMoodTime(state.updatedAt, now)}）${r}`;
-    return `${statusLine}\n${originLine}\n\n${toneGuide}這是這會兒的心情底色，請讓情緒自然滲進用詞與態度，也別把這段提示念出來——若${who}轉去聊別的事，就按真實情緒順著接。`;
+    return resolvePrompt(
+      'mood.eventInject',
+      { statusLine, originLine, toneGuide, ownerName: who, score, label, reason: r },
+      root,
+    );
   }
   const parts = topDims(state, 2).map((t) => DIM_PLAIN[t.k] || t.label);
-  return `（此刻你）心情${moodLabel(score)}${parts.length ? '，' + parts.join('、') : ''}。${toneGuide}這是背景感受，別把這句話念出來；${who}說別的事，你就按自己的真實感受來回應。`;
+  const dimsTag = parts.length ? `，${parts.join('、')}` : '';
+  return resolvePrompt(
+    'mood.labelInject',
+    { label, dimsTag, toneGuide, ownerName: who, score },
+    root,
+  );
 }
 
 /**
@@ -548,10 +560,22 @@ export function buildSessionMoodGuide(root, now = Date.now()) {
   if (!cfg.enabled) return '';
   const state = loadMoodState({ root, now, persist: false });
   const score = Math.round(state.mood);
+  const label = moodLabel(score);
   const top = topDims(state, 2).map((d) => `${d.label}(${Math.round(d.v)})`).join('、');
   const lines = [
-    `【此刻心情基底】${score}/100（${moodLabel(score)}${top ? `｜${top}` : ''}）${state.lastReason ? `｜最近緣由：${state.lastReason}` : ''}`,
-    `請讓此刻心情自然影響你開頭說話的溫度、活潑度與對${cfg.ownerName || '主人'}的反應，不要直接復誦「我的心情是 X 分」。`,
+    resolvePrompt(
+      'mood.sessionGuide',
+      {
+        score,
+        label,
+        topDims: top,
+        topDimsTag: top ? `｜${top}` : '',
+        lastReason: state.lastReason || '',
+        lastReasonTag: state.lastReason ? `｜最近緣由：${state.lastReason}` : '',
+        ownerName: cfg.ownerName || '主人',
+      },
+      root,
+    ),
   ];
   const rule = buildInChatMoodRule(cfg);
   if (rule) lines.push(rule);
@@ -577,7 +601,7 @@ export function consumeMoodInjection({ root, slotId, consume = true, now = Date.
     if (state.injectedFor === state.updatedAt) {
       return {
         status: 'said',
-        text: state.lastInjectedText || renderMoodLine(state, cfg, now),
+        text: state.lastInjectedText || renderMoodLine(state, cfg, now, root),
         state,
         inject: '',
       };
@@ -600,7 +624,7 @@ export function consumeMoodInjection({ root, slotId, consume = true, now = Date.
       return { status: 'blocked', text: '', saidToday, cap: cfg.injectPerDay, state, inject: '' };
     }
 
-    const line = renderMoodLine(state, cfg, now);
+    const line = renderMoodLine(state, cfg, now, root);
     if (!line) return { status: 'empty', text: '', state, inject: '' };
 
     if (consume) {
@@ -630,7 +654,7 @@ export function consumeMoodInjection({ root, slotId, consume = true, now = Date.
     if (state.injectedFor === state.updatedAt) {
       return {
         status: 'said',
-        text: state.lastInjectedText || renderMoodLine(state, cfg, now),
+        text: state.lastInjectedText || renderMoodLine(state, cfg, now, root),
         state,
         inject: '',
       };
@@ -651,7 +675,7 @@ export function consumeMoodInjection({ root, slotId, consume = true, now = Date.
       return { status: 'blocked', text: '', saidToday, cap: cfg.injectPerDay, state, inject: '' };
     }
 
-    const line = renderMoodLine(state, cfg, now);
+    const line = renderMoodLine(state, cfg, now, root);
     if (!line) return { status: 'empty', text: '', state, inject: '' };
 
     state.injectedFor = state.updatedAt;

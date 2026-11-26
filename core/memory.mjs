@@ -11,6 +11,7 @@
  */
 
 import { join } from 'node:path';
+import { resolvePrompt } from './prompts.mjs';
 import {
   clampNum,
   getDataPaths,
@@ -517,7 +518,7 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
     }
   }
 
-  const rendered = selected.length ? formatRecalledBlock(selected, now) : '';
+  const rendered = selected.length ? formatRecalledBlock(selected, now, root) : '';
   const sortedAll = scored.slice().sort((a, b) => b.s.P - a.s.P || b.s.C - a.s.C);
 
   if (recordSample || saveTrace) {
@@ -551,7 +552,7 @@ export function recallMemories(query, { root, now = Date.now(), recordSample = f
   };
 }
 
-export function formatRecalledBlock(selected, now = Date.now()) {
+export function formatRecalledBlock(selected, now = Date.now(), root) {
   if (!selected.length) return '';
   const lines = selected.map((r) => {
     const body = String(r.m.text || '').trim();
@@ -559,9 +560,9 @@ export function formatRecalledBlock(selected, now = Date.now()) {
     if (r.m.category === 'stable_profile') return `- 一直：${body}`;
     return `- ${body}`;
   });
+  const header = resolvePrompt('memory.recallHeader', null, root);
   return [
-    '【你記得的事（長期記憶）】',
-    '以下是你們過去真實記下來的事；有標時間的照那個時間說，沒標時間的不要自己編日期；想不起來就直接說想不起來。',
+    header,
     '',
     ...lines,
   ].join('\n');
