@@ -2325,18 +2325,28 @@
         const draftVal = state.promptDrafts.has(it.key) ? state.promptDrafts.get(it.key) : it.value;
         const dirtyMark = state.promptDrafts.has(it.key) && state.promptDrafts.get(it.key) !== it.value;
         const rowsCount = Math.min(7, Math.max(2, String(draftVal || '').split('\n').length + 1));
+        const tipId = `tip-pr-${String(it.key).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+        const statusHtml = dirtyMark
+          ? '<span class="meta-text accent-text">未儲存</span>'
+          : it.isCustom
+            ? '<span class="meta-text accent-text">已自訂</span>'
+            : '';
         const varsHtml = (it.vars && it.vars.length)
           ? `<div class="prompt-vars"><span>變數：</span>${it.vars.map((v) =>
               `<button type="button" class="prompt-var-chip" data-prompt-var="{{${esc(v)}}}" data-prompt-target="${esc(it.key)}" title="點擊插入 {{${esc(v)}}}">{{${esc(v)}}}</button>`,
             ).join('')}</div>`
           : '';
+        const tipText = [it.timing ? `時機：${it.timing}` : '', it.hint || ''].filter(Boolean).join('。');
         return `
           <div class="prompt-card" data-prompt-card="${esc(it.key)}">
             <div class="prompt-head">
-              <span class="prompt-title" title="${esc(it.hint || '')}">${esc(it.label)}${it.isCustom ? '<span class="prompt-custom-tag">已自訂</span>' : ''}${dirtyMark ? '<span class="prompt-custom-tag">未儲存</span>' : ''}</span>
+              <div class="inline-meta">
+                <button type="button" class="title-hint prompt-title" interestfor="${esc(tipId)}" popovertarget="${esc(tipId)}" popovertargetaction="show">${esc(it.label)}</button>
+                <div id="${esc(tipId)}" class="hint-popover" popover="hint">${esc(tipText)}</div>
+                ${statusHtml}
+              </div>
               <span class="prompt-timing">${esc(it.timing || '')}</span>
             </div>
-            ${it.hint ? `<p class="muted-meta">${esc(it.hint)}</p>` : ''}
             ${varsHtml}
             <textarea class="prompt-textarea" rows="${rowsCount}" data-prompt-input="${esc(it.key)}" aria-label="${esc(it.label)}">${esc(draftVal || '')}</textarea>
             <div class="action-row-end">
@@ -2354,7 +2364,9 @@
       `;
     }).filter(Boolean).join('') || '<p class="muted-meta">沒有符合篩選條件的提示詞。</p>';
 
-    setHtmlStable(wrap, html);
+    if (setHtmlStable(wrap, html) && typeof bindTitleHintsIn === 'function') {
+      bindTitleHintsIn(wrap);
+    }
   }
 
   function renderSpeakUpTargets(speakUp, verifiedConversations) {
@@ -4329,11 +4341,10 @@
   }));
 
   // ---------- 11c. Accessible Title Hints (interestfor + popover="hint" + offline fallback) ----------
+  let bindTitleHintsIn = () => {};
   function initTitleHints() {
-    const triggers = [...document.querySelectorAll('[interestfor]')];
-    if (!triggers.length) return;
-
     const ownedExpanded = new WeakSet();
+    const boundFallback = new WeakSet();
     const supportsPopover = Object.hasOwn(HTMLElement.prototype, 'popover');
     const supportsInterest = 'interestForElement' in HTMLButtonElement.prototype;
     const supportsAnchorArea = typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
@@ -4374,23 +4385,83 @@
       tip.style.top = `${Math.round(top)}px`;
     };
 
-    // Upfront ARIA wiring for browse-mode screen readers
-    for (const trig of triggers) {
-      const targetId = trig.getAttribute('interestfor');
-      const tip = targetId ? document.getElementById(targetId) : null;
-      if (!tip || tip.getAttribute('popover') !== 'hint') continue;
-      if (!tip.hasAttribute('role')) tip.setAttribute('role', 'tooltip');
-      const opensOnActivate = trig.getAttribute('popovertarget') === targetId
-        || trig.getAttribute('commandfor') === targetId;
-      if (opensOnActivate) {
-        if (!trig.hasAttribute('aria-expanded')) {
-          trig.setAttribute('aria-expanded', String(isPopoverOpen(tip)));
-          ownedExpanded.add(trig);
+    let activeTip = null;
+    let activeTrigger = null;
+    let closeTimer = null;
+
+    const openTip = (trig, tip) => {
+      clearTimeout(closeTimer);
+      if (activeTip && activeTip !== tip) closeTip(activeTip, activeTrigger);
+      activeTip = tip;
+      activeTrigger = trig;
+      if (supportsPopover) {
+        if (!isPopoverOpen(tip)) {
+          try { tip.showPopover({ source: trig }); } catch {
+            try { tip.showPopover(); } catch { /* ignore */ }
+          }
         }
-      } else if (!trig.hasAttribute('aria-describedby')) {
-        trig.setAttribute('aria-describedby', targetId);
+        placeHintFallback(trig, tip);
+      } else {
+        tip.classList.add(':popover-open');
+        placeHintFallback(trig, tip);
+        if (ownedExpanded.has(trig)) trig.setAttribute('aria-expanded', 'true');
+        trig.classList.add('interest-source');
       }
-    }
+    };
+
+    const closeTip = (tip, trig) => {
+      clearTimeout(closeTimer);
+      if (!tip) return;
+      if (supportsPopover) {
+        if (isPopoverOpen(tip)) {
+          try { tip.hidePopover(); } catch { /* ignore */ }
+        }
+      } else {
+        tip.classList.remove(':popover-open');
+        if (trig && ownedExpanded.has(trig)) trig.setAttribute('aria-expanded', 'false');
+        trig?.classList.remove('interest-source');
+      }
+      if (activeTip === tip) {
+        activeTip = null;
+        activeTrigger = null;
+      }
+    };
+
+    const scheduleClose = (tip, trig) => {
+      clearTimeout(closeTimer);
+      closeTimer = setTimeout(() => closeTip(tip, trig), 130);
+    };
+
+    bindTitleHintsIn = (scope = document) => {
+      const triggers = [...scope.querySelectorAll('[interestfor]')];
+      for (const trig of triggers) {
+        const targetId = trig.getAttribute('interestfor');
+        const tip = targetId ? document.getElementById(targetId) : null;
+        if (!tip || tip.getAttribute('popover') !== 'hint') continue;
+        if (!tip.hasAttribute('role')) tip.setAttribute('role', 'tooltip');
+        const opensOnActivate = trig.getAttribute('popovertarget') === targetId
+          || trig.getAttribute('commandfor') === targetId;
+        if (opensOnActivate) {
+          if (!trig.hasAttribute('aria-expanded')) {
+            trig.setAttribute('aria-expanded', String(isPopoverOpen(tip)));
+            ownedExpanded.add(trig);
+          }
+        } else if (!trig.hasAttribute('aria-describedby')) {
+          trig.setAttribute('aria-describedby', targetId);
+        }
+        if (!supportsInterest && !boundFallback.has(trig)) {
+          boundFallback.add(trig);
+          trig.addEventListener('pointerenter', () => openTip(trig, tip));
+          trig.addEventListener('pointerleave', () => scheduleClose(tip, trig));
+          trig.addEventListener('focus', () => openTip(trig, tip));
+          trig.addEventListener('blur', () => scheduleClose(tip, trig));
+          tip.addEventListener('pointerenter', () => clearTimeout(closeTimer));
+          tip.addEventListener('pointerleave', () => scheduleClose(tip, trig));
+        }
+      }
+    };
+
+    bindTitleHintsIn(document);
 
     // Sync aria-expanded from popover toggle events (capturing because toggle does not bubble)
     document.addEventListener('toggle', (e) => {
@@ -4420,68 +4491,7 @@
       }, true);
     }
 
-    // Native hover/focus fallback when browser lacks interestfor (WCAG 1.4.13 compliant)
     if (!supportsInterest) {
-      let activeTip = null;
-      let activeTrigger = null;
-      let closeTimer = null;
-
-      const openTip = (trig, tip) => {
-        clearTimeout(closeTimer);
-        if (activeTip && activeTip !== tip) closeTip(activeTip, activeTrigger);
-        activeTip = tip;
-        activeTrigger = trig;
-        if (supportsPopover) {
-          if (!isPopoverOpen(tip)) {
-            try { tip.showPopover({ source: trig }); } catch {
-              try { tip.showPopover(); } catch { /* ignore */ }
-            }
-          }
-          placeHintFallback(trig, tip);
-        } else {
-          tip.classList.add(':popover-open');
-          placeHintFallback(trig, tip);
-          if (ownedExpanded.has(trig)) trig.setAttribute('aria-expanded', 'true');
-          trig.classList.add('interest-source');
-        }
-      };
-
-      const closeTip = (tip, trig) => {
-        clearTimeout(closeTimer);
-        if (!tip) return;
-        if (supportsPopover) {
-          if (isPopoverOpen(tip)) {
-            try { tip.hidePopover(); } catch { /* ignore */ }
-          }
-        } else {
-          tip.classList.remove(':popover-open');
-          if (trig && ownedExpanded.has(trig)) trig.setAttribute('aria-expanded', 'false');
-          trig?.classList.remove('interest-source');
-        }
-        if (activeTip === tip) {
-          activeTip = null;
-          activeTrigger = null;
-        }
-      };
-
-      const scheduleClose = (tip, trig) => {
-        clearTimeout(closeTimer);
-        closeTimer = setTimeout(() => closeTip(tip, trig), 130);
-      };
-
-      for (const trig of triggers) {
-        const targetId = trig.getAttribute('interestfor');
-        const tip = targetId ? document.getElementById(targetId) : null;
-        if (!tip) continue;
-
-        trig.addEventListener('pointerenter', () => openTip(trig, tip));
-        trig.addEventListener('pointerleave', () => scheduleClose(tip, trig));
-        trig.addEventListener('focus', () => openTip(trig, tip));
-        trig.addEventListener('blur', () => scheduleClose(tip, trig));
-        tip.addEventListener('pointerenter', () => clearTimeout(closeTimer));
-        tip.addEventListener('pointerleave', () => scheduleClose(tip, trig));
-      }
-
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && activeTip) {
           closeTip(activeTip, activeTrigger);
