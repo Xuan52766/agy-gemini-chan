@@ -902,7 +902,7 @@
 
     const firstByChapter = new Map();
     for (const s of cloned) {
-      s.bodySize = (s.kind === 'diary' ? 7 : s.kind === 'wiki' ? 10.5 : 8.5)
+      s.bodySize = (s.kind === 'diary' ? 7 : 8.5)
         + Math.min(10, Math.log10(1 + String(s.text || '').length) * 4.4) * 0.76;
       if (s.kind === 'card' && Number(s.chapter) > 0 && !firstByChapter.has(Number(s.chapter))) {
         firstByChapter.set(Number(s.chapter), s);
@@ -1419,38 +1419,31 @@
         const edgeDepth = Math.max(0.45, Math.min(1.08, 1.0 - (avgZ / 560) * 0.38));
 
         if (l.kind === 'wiki-link') {
-          const { cx, cy } = computeBridgeArcControl(pa, pb, w, h);
-          ctx.save();
           if (isFocusEdge) {
             const grad = ctx.createLinearGradient(pa.sx, pa.sy, pb.sx, pb.sy);
-            grad.addColorStop(0, 'rgba(56,232,198,0.45)');
-            grad.addColorStop(0.2, 'rgba(94,234,212,0.96)');
-            grad.addColorStop(0.8, 'rgba(186,250,240,0.96)');
-            grad.addColorStop(1, 'rgba(56,232,198,0.45)');
+            grad.addColorStop(0, 'rgba(56,232,198,0.22)');
+            grad.addColorStop(0.16, 'rgba(94,234,212,0.92)');
+            grad.addColorStop(0.84, 'rgba(94,234,212,0.92)');
+            grad.addColorStop(1, 'rgba(56,232,198,0.22)');
             ctx.strokeStyle = grad;
-            ctx.lineWidth = 2.1;
+            ctx.lineWidth = 1.65;
           } else {
             const baseA = focusId
-              ? 0.1
+              ? 0.06
               : hasSpotlight
-                ? (isSpotEdge ? 0.72 : 0.08)
-                : 0.42;
-            const grad = ctx.createLinearGradient(pa.sx, pa.sy, pb.sx, pb.sy);
-            grad.addColorStop(0, `rgba(56,232,198,${(baseA * 0.65 * edgeDepth).toFixed(3)})`);
-            grad.addColorStop(0.5, `rgba(110,242,222,${(baseA * edgeDepth).toFixed(3)})`);
-            grad.addColorStop(1, `rgba(56,232,198,${(baseA * 0.65 * edgeDepth).toFixed(3)})`);
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = isSpotEdge && !focusId ? 1.65 : 1.25;
+                ? (isSpotEdge ? 0.52 : 0.04)
+                : 0.22;
+            ctx.strokeStyle = hexAlpha(WIKI_STAR_HEX, baseA * edgeDepth);
+            ctx.lineWidth = isSpotEdge && !focusId ? 1.2 : 0.85;
           }
           ctx.beginPath();
           ctx.moveTo(pa.sx, pa.sy);
-          ctx.quadraticCurveTo(cx, cy, pb.sx, pb.sy);
+          ctx.lineTo(pb.sx, pb.sy);
           ctx.stroke();
-          ctx.restore();
 
           if (isFocusEdge) {
-            const bx = 0.25 * pa.sx + 0.5 * cx + 0.25 * pb.sx;
-            const by = 0.25 * pa.sy + 0.5 * cy + 0.25 * pb.sy;
+            const bx = (pa.sx + pb.sx) * 0.5;
+            const by = (pa.sy + pb.sy) * 0.5;
             const edgeSpan = Math.hypot(pb.sx - pa.sx, pb.sy - pa.sy);
             const otherNode = l.a.id === focusId ? l.b : l.a;
             const focusNode = l.a.id === focusId ? l.a : l.b;
@@ -1460,10 +1453,9 @@
             if (pillName && edgeSpan >= 68) wikiMidpoints.push({ x: bx, y: by, text: pillName, isWiki: true });
             if (!prefersReducedMotion && focusShimmers.length < 12) {
               const u = (tSec * 0.34 + li * 0.17) % 1;
-              const inv = 1 - u;
               focusShimmers.push({
-                x: inv * inv * pa.sx + 2 * inv * u * cx + u * u * pb.sx,
-                y: inv * inv * pa.sy + 2 * inv * u * cy + u * u * pb.sy,
+                x: pa.sx + (pb.sx - pa.sx) * u,
+                y: pa.sy + (pb.sy - pa.sy) * u,
                 isWiki: true,
               });
             }
@@ -1621,7 +1613,6 @@
       if (q && !s.matched) sz *= 0.55;
       if (hasSpotlight && !s.spotMatched && !isSelected && !isHovered) sz *= 0.78;
       if (s.kind === 'diary') sz *= 0.85;
-      if (s.kind === 'wiki') sz *= 1.06;
       if (isNeighbor && s.id !== focusId) sz *= 1.12;
       if (s.isCore) sz *= 1.15;
       if (isSelected) sz *= 1.6;
@@ -1675,16 +1666,6 @@
           ctx.stroke();
           ctx.restore();
         }
-      }
-
-      if (s.kind === 'wiki') {
-        ctx.save();
-        ctx.strokeStyle = hexAlpha(WIKI_STAR_HEX, alpha * 0.55);
-        ctx.lineWidth = 0.9;
-        ctx.beginPath();
-        ctx.arc(pr.sx, pr.sy, Math.max(5.5, sz * 0.42), 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.restore();
       }
 
       if (s.isCore) {
