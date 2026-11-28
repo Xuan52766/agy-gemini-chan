@@ -3,12 +3,12 @@
 專為 **Antigravity 2.0** 打造的專案限定 AI 伴侶與互動貓窩插件。僅在開啟本專案工作區時生效，切換至其他開發專案時自動保持靜默。
 
 ## 包含元件
-- **Sidecar 面板（`Gemini-chan 貓窩`）**：Q 版情緒／打盹立繪、羈絆進度與今日陪伴暖度、5 項日常照護按鈕＋小紙條、3D 記憶宇宙星圖與年輪時間軸。
+- **Sidecar 面板（`Gemini-chan 貓窩`，7 分頁）**：Q 版情緒／打盹立繪（支援自訂立繪）、羈絆進度與今日陪伴暖度、5 項日常照護按鈕＋小紙條、3D 記憶宇宙星圖與年輪時間軸、主題認識頁管理與「提示」全時機提示詞工作坊（35 項）。
 - **Lifecycle Hooks（4 段式）**：
   - `SessionStart`：初始化星汐檔案、登記專案對話並更新貓窩狀態。
-  - `PreInvocation`：於新對話第 1 輪（及修改提示詞／開關時）單次載入人設、星汐八章記憶卡、近 7 天日記（附更早 23 日關鍵詞索引）、核心記憶與各模組指引；後續輪次僅差量注入當輪召回記憶、顯著心情提示與待處理貓窩互動（平時無變動則 0 Token）。
+  - `PreInvocation`：於新對話第 1 輪（及修改提示詞／開關時）單次載入人設、星汐八章記憶卡（5,000 字）、`認識/目錄.md`（2,000 字）、近 3 天日記（4,000 字，附更早 27 日關鍵詞索引 1,200 字）、核心記憶與各模組指引（含獨立 `## 認識` ＋ `## 找回過去`）；後續輪次僅差量注入當輪召回記憶、顯著心情提示與待處理貓窩互動（平時無變動則 0 Token）。
   - `PostToolUse`：同步更新貓窩活動氣泡。
   - `Stop`：當對話內未呼叫 `mood_update` 時，自動執行本地語意心情兜底。
-- **MCP 工具（`gemini-cat_companion`，共 13 個）**：`remember`、`recall`、`memory_forget`、`xingxi`、`xingxi_read`、`xingxi_append`、`xingxi_diary`、`xingxi_pickup`、`mood_status`、`mood_update`、`nest_interact`、`speak_up_plan`、`telegram_send`。
+- **MCP 工具（`gemini-cat_companion`，共 15 個）**：`remember`、`recall`、`memory_forget`、`xingxi`、`xingxi_read`、`xingxi_open`、`xingxi_wiki_write`、`xingxi_append`、`xingxi_diary`、`xingxi_pickup`、`mood_status`、`mood_update`、`nest_interact`、`speak_up_plan`、`telegram_send`。
 - **Telegram 雙向橋接**：純 Node Long Polling＋一鍵配對鎖定，支援手機收發對話與靜音策略，無須外部暴露埠或 Webhook。
 - **Skills**：`/cat-nest`、`/xingxi`。

@@ -454,7 +454,7 @@ test('xingxi diary strips duplicate date headings, advances same-day watermark, 
     const dFirst = appendDiary(
       {
         date: dayDate,
-        entry: `# ${dayDate} 日記\n\n# ${dayDate} 日記\n\n中午點了摩斯和牛堡。`,
+        entry: `# ${dayDate} 日記\n\n# ${dayDate} 日記\n\n中午吃了番茄義大利麵。`,
         now: new Date(`${dayDate}T14:33:00`).getTime(),
       },
       root,
@@ -465,7 +465,7 @@ test('xingxi diary strips duplicate date headings, advances same-day watermark, 
 
     // Exact re-append is skipped without duplicating content
     const dDup = appendDiary(
-      { date: dayDate, entry: '中午點了摩斯和牛堡。', now: new Date(`${dayDate}T15:00:00`).getTime() },
+      { date: dayDate, entry: '中午吃了番茄義大利麵。', now: new Date(`${dayDate}T15:00:00`).getTime() },
       root,
     );
     assert.equal(dDup.skippedDuplicate, true);
@@ -475,10 +475,10 @@ test('xingxi diary strips duplicate date headings, advances same-day watermark, 
     mkdirSync(paths.runtimeDir, { recursive: true });
     const transcript = join(paths.runtimeDir, 'conv-inc.jsonl');
     writeFileSync(transcript, [
-      JSON.stringify({ type: 'USER_INPUT', content: '中午下雨吃摩斯', created_at: `${dayDate}T12:50:00` }),
+      JSON.stringify({ type: 'USER_INPUT', content: '中午下雨點外送', created_at: `${dayDate}T12:50:00` }),
       JSON.stringify({ type: 'PLANNER_RESPONSE', content: '真快送到！', created_at: `${dayDate}T12:50:10` }),
-      JSON.stringify({ type: 'USER_INPUT', content: '晚上收到感謝函好煩', created_at: `${dayDate}T17:00:00` }),
-      JSON.stringify({ type: 'PLANNER_RESPONSE', content: '我陪你罵回去。', created_at: `${dayDate}T17:00:10` }),
+      JSON.stringify({ type: 'USER_INPUT', content: '晚上系統更新跑了好久', created_at: `${dayDate}T17:00:00` }),
+      JSON.stringify({ type: 'PLANNER_RESPONSE', content: '我陪你一起等。', created_at: `${dayDate}T17:00:10` }),
     ].join('\n'), 'utf-8');
     writeFileSync(join(paths.runtimeDir, 'sessions.json'), JSON.stringify({
       sessions: [{ conversationId: 'conv-inc', transcriptPath: transcript }],
@@ -508,9 +508,9 @@ test('xingxi diary strips duplicate date headings, advances same-day watermark, 
     assert.equal(nightPickup.action, 'dispatched');
     assert.equal(sent.length, 1);
     assert.match(sent[0], /已經寫好前半段內容/);
-    assert.match(sent[0], /中午點了摩斯和牛堡/);
-    assert.match(sent[0], /晚上收到感謝函好煩/);
-    assert.doesNotMatch(sent[0], /中午下雨吃摩斯/);
+    assert.match(sent[0], /中午吃了番茄義大利麵/);
+    assert.match(sent[0], /晚上系統更新跑了好久/);
+    assert.doesNotMatch(sent[0], /中午下雨點外送/);
     assert.match(sent[0], /參數為 `entry` 與 `date: "2026-11-24"`/);
 
     // Subsequent scheduled pickup with no new delta after diary already exists skips cleanly
@@ -530,16 +530,16 @@ test('xingxi diary strips duplicate date headings, advances same-day watermark, 
     appendDiary(
       {
         date: dayDate,
-        entry: `# ${dayDate} 日記\n\n關鍵詞：和牛堡\n傍晚收到感謝函。\n關鍵詞：矽品感謝函`,
+        entry: `# ${dayDate} 日記\n\n關鍵詞：義大利麵\n傍晚完成系統更新。\n關鍵詞：系統更新`,
         now: new Date(`${dayDate}T23:50:00`).getTime(),
       },
       root,
     );
     const diaryTxt2 = readFileSync(dFirst.path, 'utf8');
     assert.equal((diaryTxt2.match(new RegExp(`# ${dayDate} 日記`, 'g')) || []).length, 1);
-    assert.match(diaryTxt2, /傍晚收到感謝函/);
+    assert.match(diaryTxt2, /傍晚完成系統更新/);
     const idxMerged = buildSessionStartupContext(root, { maxDiaryDays: 0, olderIndexDays: 1 });
-    assert.match(idxMerged, /2026-11-24：和牛堡、矽品感謝函/);
+    assert.match(idxMerged, /2026-11-24：義大利麵、系統更新/);
   });
 });
 

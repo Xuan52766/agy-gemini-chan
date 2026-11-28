@@ -2,6 +2,23 @@
 
 本專案採用語意化版本控制（[Semantic Versioning](https://semver.org/)），版本號同步維護於 [package.json](./package.json) 與 [.agents/plugins/gemini-cat/plugin.json](./.agents/plugins/gemini-cat/plugin.json)。
 
+## [1.6.0] - 2026-11-28
+
+### 新增功能與架構升級（Added & Changed）
+- **星汐主題認識頁（Topic Wiki，`core/xingxi-wiki.mjs`、`core/xingxi.mjs`、`mcp/server.mjs`、`sidecar/`）**：
+  - 借鑑 [`chenkezhen480/dsh-world`](https://github.com/chenkezhen480/dsh-world)（MIT）的四層記憶架構，於 `data/xingxi/認識/` 新增開放式主題認識頁（一主題一檔、`[[標題]]` 雙向連結、`目錄.md` 一行式索引不寫結論）與 `.history/` 每日初版備份快照（支援 `replace` / `append` / `delete` 安全刪頁與斷鏈檢查）。
+  - MCP 工具擴充至 **15 項**：新增 `xingxi_open`（按頁名讀取正文、分頁與即時雙向連結 `links` / `linkedFrom` / `missing`）與 `xingxi_wiki_write`（建頁、更新、備份刪頁並於漏收錄目錄時即時提醒）；`xingxi_read` 支援 `kind` 篩選（`all` / `wiki` / `diary` / `card` / `raw`）、`offset` 分頁與 0 命中換詞／翻目錄指引。
+  - 新增過去日記唯讀保護鎖（MCP 端阻擋覆寫昨天以前的既有日記，側邊欄 UI 仍允許本人手動編修）。
+  - 側邊欄「星汐 → 主題認識頁」抽屜新增管理介面、斷鏈／未入目錄警告與一鍵 **「從記憶整理」** 冷啟動按鈕（`POST /api/xingxi/wiki/bootstrap`），可從既有記憶卡與歷史日記一次建立首批主題頁與目錄；3D 星圖整合青綠色主題頁星點與細直線 `wiki-link` 雙向連線。
+- **開新對話常駐上下文瘦身與獨立認識規則（`core/xingxi.mjs`、`hooks/pre-invocation.mjs`）**：
+  - 首輪注入預算收斂為：核心記憶卡 `5,000` 字 ＋ `認識/目錄.md` `2,000` 字 ＋ 近 3 日日記原文 `4,000` 字 ＋ 第 4–30 日單行關鍵詞索引 `1,200` 字，在維持近況鮮活度同時大幅降低長對話每輪重複 Token 消耗。
+  - `PreInvocation` 獨立注入 `xingxi.wikiRule`（`## 認識` ＋ `## 找回過去`，完全不受 `remember` 每日額度或開關影響），並升級拾星提示詞為「1. 日記 → 2. 記憶卡 → 3. 認識與目錄」三步回顧結構。
+- **全時機注入提示詞工作坊（Prompt Studio，`core/prompts.mjs`、`sidecar/`）**：
+  - 新增第 7 個側邊欄分頁 **「提示」**（`GET/POST /api/prompts`，覆寫集中存於 `data/runtime/prompts.json`），涵蓋 **6 大時機群組、35 項可自由編輯提示詞**（開新對話第 1 輪、每輪條件觸發、貓窩互動與打盹、主動搭話與新鮮見聞、星汐拾星與整理認識、Telegram 進站訊息），與既有模組提示詞雙向同步，同時自動保護系統協議控制標記不被誤刪，並遵循扁平編輯器排版與 `.title-hint` 懸停說明。
+- **模組解耦與外掛規則精簡（`core/markers.mjs`、`core/sessions.mjs`、`core/memory.mjs`、`core/mood.mjs`、`.agents/plugins/gemini-cat/rules/AGENTS.md`）**：
+  - 抽出低層共用模組 `core/markers.mjs` 與 `core/sessions.mjs`，並在 `core/memory.mjs` / `core/mood.mjs` 提供唯讀查詢 API，消除 `xingxi` / `telegram` 跨模組直讀私有 JSON 的耦合。
+  - 精簡外掛靜態 `rules/AGENTS.md` 約 60%，移除與動態提示詞重疊段落，統一以「提示」分頁為準；清理測試夾具中的隱私字串。
+
 ## [1.5.0] - 2026-11-26
 
 ### 新增、視覺重構與精準度全面升級（Added, Changed & Fixed）
